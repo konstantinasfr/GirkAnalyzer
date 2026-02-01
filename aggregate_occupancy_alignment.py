@@ -41,6 +41,8 @@ class ComprehensiveEnd2Aggregator:
         self.permeating_sf = []
         self.bound_sf = []
         self.free_sf = []
+        self.free_closest_sf = []  # NEW: Free ion closest to SF
+        self.other_free_sf = []    # NEW: Other free ions
         
     def load_all_runs(self):
         """Load comprehensive end2 results from all subdirectories."""
@@ -108,6 +110,13 @@ class ComprehensiveEnd2Aggregator:
                         
                         for free_ion in event['free_ions_sf_alignment']:
                             self.free_sf.append(free_ion['sf_distance'])
+                        
+                        # NEW: Split free ions into closest and other
+                        if event.get('free_closest_to_sf'):
+                            self.free_closest_sf.append(event['free_closest_to_sf']['sf_distance'])
+                        
+                        for other_free in event.get('other_free_ions_sf_alignment', []):
+                            self.other_free_sf.append(other_free['sf_distance'])
                     
                     loaded_count += 1
                     print(f"  ✓ {run_name}: Loaded ({len(results)} events)")
@@ -395,6 +404,81 @@ class ComprehensiveEnd2Aggregator:
         plt.close()
         print(f"✓ SF alignment 3-category plot saved")
     
+    def create_sf_alignment_4category_plot(self, output_dir):
+        """
+        NEW: Create plot with 4 categories:
+        Permeating Ions | Bound Ions | Free Closest to SF | Other Free Ions
+        """
+        if not self.permeating_sf and not self.bound_sf and not self.free_closest_sf and not self.other_free_sf:
+            print("No SF alignment data for 4-category plot")
+            return
+        
+        fig, ax = plt.subplots(figsize=(14, 8))
+        
+        # Prepare data for 4 categories
+        categories = []
+        all_data = []
+        colors = []
+        
+        if self.permeating_sf:
+            categories.append('Permeating Ions')
+            all_data.append(self.permeating_sf)
+            colors.append('steelblue')
+        
+        if self.bound_sf:
+            categories.append('Bound Ions')
+            all_data.append(self.bound_sf)
+            colors.append('lightcoral')
+        
+        if self.free_closest_sf:
+            categories.append('Free Closest to SF')
+            all_data.append(self.free_closest_sf)
+            colors.append('gold')
+        
+        if self.other_free_sf:
+            categories.append('Other Free Ions')
+            all_data.append(self.other_free_sf)
+            colors.append('lightgreen')
+        
+        x_positions = range(len(categories))
+        means = [np.mean(data) for data in all_data]
+        stds = [np.std(data) for data in all_data]
+        ns = [len(data) for data in all_data]
+        
+        # Draw bars
+        bars = ax.bar(x_positions, means, color=colors, alpha=0.6, 
+                     edgecolor='black', linewidth=2, width=0.6)
+        
+        # Add error bars
+        ax.errorbar(x_positions, means, yerr=stds, fmt='none', 
+                   color='black', capsize=15, capthick=2, linewidth=2)
+        
+        # Add individual data points
+        for i, data in enumerate(all_data):
+            x_jitter = np.random.normal(i, 0.04, size=len(data))
+            ax.scatter(x_jitter, data, color='black', alpha=0.5, s=30, zorder=3)
+        
+        # Add statistics labels
+        for i, (mean, std, n) in enumerate(zip(means, stds, ns)):
+            ax.text(i, mean + std + (ax.get_ylim()[1] * 0.05),
+                   f'{mean:.2f} ± {std:.2f}\n(n={n})',
+                   ha='center', va='bottom', fontsize=12, fontweight='bold',
+                   bbox=dict(boxstyle='round,pad=0.5', facecolor='white', 
+                            edgecolor='black', alpha=0.9))
+        
+        ax.set_xticks(x_positions)
+        ax.set_xticklabels(categories, fontsize=13, fontweight='bold')
+        ax.set_ylabel('Distance to SF Line (Å)', fontsize=14, fontweight='bold')
+        ax.set_title('SF Line Alignment: Permeating vs Bound vs Free', 
+                    fontsize=16, fontweight='bold', pad=20)
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        plt.savefig(output_dir / f"sf_alignment_4categories_t{self.threshold_str}.png", 
+                   dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✓ SF alignment 4-category plot saved")
+    
     def create_all_outputs(self, output_dir=None):
         """Create all plots and CSV files."""
         if output_dir is None:
@@ -416,6 +500,7 @@ class ComprehensiveEnd2Aggregator:
         self.create_free_ions_plot(output_dir)
         self.create_cavity_ion_count_plot(output_dir)
         self.create_sf_alignment_3category_plot(output_dir)
+        self.create_sf_alignment_4category_plot(output_dir)  # NEW
         
         print(f"\n✓ All outputs saved to: {output_dir}")
 
@@ -464,7 +549,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 # USAGE:
 # python aggregate_comprehensive_end2.py /path/to/G12 --threshold 2.5

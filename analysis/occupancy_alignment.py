@@ -10,6 +10,7 @@ class ComprehensiveEnd2Analysis:
     Comprehensive analysis at end_2 frame combining:
     1. Ion-residue proximity (which ions are close to which residues)
     2. Free ions (ions in cavity but not close to any of the 8 residues)
+       - Split into: closest to SF and other free ions
     3. SF/ASN/GLU alignment for permeating ion, bound ions, and free ions
     """
     
@@ -216,6 +217,26 @@ class ComprehensiveEnd2Analysis:
                 subunit_ion_mapping[subunit]['ion_ids'].append(ion_id_int)
                 subunit_ion_mapping[subunit]['count'] += 1
         
+        # Calculate SF distances for free ions to determine which is closest to SF
+        free_ions_with_sf = []
+        for free_id in free_ion_ids:
+            ion_obj = self.u.select_atoms(f"resid {free_id}")
+            if len(ion_obj) > 0:
+                sf_dist = float(self.distance_point_to_line(ion_obj.positions[0], sf_point, sf_direction))
+                free_ions_with_sf.append({'ion_id': free_id, 'sf_distance': sf_dist})
+        
+        # Sort free ions by SF distance and split
+        free_ions_with_sf.sort(key=lambda x: x['sf_distance'])
+        
+        free_closest_to_sf_id = None
+        free_closest_to_sf_distance = None
+        other_free_ion_ids = []
+        
+        if len(free_ions_with_sf) > 0:
+            free_closest_to_sf_id = free_ions_with_sf[0]['ion_id']
+            free_closest_to_sf_distance = free_ions_with_sf[0]['sf_distance']
+            other_free_ion_ids = [item['ion_id'] for item in free_ions_with_sf[1:]]
+        
         # Create combination strings WITH COUNTS
         # Residue: "1_152.A_2_152.C_1_173.D_1_FR"
         residue_combo_parts = []
@@ -235,7 +256,7 @@ class ComprehensiveEnd2Analysis:
             subunit_combo_parts.append(f"{len(free_ion_ids)}_FR")
         subunit_combination = '_'.join(subunit_combo_parts)
         
-        # Calculate SF alignments ONLY for all ions
+        # Calculate SF alignments for permeating ion
         permeating_ion_obj = self.u.select_atoms(f"resid {ion_id}")
         permeating_sf = None
         if len(permeating_ion_obj) > 0:
@@ -255,16 +276,23 @@ class ComprehensiveEnd2Analysis:
                     'close_to_residue': ion_closest_residue[bound_id]['residue_pdb']
                 })
         
-        # Free ions SF alignment
-        free_ions_sf = []
-        for free_id in sorted(free_ion_ids):
-            ion_obj = self.u.select_atoms(f"resid {free_id}")
-            if len(ion_obj) > 0:
-                sf_dist = float(self.distance_point_to_line(ion_obj.positions[0], sf_point, sf_direction))
-                free_ions_sf.append({
-                    'ion_id': free_id,
-                    'sf_distance': sf_dist
-                })
+        # Free ions SF alignment (keep all for general stats)
+        free_ions_sf = free_ions_with_sf  # Already calculated above
+        
+        # Split free ions for separate reporting
+        free_closest_sf_info = None
+        if free_closest_to_sf_id is not None:
+            free_closest_sf_info = {
+                'ion_id': free_closest_to_sf_id,
+                'sf_distance': free_closest_to_sf_distance
+            }
+        
+        other_free_ions_sf = []
+        for item in free_ions_with_sf[1:]:
+            other_free_ions_sf.append({
+                'ion_id': item['ion_id'],
+                'sf_distance': item['sf_distance']
+            })
         
         return {
             'ion_id': int(ion_id),
@@ -273,15 +301,21 @@ class ComprehensiveEnd2Analysis:
             'total_ions_in_cavity': len(ions_in_cavity),
             'n_bound_ions': len(bound_ion_ids),
             'n_free_ions': len(free_ion_ids),
+            'n_free_closest_to_sf': 1 if free_closest_to_sf_id is not None else 0,
+            'n_other_free_ions': len(other_free_ion_ids),
             'residue_ion_mapping': residue_ion_mapping,
             'subunit_ion_mapping': subunit_ion_mapping,
             'bound_ion_ids': sorted(list(bound_ion_ids)),
             'free_ion_ids': sorted(list(free_ion_ids)),
+            'free_closest_to_sf': free_closest_sf_info,
+            'other_free_ion_ids': sorted(other_free_ion_ids),
             'residue_combination': residue_combination,
             'subunit_combination': subunit_combination,
             'permeating_ion_sf_distance': permeating_sf,
             'bound_ions_sf_alignment': bound_ions_sf,
-            'free_ions_sf_alignment': free_ions_sf
+            'free_ions_sf_alignment': free_ions_sf,  # All free ions (general stats)
+            'free_closest_to_sf_alignment': free_closest_sf_info,  # Closest free ion
+            'other_free_ions_sf_alignment': other_free_ions_sf  # Other free ions
         }
     
     def run_analysis(self):
@@ -303,6 +337,8 @@ class ComprehensiveEnd2Analysis:
             print(f"Total ions in cavity: {result['total_ions_in_cavity']}")
             print(f"  Bound ions (close to residues): {result['n_bound_ions']}")
             print(f"  Free ions (not close to residues): {result['n_free_ions']}")
+            print(f"    - Free ion closest to SF: {result['n_free_closest_to_sf']}")
+            print(f"    - Other free ions: {result['n_other_free_ions']}")
             
             if result['residue_ion_mapping']:
                 print(f"\nResidues with ions (<{self.threshold}Å):")
@@ -318,8 +354,12 @@ class ComprehensiveEnd2Analysis:
             
             if result['free_ion_ids']:
                 print(f"\nFree ions: {result['free_ion_ids']}")
+                if result['free_closest_to_sf']:
+                    print(f"  Closest to SF: Ion {result['free_closest_to_sf']['ion_id']} (SF={result['free_closest_to_sf']['sf_distance']:.2f} Å)")
+                if result['other_free_ion_ids']:
+                    print(f"  Other free ions: {result['other_free_ion_ids']}")
             
-            # Print SF alignments only
+            # Print SF alignments
             if result['permeating_ion_sf_distance'] is not None:
                 print(f"\nPermeating ion SF distance: {result['permeating_ion_sf_distance']:.2f} Å")
             
@@ -331,7 +371,10 @@ class ComprehensiveEnd2Analysis:
             if result['free_ions_sf_alignment']:
                 print(f"\nFree ions SF alignment:")
                 for fa in result['free_ions_sf_alignment']:
-                    print(f"  Ion {fa['ion_id']}: SF={fa['sf_distance']:.2f} Å")
+                    if result['free_closest_to_sf'] and fa['ion_id'] == result['free_closest_to_sf']['ion_id']:
+                        print(f"  Ion {fa['ion_id']} (CLOSEST TO SF): SF={fa['sf_distance']:.2f} Å")
+                    else:
+                        print(f"  Ion {fa['ion_id']}: SF={fa['sf_distance']:.2f} Å")
     
     def save_results(self):
         """Save results to JSON."""
@@ -365,6 +408,8 @@ class ComprehensiveEnd2Analysis:
         # Ion count statistics
         bound_counts = [r['n_bound_ions'] for r in self.results]
         free_counts = [r['n_free_ions'] for r in self.results]
+        free_closest_counts = [r['n_free_closest_to_sf'] for r in self.results]
+        other_free_counts = [r['n_other_free_ions'] for r in self.results]
         total_counts = [r['total_ions_in_cavity'] for r in self.results]
         
         # Alignment statistics - permeating ions (SF only)
@@ -376,11 +421,23 @@ class ComprehensiveEnd2Analysis:
             for bound_ion in r['bound_ions_sf_alignment']:
                 all_bound_sf.append(bound_ion['sf_distance'])
         
-        # Free ions SF
+        # Free ions SF (all)
         all_free_sf = []
         for r in self.results:
             for free_ion in r['free_ions_sf_alignment']:
                 all_free_sf.append(free_ion['sf_distance'])
+        
+        # Free ion closest to SF
+        free_closest_sf = []
+        for r in self.results:
+            if r['free_closest_to_sf']:
+                free_closest_sf.append(r['free_closest_to_sf']['sf_distance'])
+        
+        # Other free ions SF
+        other_free_sf = []
+        for r in self.results:
+            for other_free in r['other_free_ions_sf_alignment']:
+                other_free_sf.append(other_free['sf_distance'])
         
         summary = {
             'total_events': len(self.results),
@@ -390,6 +447,8 @@ class ComprehensiveEnd2Analysis:
             'ion_counts': {
                 'bound_ions': {'mean': float(np.mean(bound_counts)), 'std': float(np.std(bound_counts))},
                 'free_ions': {'mean': float(np.mean(free_counts)), 'std': float(np.std(free_counts))},
+                'free_closest_to_sf': {'mean': float(np.mean(free_closest_counts)), 'std': float(np.std(free_closest_counts))},
+                'other_free_ions': {'mean': float(np.mean(other_free_counts)), 'std': float(np.std(other_free_counts))},
                 'total_ions': {'mean': float(np.mean(total_counts)), 'std': float(np.std(total_counts))}
             },
             'sf_alignment_stats': {
@@ -407,7 +466,17 @@ class ComprehensiveEnd2Analysis:
                     'mean': float(np.mean(all_free_sf)),
                     'std': float(np.std(all_free_sf)),
                     'n': len(all_free_sf)
-                } if all_free_sf else None
+                } if all_free_sf else None,
+                'free_closest_to_sf': {
+                    'mean': float(np.mean(free_closest_sf)),
+                    'std': float(np.std(free_closest_sf)),
+                    'n': len(free_closest_sf)
+                } if free_closest_sf else None,
+                'other_free_ions': {
+                    'mean': float(np.mean(other_free_sf)),
+                    'std': float(np.std(other_free_sf)),
+                    'n': len(other_free_sf)
+                } if other_free_sf else None
             }
         }
         
@@ -421,7 +490,9 @@ class ComprehensiveEnd2Analysis:
         print(f"Total events: {summary['total_events']}")
         print(f"\nIon counts in cavity:")
         print(f"  Bound ions: {summary['ion_counts']['bound_ions']['mean']:.1f} ± {summary['ion_counts']['bound_ions']['std']:.1f}")
-        print(f"  Free ions: {summary['ion_counts']['free_ions']['mean']:.1f} ± {summary['ion_counts']['free_ions']['std']:.1f}")
+        print(f"  Free ions (total): {summary['ion_counts']['free_ions']['mean']:.1f} ± {summary['ion_counts']['free_ions']['std']:.1f}")
+        print(f"    - Free closest to SF: {summary['ion_counts']['free_closest_to_sf']['mean']:.1f} ± {summary['ion_counts']['free_closest_to_sf']['std']:.1f}")
+        print(f"    - Other free ions: {summary['ion_counts']['other_free_ions']['mean']:.1f} ± {summary['ion_counts']['other_free_ions']['std']:.1f}")
         print(f"  Total: {summary['ion_counts']['total_ions']['mean']:.1f} ± {summary['ion_counts']['total_ions']['std']:.1f}")
         
         print(f"\nTop subunit combinations:")

@@ -81,7 +81,7 @@ def convert_to_pdb_numbering(residue_id, channel_type):
             return glu_mapping[residue_id]
         if residue_id in asn_mapping:
             return asn_mapping[residue_id]
-    elif channel_type == "G12":
+    elif channel_type == "G12" or channel_type == "G12_GAT" :
         glu_mapping = {422: "152.A", 98: "152.B", 747: "152.C", 1073: "141.D"}
         asn_asp_mapping = {454: "184.A", 130: "184.B", 779: "184.C", 1105: "173.D"}
         if residue_id in glu_mapping:

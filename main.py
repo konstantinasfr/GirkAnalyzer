@@ -123,6 +123,12 @@ def main():
         hbc_residues = [138, 466, 794, 1122]
         hbc_diagonal_pairs = [(138, 466 ), (1122, 794)]
 
+        upper_gl_residues = [265, 593, 921, 1249  ]
+        upper_gl_diagonal_pairs = [(265, 593 ), (921, 1249)]
+
+        lower_gl_residues = [259, 587, 915, 1243 ]
+        lower_gl_diagonal_pairs = [(259, 587 ), (915, 1243)]
+
         glu_residues = [98, 426, 754, 1082]
         asn_residues = [130, 458, 786, 1114]
         subunit_groups = {
@@ -206,18 +212,25 @@ def main():
         hbc_residues = [138,462,787,1113]
         hbc_diagonal_pairs = [(138, 1113 ), (462, 787)]
 
+        upper_gl_residues = [265, 589, 914, 1240 ]
+        upper_gl_diagonal_pairs = [(265, 1240 ), (589, 914)]
+
+        lower_gl_residues = [259, 583, 908, 1234 ]
+        lower_gl_diagonal_pairs = [(259, 1234 ), (583, 908)]
+
         sf_low_res_residues = [101, 425, 750, 1076] 
         sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
 
         glu_residues = [98,422,747,1073]
         asn_residues = [130,454,779,1105 ]
+        
         subunit_groups = {
             'A': [422, 454],  # GLU and ASN/ASP of subunit A
             'B': [98, 130],
             'C': [747, 779],
             'D': [1073, 1105]
         }
-        sf_residues = [101, 425, 750, 1076] 
+        sf_residues = [100, 424, 749, 1075]  
 
         start_frame = 0
         # start_frame = 2500
@@ -251,6 +264,12 @@ def main():
         hbc_residues = [139,464,789,1114]
         hbc_diagonal_pairs = [(139, 1114 ), (464, 789)]
 
+        upper_gl_residues = [266,591,916,1241]
+        upper_gl_diagonal_pairs = [(266, 1241 ), (591, 916)]
+
+        lower_gl_residues = [260,585, 910, 1235 ]
+        lower_gl_diagonal_pairs = [(260, 1235 ), (585, 910)]
+
         sf_low_res_residues = [101, 426, 751, 1076] 
         sf_low_res_diagonal_pairs = [(101, 1076 ), (426, 751)]
 
@@ -273,6 +292,57 @@ def main():
 
         top_file =    Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_ML297/RUN{run_number}/com.prmtop")
         traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_ML297/RUN{run_number}/protein.nc")
+        results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+    elif args.channel_type == "G12_GAT":
+        # upper1 = [107, 431, 757, 1082]
+        upper1 = [105, 429, 755, 1080]
+        lower1 = [100, 424, 749, 1075]  #sf_residues
+  
+        upper2 = [100, 424, 749, 1075]  #sf_residues
+        lower2 = [130,454,779,1105 ]  #asn_residues
+
+        upper3 = [130,454,779,1105 ]
+        lower3 = [138,462,787,1113]
+
+        upper4 = [138,462,787,1113]  #hbc_residues
+        lower4 = [265, 589, 914 ,1240]
+
+        # upper5 = [265, 589, 914 ,1240]
+        # lower5 = [259, 583, 908, 1234]
+
+        hbc_residues = [138,462,787,1113]
+        hbc_diagonal_pairs = [(138, 1113 ), (462, 787)]
+
+        upper_gl_residues = [265, 589, 914, 1240 ]
+        upper_gl_diagonal_pairs = [(265, 1240 ), (589, 914)]
+
+        lower_gl_residues = [259, 583, 908, 1234 ]
+        lower_gl_diagonal_pairs = [(259, 1234 ), (583, 908)]
+
+        sf_low_res_residues = [101, 425, 750, 1076] 
+        sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
+
+        glu_residues = [98,422,747,1073]
+        asn_residues = [130,454,779,1105 ]
+        subunit_groups = {
+            'A': [422, 454],  # GLU and ASN/ASP of subunit A
+            'B': [98, 130],
+            'C': [747, 779],
+            'D': [1073, 1105]
+        }
+        sf_residues = [100, 424, 749, 1075]  
+
+        start_frame = 0
+        # start_frame = 2500
+        # end_frame = 1000
+        # end_frame = 1250
+        end_frame = 6799
+        # end_frame = 4300
+
+        top_file =    Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_GAT1508/RUN{run_number}/com.prmtop")
+        traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_GAT1508/RUN{run_number}/protein.nc")
         results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
         results_dir.mkdir(parents=True, exist_ok=True)
 #########################################################################################
@@ -338,29 +408,47 @@ def main():
         # SAVE STATE for future runs
         save_analyzer_state(analyzer, results_dir)
 
-    from analysis.occupancy_alignment import run_comprehensive_end2_analysis
 
-        # ============= COMPREHENSIVE END_2 ANALYSIS =============
-    if len(analyzer.permeation_events) > 0:
-        print("\n" + "="*80)
-        print("Running Comprehensive end_2 Analysis...")
-        print("="*80)
+    from analysis.permeation_frame_significance import test_permeation_frame_significance
 
-        threshold=3
-        comp_analyzer = run_comprehensive_end2_analysis(
-            universe=u,
-            channel1=ch1,
-            channel2=ch2,
-            permeation_events=analyzer.permeation_events,
-            asn_residues=asn_residues,
-            glu_residues=glu_residues,
-            subunit_groups=subunit_groups,
-            channel_type=channel_type,
-            threshold=threshold,  # Distance threshold for "close to residue"
-            results_dir=f"{results_dir}/occupancy_alignment/{threshold}"  # <-- Separate folder
-        )
+        # The function will extract them from start_2 to end_2-1 for each ion
+    significance_results = test_permeation_frame_significance(
+        universe=u,
+        channel2=ch2,
+        all_residues=asn_residues + glu_residues,
+        permeation_events=analyzer.permeation_events,  # Must have 'ion_id', 'start_2', 'end_2'
+        results_dir=results_dir / "significance_analysis",
+        channel_type=channel_type,
+        n_bootstrap=1000,
+        sample_size=50,
+        min_frames_method2=100
+    )
+    
+    print("\n✓ Statistical significance analysis complete!")
+
+    # from analysis.occupancy_alignment import run_comprehensive_end2_analysis
+
+    #     # ============= COMPREHENSIVE END_2 ANALYSIS =============
+    # if len(analyzer.permeation_events) > 0:
+    #     print("\n" + "="*80)
+    #     print("Running Comprehensive end_2 Analysis...")
+    #     print("="*80)
+
+    #     threshold=3
+    #     comp_analyzer = run_comprehensive_end2_analysis(
+    #         universe=u,
+    #         channel1=ch1,
+    #         channel2=ch2,
+    #         permeation_events=analyzer.permeation_events,
+    #         asn_residues=asn_residues,
+    #         glu_residues=glu_residues,
+    #         subunit_groups=subunit_groups,
+    #         channel_type=channel_type,
+    #         threshold=threshold,  # Distance threshold for "close to residue"
+    #         results_dir=f"{results_dir}/occupancy_alignment/{threshold}"  # <-- Separate folder
+    #     )
         
-        print("\nComprehensive end_2 Analysis Complete!")
+    #     print("\nComprehensive end_2 Analysis Complete!")
 
     # from analysis.cavity_occupancy_analysis import run_cavity_occupancy_analysis
 
@@ -404,7 +492,7 @@ def main():
     # )  
 
     # from analysis.longest_duration_analysis import run_last_duration_analysis
-    # threshold = 3.0
+    # threshold = 2.5
     # min_duration = 3
 
     # # Run 1: RESIDUE-LEVEL
