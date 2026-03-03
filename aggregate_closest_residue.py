@@ -40,7 +40,6 @@ class ClosestResidueAggregator:
         print(f"Looking for threshold: {self.threshold}")
         
         # Convert threshold to string, removing unnecessary decimals
-        # So 3.0 becomes "3" and 3.5 stays "3.5"
         if isinstance(self.threshold, float) and self.threshold.is_integer():
             threshold_str = str(int(self.threshold))
         else:
@@ -109,7 +108,7 @@ class ClosestResidueAggregator:
         
         return len(self.runs_data) > 0
     
-    def create_bar_plot(self, case_data, case_name, output_file):
+    def create_bar_plot(self, case_data, case_title, output_file):
         """
         Create a bar plot for a single case showing winner counts.
         
@@ -117,13 +116,13 @@ class ClosestResidueAggregator:
         -----------
         case_data : dict
             Dictionary with residue PDB as key and data as value
-        case_name : str
-            Name of the case (e.g., "Case 1")
+        case_title : str
+            Title for the plot
         output_file : Path
             Output file path
         """
         if not case_data:
-            print(f"No data for {case_name}")
+            print(f"No data for {case_title}")
             return
         
         # Sort residues by count (descending)
@@ -133,7 +132,7 @@ class ClosestResidueAggregator:
         counts = [r[1]['count'] for r in sorted_residues]
         avg_distances = [np.mean(r[1]['distances']) for r in sorted_residues]
         
-        # Create figure
+        # Create figure - same size but smaller plot area
         fig, ax = plt.subplots(figsize=(12, 6))
         
         # Color code by residue type
@@ -150,21 +149,97 @@ class ClosestResidueAggregator:
         
         bars = ax.bar(range(len(residues)), counts, color=colors, alpha=0.7, edgecolor='black', linewidth=1.5)
         
-        # Add count labels on top of bars
+        # Add count labels on top of bars with bigger font
         for i, (bar, count, avg_dist) in enumerate(zip(bars, counts, avg_distances)):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
                    f'{count}\n({avg_dist:.2f} Å)',
-                   ha='center', va='bottom', fontsize=10, fontweight='bold')
+                   ha='center', va='bottom', fontsize=16, fontweight='bold')
         
-        # Formatting
+        # Formatting with much larger fonts
         ax.set_xticks(range(len(residues)))
-        ax.set_xticklabels(residues, fontsize=12, fontweight='bold', rotation=45, ha='right')
-        ax.set_ylabel('Number of Times Closest (Winner)', fontsize=14, fontweight='bold')
-        ax.set_xlabel('Residue (PDB Numbering)', fontsize=14, fontweight='bold')
-        ax.set_title(f'{case_name} - Closest Residue Frequency (Threshold={self.threshold}Å)', 
-                    fontsize=16, fontweight='bold', pad=20)
+        ax.set_xticklabels(residues, fontsize=22, fontweight='bold', rotation=45, ha='right')
+        ax.set_ylabel('Number of Times Closest', fontsize=26, fontweight='bold')
+        ax.set_xlabel('Residue', fontsize=26, fontweight='bold')
+        ax.set_title(case_title, fontsize=28, fontweight='bold', pad=25)
         ax.grid(True, alpha=0.3, axis='y')
+        ax.tick_params(axis='both', labelsize=20)
+        
+        # Add legend with larger font
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='salmon', edgecolor='black', label='GLU'),
+            Patch(facecolor='lightblue', edgecolor='black', label='ASN'),
+            Patch(facecolor='lightgreen', edgecolor='black', label='ASP')
+        ]
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=16)
+        
+        plt.tight_layout()
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"✓ Plot saved: {output_file}")
+    
+    def create_bar_plot(self, case_data, case_title, output_file):
+        """
+        Create a bar plot for a single case showing winner counts.
+        
+        Parameters:
+        -----------
+        case_data : dict
+            Dictionary with residue PDB as key and data as value
+        case_title : str
+            Title for the plot
+        output_file : Path
+            Output file path
+        """
+        if not case_data:
+            print(f"No data for plot")
+            return
+        
+        # Sort residues by count (descending)
+        sorted_residues = sorted(case_data.items(), key=lambda x: x[1]['count'], reverse=True)
+        
+        residues = [r[0] for r in sorted_residues]
+        counts = [r[1]['count'] for r in sorted_residues]
+        avg_distances = [np.mean(r[1]['distances']) for r in sorted_residues]
+        
+        # Create figure - narrower width
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Color code by residue type
+        colors = []
+        for res in residues:
+            if '152' in res or '141' in res:  # GLU residues
+                colors.append('salmon')
+            elif '184' in res:  # ASN residues
+                colors.append('lightblue')
+            elif '173' in res:  # ASP residue
+                colors.append('lightgreen')
+            else:
+                colors.append('gray')
+        
+        bars = ax.bar(range(len(residues)), counts, color=colors, alpha=0.7, edgecolor='black', linewidth=1.5)
+        
+        # Add count labels on top of bars with bigger font
+        for i, (bar, count, avg_dist) in enumerate(zip(bars, counts, avg_distances)):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
+                   f'{count}\n({avg_dist:.2f} Å)',
+                   ha='center', va='bottom', fontsize=16, fontweight='bold')
+        
+        # Formatting with larger fonts
+        ax.set_xticks(range(len(residues)))
+        ax.set_xticklabels(residues, fontsize=20, fontweight='bold', rotation=45, ha='right')
+        ax.set_ylabel('Number of Times Closest', fontsize=22, fontweight='bold')
+        ax.set_xlabel('Residue', fontsize=22, fontweight='bold')
+        ax.set_title(case_title, fontsize=22, fontweight='bold', pad=18)
+        ax.grid(True, alpha=0.3, axis='y')
+        ax.tick_params(axis='both', labelsize=18)
+        
+        # Add gap at top - set y-axis limit to 110% of max value
+        max_count = max(counts)
+        ax.set_ylim(0, max_count * 1.1)
         
         # Add legend
         from matplotlib.patches import Patch
@@ -173,7 +248,7 @@ class ClosestResidueAggregator:
             Patch(facecolor='lightblue', edgecolor='black', label='ASN'),
             Patch(facecolor='lightgreen', edgecolor='black', label='ASP')
         ]
-        ax.legend(handles=legend_elements, loc='upper right', fontsize=11)
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=15)
         
         plt.tight_layout()
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
@@ -194,17 +269,21 @@ class ClosestResidueAggregator:
         
         print("\nCreating bar plots...")
         
-        self.create_bar_plot(self.case_1_data, "Case 1: Closest at end_2 (no threshold)", 
-                            output_dir / f"case1_closest_residue_bar_threshold{self.threshold}.png")
+        self.create_bar_plot(self.case_1_data, 
+                            f"Ion Leaves GLU/ASN Cavity - Closest Residue (Threshold={self.threshold}Å)", 
+                            output_dir / f"ion_leaves_cavity_closest_threshold{self.threshold}.png")
         
-        self.create_bar_plot(self.case_2_data, "Case 2: Threshold crossing from end_2", 
-                            output_dir / f"case2_closest_residue_bar_threshold{self.threshold}.png")
+        self.create_bar_plot(self.case_2_data, 
+                            f"Ion Leaves GLU/ASN Cavity - Threshold={self.threshold}Å", 
+                            output_dir / f"ion_leaves_cavity_threshold_crossing_threshold{self.threshold}.png")
         
-        self.create_bar_plot(self.case_3_data, "Case 3: Closest at end_3 (no threshold)", 
-                            output_dir / f"case3_closest_residue_bar_threshold{self.threshold}.png")
+        self.create_bar_plot(self.case_3_data, 
+                            f"Ion Leaves HBC - Closest Residue (Threshold={self.threshold}Å)", 
+                            output_dir / f"ion_leaves_hbc_closest_threshold{self.threshold}.png")
         
-        self.create_bar_plot(self.case_4_data, "Case 4: Threshold crossing from end_3", 
-                            output_dir / f"case4_closest_residue_bar_threshold{self.threshold}.png")
+        self.create_bar_plot(self.case_4_data, 
+                            f"Ion Leaves HBC - Threshold={self.threshold}Å", 
+                            output_dir / f"ion_leaves_hbc_threshold_crossing_threshold{self.threshold}.png")
     
     def create_summary_table(self, output_dir=None):
         """
@@ -243,14 +322,14 @@ class ClosestResidueAggregator:
             row = {
                 'Residue_PDB': residue,
                 'Type': res_type,
-                'Case1_Count': self.case_1_data[residue]['count'] if residue in self.case_1_data else 0,
-                'Case1_Avg_Distance': np.mean(self.case_1_data[residue]['distances']) if residue in self.case_1_data and self.case_1_data[residue]['distances'] else np.nan,
-                'Case2_Count': self.case_2_data[residue]['count'] if residue in self.case_2_data else 0,
-                'Case2_Avg_Distance': np.mean(self.case_2_data[residue]['distances']) if residue in self.case_2_data and self.case_2_data[residue]['distances'] else np.nan,
-                'Case3_Count': self.case_3_data[residue]['count'] if residue in self.case_3_data else 0,
-                'Case3_Avg_Distance': np.mean(self.case_3_data[residue]['distances']) if residue in self.case_3_data and self.case_3_data[residue]['distances'] else np.nan,
-                'Case4_Count': self.case_4_data[residue]['count'] if residue in self.case_4_data else 0,
-                'Case4_Avg_Distance': np.mean(self.case_4_data[residue]['distances']) if residue in self.case_4_data and self.case_4_data[residue]['distances'] else np.nan,
+                'Cavity_Closest_Count': self.case_1_data[residue]['count'] if residue in self.case_1_data else 0,
+                'Cavity_Closest_Avg_Dist': np.mean(self.case_1_data[residue]['distances']) if residue in self.case_1_data and self.case_1_data[residue]['distances'] else np.nan,
+                'Cavity_Threshold_Count': self.case_2_data[residue]['count'] if residue in self.case_2_data else 0,
+                'Cavity_Threshold_Avg_Dist': np.mean(self.case_2_data[residue]['distances']) if residue in self.case_2_data and self.case_2_data[residue]['distances'] else np.nan,
+                'HBC_Closest_Count': self.case_3_data[residue]['count'] if residue in self.case_3_data else 0,
+                'HBC_Closest_Avg_Dist': np.mean(self.case_3_data[residue]['distances']) if residue in self.case_3_data and self.case_3_data[residue]['distances'] else np.nan,
+                'HBC_Threshold_Count': self.case_4_data[residue]['count'] if residue in self.case_4_data else 0,
+                'HBC_Threshold_Avg_Dist': np.mean(self.case_4_data[residue]['distances']) if residue in self.case_4_data and self.case_4_data[residue]['distances'] else np.nan,
             }
             table_data.append(row)
         
@@ -258,21 +337,21 @@ class ClosestResidueAggregator:
         df = pd.DataFrame(table_data)
         
         # Save to Excel
-        excel_file = output_dir / f"closest_residue_summary_table_threshold{self.threshold}.xlsx"
+        excel_file = output_dir / f"closest_residue_summary_threshold{self.threshold}.xlsx"
         df.to_excel(excel_file, index=False, float_format='%.2f')
         print(f"\n✓ Summary table saved: {excel_file}")
         
         # Save to CSV as well
-        csv_file = output_dir / f"closest_residue_summary_table_threshold{self.threshold}.csv"
+        csv_file = output_dir / f"closest_residue_summary_threshold{self.threshold}.csv"
         df.to_csv(csv_file, index=False, float_format='%.2f')
         print(f"✓ Summary table saved: {csv_file}")
         
         # Print table to console
-        print("\n" + "="*100)
+        print("\n" + "="*120)
         print(f"SUMMARY TABLE (Threshold={self.threshold}Å)")
-        print("="*100)
+        print("="*120)
         print(df.to_string(index=False))
-        print("="*100)
+        print("="*120)
         
         return df
 
@@ -318,6 +397,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 # python3 aggregate_closest_residue.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_ML --output_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_ML/aggregate_closest_residue/3 --threshold 3

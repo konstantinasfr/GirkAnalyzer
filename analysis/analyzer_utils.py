@@ -63,7 +63,9 @@ def load_analyzer_state(results_dir):
 
 def restore_analyzer_from_state(u, state, results_dir, ch1, ch2, ch3, ch4, 
                                 hbc_residues, hbc_diagonal_pairs,
-                                sf_low_res_residues, sf_low_res_diagonal_pairs):
+                                sf_low_res_residues, sf_low_res_diagonal_pairs,
+                                upper_gl_residues, upper_gl_diagonal_pairs,
+                                lower_gl_residues, lower_gl_diagonal_pairs):
     """
     Create an analyzer object from saved state without re-running analysis.
     
@@ -78,7 +80,9 @@ def restore_analyzer_from_state(u, state, results_dir, ch1, ch2, ch3, ch4,
     ch1, ch2, ch3, ch4 : Channel objects
     hbc_residues, hbc_diagonal_pairs : Lists
     sf_low_res_residues, sf_low_res_diagonal_pairs : Lists
-        
+    upper_gl_residues, upper_gl_diagonal_pairs : Lists
+    lower_gl_residues, lower_gl_diagonal_pairs : Lists
+    
     Returns:
     --------
     IonPermeationAnalysis : Analyzer with restored state
@@ -94,6 +98,10 @@ def restore_analyzer_from_state(u, state, results_dir, ch1, ch2, ch3, ch4,
         hbc_residues=hbc_residues, hbc_diagonal_pairs=hbc_diagonal_pairs,
         sf_low_res_residues=sf_low_res_residues, 
         sf_low_res_diagonal_pairs=sf_low_res_diagonal_pairs,
+        upper_gl_residues=upper_gl_residues,
+        upper_gl_diagonal_pairs=upper_gl_diagonal_pairs,
+        lower_gl_residues=lower_gl_residues,
+        lower_gl_diagonal_pairs=lower_gl_diagonal_pairs,
         results_dir=results_dir,
         count_ions=False  # Don't count again
     )

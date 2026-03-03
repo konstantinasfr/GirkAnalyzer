@@ -13,7 +13,7 @@ class ComprehensiveEnd2Aggregator:
     Creates plots for combinations, free ions, cavity occupancy, and SF alignment.
     """
     
-    def __init__(self, base_directory, threshold=2.5):
+    def __init__(self, base_directory, threshold=2.5, channel_type="G12"):
         """
         Parameters:
         -----------
@@ -21,9 +21,12 @@ class ComprehensiveEnd2Aggregator:
             Base directory containing run subdirectories (RUN1, RUN2, etc.)
         threshold : float
             Threshold value used in the analysis
+        channel_type : str
+            Channel type ('G2', 'G12', 'G12_GAT', 'G12_ML')
         """
         self.base_dir = Path(base_directory)
         self.threshold = threshold
+        self.channel_type = channel_type
         
         # Convert threshold to string (handle 2.5 -> "2.5")
         if isinstance(self.threshold, float) and self.threshold.is_integer():
@@ -34,21 +37,35 @@ class ComprehensiveEnd2Aggregator:
         self.all_results = []
         self.residue_combination_counts = Counter()
         self.subunit_combination_counts = Counter()
-        self.free_ion_counts = Counter()  # Count events by number of free ions
-        self.cavity_ion_counts = []  # Including permeating ion
+        self.free_ion_counts = Counter()
+        self.cavity_ion_counts = []
         
         # SF alignment data
         self.permeating_sf = []
         self.bound_sf = []
         self.free_sf = []
-        self.free_closest_sf = []  # NEW: Free ion closest to SF
-        self.other_free_sf = []    # NEW: Other free ions
+        self.free_closest_sf = []
+        self.other_free_sf = []
+    
+    def convert_D_to_G1(self, label):
+        """Convert subunit D to G1 in labels, but ONLY for non-G2 channels"""
+        if self.channel_type == "G2":
+            return label  # Don't convert for G2!
+        
+        if label and isinstance(label, str):
+            label = label.replace('_D', '_G1')
+            label = label.replace('.D', '.G1')
+            if label == 'D':
+                label = 'G1'
+            if label.startswith('D_'):
+                label = 'G1_' + label[2:]
+            return label
+        return label
         
     def load_all_runs(self):
         """Load comprehensive end2 results from all subdirectories."""
         print(f"\nSearching for runs in: {self.base_dir}")
         
-        # Find all RUN directories
         run_dirs = [d for d in self.base_dir.iterdir() if d.is_dir() and d.name.startswith('RUN')]
         
         if not run_dirs:
@@ -59,12 +76,9 @@ class ComprehensiveEnd2Aggregator:
         
         loaded_count = 0
         
-        # Load data from each run
         for run_dir in sorted(run_dirs):
             run_name = run_dir.name
             
-            # Look for comprehensive_end2 results
-            # Try both with and without threshold subfolder
             possible_paths = [
                 run_dir / "comprehensive_end2" / "comprehensive_end2_analysis.json",
                 run_dir / "occupancy_alignment" / self.threshold_str / "comprehensive_end2_analysis.json",
@@ -85,23 +99,18 @@ class ComprehensiveEnd2Aggregator:
                     results = data['results']
                     self.all_results.extend(results)
                     
-                    # Aggregate data
                     for event in results:
-                        # Count combinations
                         if event['residue_combination']:
                             self.residue_combination_counts[event['residue_combination']] += 1
                         if event['subunit_combination']:
                             self.subunit_combination_counts[event['subunit_combination']] += 1
                         
-                        # Count free ions
                         n_free = event['n_free_ions']
                         self.free_ion_counts[n_free] += 1
                         
-                        # Cavity ion count (add 1 for permeating ion)
                         total_with_permeating = event['total_ions_in_cavity'] + 1
                         self.cavity_ion_counts.append(total_with_permeating)
                         
-                        # SF alignment data
                         if event['permeating_ion_sf_distance'] is not None:
                             self.permeating_sf.append(event['permeating_ion_sf_distance'])
                         
@@ -111,7 +120,6 @@ class ComprehensiveEnd2Aggregator:
                         for free_ion in event['free_ions_sf_alignment']:
                             self.free_sf.append(free_ion['sf_distance'])
                         
-                        # NEW: Split free ions into closest and other
                         if event.get('free_closest_to_sf'):
                             self.free_closest_sf.append(event['free_closest_to_sf']['sf_distance'])
                         
@@ -131,12 +139,11 @@ class ComprehensiveEnd2Aggregator:
     
     def create_combination_csvs(self, output_dir):
         """Create CSV files with all combinations and frequencies."""
-        # Residue combinations CSV
         residue_data = []
         for combo, count in self.residue_combination_counts.most_common():
             percentage = (count / len(self.all_results)) * 100 if self.all_results else 0
             residue_data.append({
-                'Residue_Combination': combo,
+                'Residue_Combination': self.convert_D_to_G1(combo),
                 'Frequency': count,
                 'Percentage': percentage
             })
@@ -146,12 +153,11 @@ class ComprehensiveEnd2Aggregator:
         df_residue.to_csv(csv_file, index=False, float_format='%.2f')
         print(f"✓ Residue combinations CSV: {csv_file}")
         
-        # Subunit combinations CSV
         subunit_data = []
         for combo, count in self.subunit_combination_counts.most_common():
             percentage = (count / len(self.all_results)) * 100 if self.all_results else 0
             subunit_data.append({
-                'Subunit_Combination': combo,
+                'Subunit_Combination': self.convert_D_to_G1(combo),
                 'Frequency': count,
                 'Percentage': percentage
             })
@@ -164,54 +170,19 @@ class ComprehensiveEnd2Aggregator:
         return df_residue, df_subunit
     
     def create_top_combinations_plots(self, output_dir):
-        """Create bar plots for top 10 residue and subunit combinations."""
-        # Plot 1: Top 10 residue combinations
-        if self.residue_combination_counts:
-            top_res = self.residue_combination_counts.most_common(10)
-            
-            combos = [c[0] for c in top_res]
-            counts = [c[1] for c in top_res]
-            
-            fig, ax = plt.subplots(figsize=(14, 7))
-            bars = ax.bar(range(len(combos)), counts, color='steelblue', alpha=0.7,
-                         edgecolor='black', linewidth=1.5)
-            
-            for i, (bar, count) in enumerate(zip(bars, counts)):
-                height = bar.get_height()
-                pct = (count / len(self.all_results)) * 100
-                ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
-                       f'{count}\n({pct:.1f}%)',
-                       ha='center', va='bottom', fontsize=10, fontweight='bold')
-            
-            ax.set_xticks(range(len(combos)))
-            ax.set_xticklabels(combos, fontsize=9, fontweight='bold', rotation=45, ha='right')
-            ax.set_ylabel('Frequency', fontsize=14, fontweight='bold')
-            ax.set_xlabel('Residue Combination', fontsize=14, fontweight='bold')
-            ax.set_title(f'Top 10 Residue Combinations at end_2\n(Threshold={self.threshold}Å)', 
-                        fontsize=16, fontweight='bold', pad=20)
-            ax.grid(True, alpha=0.3, axis='y')
-            
-            plt.tight_layout()
-            plt.savefig(output_dir / f"top10_residue_combinations_t{self.threshold_str}.png", 
-                       dpi=300, bbox_inches='tight')
-            plt.close()
-            print(f"✓ Top 10 residue combinations plot saved")
-        
-        # Plot 2: Top 10 subunit combinations
+        """Create bar plots for top combinations."""
         if self.subunit_combination_counts:
             top_sub = self.subunit_combination_counts.most_common(10)
             
-            combos = [c[0] for c in top_sub]
+            combos = [self.convert_D_to_G1(c[0]) for c in top_sub]
             counts = [c[1] for c in top_sub]
             
-            fig, ax = plt.subplots(figsize=(12, 7))
+            # Narrower plot
+            fig, ax = plt.subplots(figsize=(10, 6))
             
-            # Color by number of subunits
             colors = []
             for combo in combos:
-                n_parts = len([p for p in combo.split('_') if not p.isdigit()])
-                if 'FR' in combo:
-                    n_parts -= 1
+                n_parts = len([p for p in combo.split('_') if p in ['A', 'B', 'C', 'G1', 'D']])
                 if n_parts == 1:
                     colors.append('lightblue')
                 elif n_parts == 2:
@@ -229,15 +200,24 @@ class ComprehensiveEnd2Aggregator:
                 pct = (count / len(self.all_results)) * 100
                 ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
                        f'{count}\n({pct:.1f}%)',
-                       ha='center', va='bottom', fontsize=11, fontweight='bold')
+                       ha='center', va='bottom', fontsize=16, fontweight='bold')
             
             ax.set_xticks(range(len(combos)))
-            ax.set_xticklabels(combos, fontsize=11, fontweight='bold', rotation=45, ha='right')
-            ax.set_ylabel('Frequency', fontsize=14, fontweight='bold')
-            ax.set_xlabel('Subunit Combination', fontsize=14, fontweight='bold')
-            ax.set_title(f'Top 10 Subunit Combinations at end_2\n(Threshold={self.threshold}Å)', 
-                        fontsize=16, fontweight='bold', pad=20)
+            ax.set_xticklabels(combos, fontsize=20, fontweight='bold', rotation=45, ha='right')
+            ax.set_ylabel('Frequency', fontsize=22, fontweight='bold')
+            ax.set_xlabel('Subunit Combination', fontsize=22, fontweight='bold')
+            ax.set_title(f'Ion Leaves GLU/ASN Cavity - Subunit Combinations', 
+                        fontsize=22, fontweight='bold', pad=18)
             ax.grid(True, alpha=0.3, axis='y')
+            ax.tick_params(axis='both', labelsize=18)
+            
+            # Add gap at top - 15% extra space for labels
+            max_count = max(counts)
+            ax.set_ylim(0, max_count * 1.25)
+            
+            # Add gap at top
+            max_count = max(counts)
+            ax.set_ylim(0, max_count * 1.25)
             
             plt.tight_layout()
             plt.savefig(output_dir / f"top10_subunit_combinations_t{self.threshold_str}.png", 
@@ -246,42 +226,45 @@ class ComprehensiveEnd2Aggregator:
             print(f"✓ Top 10 subunit combinations plot saved")
     
     def create_free_ions_plot(self, output_dir):
-        """Create bar plot showing percentage of events with 0, 1, 2, ... free ions."""
+        """Create bar plot showing percentage of events with free ions."""
         if not self.free_ion_counts:
             print("No free ion data")
             return
         
-        # Sort by number of free ions
         sorted_counts = sorted(self.free_ion_counts.items())
         
         n_free_ions = [c[0] for c in sorted_counts]
         frequencies = [c[1] for c in sorted_counts]
         percentages = [(f / len(self.all_results)) * 100 for f in frequencies]
         
-        fig, ax = plt.subplots(figsize=(10, 7))
+        # Narrower plot
+        fig, ax = plt.subplots(figsize=(10, 6))
         
         bars = ax.bar(n_free_ions, percentages, color='coral', alpha=0.7,
                      edgecolor='black', linewidth=1.5, width=0.8)
         
-        # Add labels
         for bar, freq, pct in zip(bars, frequencies, percentages):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + 1,
                    f'{freq}\n({pct:.1f}%)',
-                   ha='center', va='bottom', fontsize=11, fontweight='bold')
+                   ha='center', va='bottom', fontsize=16, fontweight='bold')
         
-        ax.set_xlabel('Number of Free Ions', fontsize=14, fontweight='bold')
-        ax.set_ylabel('Percentage of Events (%)', fontsize=14, fontweight='bold')
-        ax.set_title(f'Free Ion Distribution at end_2\n(Threshold={self.threshold}Å)', 
-                    fontsize=16, fontweight='bold', pad=20)
+        ax.set_xlabel('Number of Free Ions', fontsize=22, fontweight='bold')
+        ax.set_ylabel('Percentage of Events (%)', fontsize=22, fontweight='bold')
+        ax.set_title(f'Ion Leaves GLU/ASN Cavity - Free Ion Distribution', 
+                    fontsize=22, fontweight='bold', pad=18)
         ax.grid(True, alpha=0.3, axis='y')
+        ax.tick_params(axis='both', labelsize=18)
         
-        # Add statistics
+        # Add gap at top
+        max_pct = max(percentages)
+        ax.set_ylim(0, max_pct * 1.1)
+        
         mean_free = np.mean([k for k, v in self.free_ion_counts.items() for _ in range(v)])
         stats_text = f'Mean: {mean_free:.2f}'
         ax.text(0.98, 0.98, stats_text, transform=ax.transAxes,
-               ha='right', va='top', fontsize=12, fontweight='bold',
-               bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='black'))
+               ha='right', va='top', fontsize=16, fontweight='bold',
+               bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='black', linewidth=2))
         
         plt.tight_layout()
         plt.savefig(output_dir / f"free_ions_distribution_t{self.threshold_str}.png", 
@@ -290,7 +273,7 @@ class ComprehensiveEnd2Aggregator:
         print(f"✓ Free ions distribution plot saved")
     
     def create_cavity_ion_count_plot(self, output_dir):
-        """Create bar plot of total ions in cavity (including permeating ion)."""
+        """Create bar plot of total ions in cavity."""
         if not self.cavity_ion_counts:
             print("No cavity ion data")
             return
@@ -301,7 +284,8 @@ class ComprehensiveEnd2Aggregator:
         n_ions = [c[0] for c in sorted_counts]
         frequencies = [c[1] for c in sorted_counts]
         
-        fig, ax = plt.subplots(figsize=(10, 7))
+        # Narrower plot
+        fig, ax = plt.subplots(figsize=(10, 6))
         
         bars = ax.bar(n_ions, frequencies, color='steelblue', alpha=0.7,
                      edgecolor='black', linewidth=1.5, width=0.8)
@@ -310,23 +294,28 @@ class ComprehensiveEnd2Aggregator:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
                    f'{freq}',
-                   ha='center', va='bottom', fontsize=11, fontweight='bold')
+                   ha='center', va='bottom', fontsize=16, fontweight='bold')
         
         mean_ions = np.mean(self.cavity_ion_counts)
         ax.axvline(x=mean_ions, color='red', linestyle='--', linewidth=2,
                   label=f'Mean = {mean_ions:.1f}')
         
-        ax.set_xlabel('Total Ions in Cavity (including permeating)', fontsize=14, fontweight='bold')
-        ax.set_ylabel('Frequency', fontsize=14, fontweight='bold')
-        ax.set_title(f'Cavity Ion Count Distribution at end_2\n(Threshold={self.threshold}Å)', 
-                    fontsize=16, fontweight='bold', pad=20)
+        ax.set_xlabel('Total Ions in Cavity', fontsize=22, fontweight='bold')
+        ax.set_ylabel('Frequency', fontsize=22, fontweight='bold')
+        ax.set_title(f'Ion Leaves GLU/ASN Cavity - Ion Count Distribution', 
+                    fontsize=22, fontweight='bold', pad=18)
         ax.grid(True, alpha=0.3, axis='y')
-        ax.legend(fontsize=12)
+        ax.tick_params(axis='both', labelsize=18)
+        ax.legend(fontsize=15)
+        
+        # Add gap at top
+        max_freq = max(frequencies)
+        ax.set_ylim(0, max_freq * 1.1)
         
         stats_text = f'Mean: {mean_ions:.1f}\nStd: {np.std(self.cavity_ion_counts):.1f}'
         ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
-               fontsize=11, verticalalignment='top',
-               bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='black'))
+               fontsize=14, verticalalignment='top', fontweight='bold',
+               bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='black', linewidth=2))
         
         plt.tight_layout()
         plt.savefig(output_dir / f"cavity_total_ions_t{self.threshold_str}.png", 
@@ -335,17 +324,14 @@ class ComprehensiveEnd2Aggregator:
         print(f"✓ Cavity total ions plot saved")
     
     def create_sf_alignment_3category_plot(self, output_dir):
-        """
-        Create plot like the reference image but with 3 categories:
-        Permeating Ions | Bound Ions | Free Ions
-        """
+        """Create 3-category SF alignment plot."""
         if not self.permeating_sf and not self.bound_sf and not self.free_sf:
             print("No SF alignment data")
             return
         
-        fig, ax = plt.subplots(figsize=(12, 8))
+        # Narrower plot
+        fig, ax = plt.subplots(figsize=(10, 6))
         
-        # Prepare data for 3 categories
         categories = []
         all_data = []
         colors = []
@@ -370,33 +356,31 @@ class ComprehensiveEnd2Aggregator:
         stds = [np.std(data) for data in all_data]
         ns = [len(data) for data in all_data]
         
-        # Draw bars
         bars = ax.bar(x_positions, means, color=colors, alpha=0.6, 
                      edgecolor='black', linewidth=2, width=0.6)
         
-        # Add error bars
         ax.errorbar(x_positions, means, yerr=stds, fmt='none', 
                    color='black', capsize=15, capthick=2, linewidth=2)
         
-        # Add individual data points
         for i, data in enumerate(all_data):
             x_jitter = np.random.normal(i, 0.04, size=len(data))
             ax.scatter(x_jitter, data, color='black', alpha=0.5, s=30, zorder=3)
         
-        # Add statistics labels
         for i, (mean, std, n) in enumerate(zip(means, stds, ns)):
-            ax.text(i, mean + std + (ax.get_ylim()[1] * 0.05),
+            label_y = mean + std + (ax.get_ylim()[1] * 0.05)
+            ax.text(i, label_y,
                    f'{mean:.2f} ± {std:.2f}\n(n={n})',
-                   ha='center', va='bottom', fontsize=12, fontweight='bold',
+                   ha='center', va='bottom', fontsize=14, fontweight='bold',
                    bbox=dict(boxstyle='round,pad=0.5', facecolor='white', 
-                            edgecolor='black', alpha=0.9))
+                            edgecolor='black', alpha=0.9, linewidth=1.5))
         
         ax.set_xticks(x_positions)
-        ax.set_xticklabels(categories, fontsize=14, fontweight='bold')
-        ax.set_ylabel('Distance to SF Line (Å)', fontsize=14, fontweight='bold')
-        ax.set_title('SF Line Alignment: Permeating vs Bound vs Free Ions', 
-                    fontsize=16, fontweight='bold', pad=20)
+        ax.set_xticklabels(categories, fontsize=20, fontweight='bold')
+        ax.set_ylabel('Distance to SF Line (Å)', fontsize=22, fontweight='bold')
+        ax.set_title('Ion Leaves GLU/ASN Cavity - SF Alignment', 
+                    fontsize=22, fontweight='bold', pad=18)
         ax.grid(True, alpha=0.3, axis='y')
+        ax.tick_params(axis='both', labelsize=18)
         
         plt.tight_layout()
         plt.savefig(output_dir / f"sf_alignment_3categories_t{self.threshold_str}.png", 
@@ -405,38 +389,35 @@ class ComprehensiveEnd2Aggregator:
         print(f"✓ SF alignment 3-category plot saved")
     
     def create_sf_alignment_4category_plot(self, output_dir):
-        """
-        NEW: Create plot with 4 categories:
-        Permeating Ions | Bound Ions | Free Closest to SF | Other Free Ions
-        """
+        """Create 4-category SF alignment plot with bigger fonts."""
         if not self.permeating_sf and not self.bound_sf and not self.free_closest_sf and not self.other_free_sf:
             print("No SF alignment data for 4-category plot")
             return
         
-        fig, ax = plt.subplots(figsize=(14, 8))
+        # Narrower plot for bigger fonts
+        fig, ax = plt.subplots(figsize=(11, 6))
         
-        # Prepare data for 4 categories
         categories = []
         all_data = []
         colors = []
         
         if self.permeating_sf:
-            categories.append('Permeating Ions')
+            categories.append('Permeating\nIons')
             all_data.append(self.permeating_sf)
             colors.append('steelblue')
         
         if self.bound_sf:
-            categories.append('Bound Ions')
+            categories.append('Bound\nIons')
             all_data.append(self.bound_sf)
             colors.append('lightcoral')
         
         if self.free_closest_sf:
-            categories.append('Free Closest to SF')
+            categories.append('Free Closest\nto SF')
             all_data.append(self.free_closest_sf)
             colors.append('gold')
         
         if self.other_free_sf:
-            categories.append('Other Free Ions')
+            categories.append('Other Free\nIons')
             all_data.append(self.other_free_sf)
             colors.append('lightgreen')
         
@@ -445,33 +426,31 @@ class ComprehensiveEnd2Aggregator:
         stds = [np.std(data) for data in all_data]
         ns = [len(data) for data in all_data]
         
-        # Draw bars
         bars = ax.bar(x_positions, means, color=colors, alpha=0.6, 
                      edgecolor='black', linewidth=2, width=0.6)
         
-        # Add error bars
         ax.errorbar(x_positions, means, yerr=stds, fmt='none', 
                    color='black', capsize=15, capthick=2, linewidth=2)
         
-        # Add individual data points
         for i, data in enumerate(all_data):
             x_jitter = np.random.normal(i, 0.04, size=len(data))
-            ax.scatter(x_jitter, data, color='black', alpha=0.5, s=30, zorder=3)
+            ax.scatter(x_jitter, data, color='black', alpha=0.4, s=20, zorder=3)
         
-        # Add statistics labels
         for i, (mean, std, n) in enumerate(zip(means, stds, ns)):
-            ax.text(i, mean + std + (ax.get_ylim()[1] * 0.05),
+            label_y = mean + std + (ax.get_ylim()[1] * 0.05)
+            ax.text(i, label_y,
                    f'{mean:.2f} ± {std:.2f}\n(n={n})',
-                   ha='center', va='bottom', fontsize=12, fontweight='bold',
+                   ha='center', va='bottom', fontsize=18, fontweight='bold',
                    bbox=dict(boxstyle='round,pad=0.5', facecolor='white', 
-                            edgecolor='black', alpha=0.9))
+                            edgecolor='black', alpha=0.9, linewidth=1.5))
         
         ax.set_xticks(x_positions)
-        ax.set_xticklabels(categories, fontsize=13, fontweight='bold')
-        ax.set_ylabel('Distance to SF Line (Å)', fontsize=14, fontweight='bold')
-        ax.set_title('SF Line Alignment: Permeating vs Bound vs Free', 
-                    fontsize=16, fontweight='bold', pad=20)
+        ax.set_xticklabels(categories, fontsize=22, fontweight='bold')
+        ax.set_ylabel('Distance to SF Line (Å)', fontsize=24, fontweight='bold')
+        ax.set_title('Ion Leaves GLU/ASN Cavity - SF Alignment', 
+                    fontsize=24, fontweight='bold', pad=18)
         ax.grid(True, alpha=0.3, axis='y')
+        ax.tick_params(axis='both', labelsize=20)
         
         plt.tight_layout()
         plt.savefig(output_dir / f"sf_alignment_4categories_t{self.threshold_str}.png", 
@@ -490,17 +469,15 @@ class ComprehensiveEnd2Aggregator:
         
         print("\nCreating outputs...")
         
-        # CSV files
         print("\nCreating CSV files...")
         self.create_combination_csvs(output_dir)
         
-        # Plots
         print("\nCreating plots...")
         self.create_top_combinations_plots(output_dir)
         self.create_free_ions_plot(output_dir)
         self.create_cavity_ion_count_plot(output_dir)
         self.create_sf_alignment_3category_plot(output_dir)
-        self.create_sf_alignment_4category_plot(output_dir)  # NEW
+        self.create_sf_alignment_4category_plot(output_dir)
         
         print(f"\n✓ All outputs saved to: {output_dir}")
 
@@ -521,6 +498,13 @@ def main():
         help="Threshold value used in the analysis (default: 2.5)"
     )
     parser.add_argument(
+        "-c", "--channel",
+        type=str,
+        default="G12",
+        choices=['G2', 'G12', 'G12_GAT', 'G12_ML'],
+        help="Channel type (default: G12). Use G2 to keep D labels, G12/G12_GAT/G12_ML to convert D to G1"
+    )
+    parser.add_argument(
         "--output_dir",
         type=str,
         default=None,
@@ -530,13 +514,12 @@ def main():
     args = parser.parse_args()
     
     # Create aggregator
-    aggregator = ComprehensiveEnd2Aggregator(args.base_directory, args.threshold)
+    aggregator = ComprehensiveEnd2Aggregator(args.base_directory, args.threshold, args.channel)
     
     if not aggregator.load_all_runs():
         print("No data found. Exiting.")
         return
     
-    # Create all outputs
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
@@ -549,6 +532,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 # USAGE:
 # python aggregate_comprehensive_end2.py /path/to/G12 --threshold 2.5

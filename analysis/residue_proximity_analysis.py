@@ -8,24 +8,6 @@ class ResidueProximityAnalysis:
                  start_frame, end_frame, results_dir, channel_type, cutoff=3.0):
         """
         Analyzes how many frames have ions within cutoff distance of specific residues.
-        
-        Parameters:
-        -----------
-        universe : MDAnalysis Universe
-        ion_selection : str
-            Selection string for ions (e.g., "resname K+ K")
-        glu_residues : list
-            List of glutamate residue IDs (4 residues)
-        asn_residues : list
-            List of asparagine residue IDs (4 residues)
-        start_frame : int
-        end_frame : int
-        results_dir : Path
-            Directory to save results
-        channel_type : str
-            Channel type for PDB numbering conversion (e.g., "G4", "G2", "G12")
-        cutoff : float
-            Distance cutoff in Angstroms (default: 3.0)
         """
         self.u = universe
         self.ion_selection = ion_selection
@@ -43,11 +25,22 @@ class ResidueProximityAnalysis:
         
         self.ions = self.u.select_atoms(self.ion_selection)
         
-        # Create atom groups for each individual residue
+        # Create atom groups for each individual residue (ALL ATOMS)
         self.glu_atom_groups = {resid: self.u.select_atoms(f"resid {resid}") 
                                 for resid in glu_residues}
         self.asn_atom_groups = {resid: self.u.select_atoms(f"resid {resid}") 
                                 for resid in asn_residues}
+        
+        # Verify selections
+        print(f"\n{'='*60}")
+        print("RESIDUE SELECTION VERIFICATION:")
+        print(f"{'='*60}")
+        print(f"Total ions selected: {len(self.ions)}")
+        for resid, atoms in self.glu_atom_groups.items():
+            print(f"GLU/ASP residue {resid}: {len(atoms)} atoms, resname: {atoms.resnames[0] if len(atoms) > 0 else 'NONE'}")
+        for resid, atoms in self.asn_atom_groups.items():
+            print(f"ASN/ASP residue {resid}: {len(atoms)} atoms, resname: {atoms.resnames[0] if len(atoms) > 0 else 'NONE'}")
+        print(f"{'='*60}\n")
         
         # Results storage for individual residues
         self.glu_close_frames = {resid: [] for resid in glu_residues}
@@ -58,27 +51,9 @@ class ResidueProximityAnalysis:
         self.asn_close_details = {resid: {} for resid in asn_residues}
         
         # Aggregate results
-        self.any_glu_close_frames = []  # Frames where at least one ion is close to ANY GLU
-        self.any_asn_close_frames = []  # Frames where at least one ion is close to ANY ASN
-        self.any_residue_close_frames = []  # Frames where at least one ion is close to ANY of the 8 residues
-        
-    def is_close(self, ion_pos, residue_atoms):
-        """
-        Check if ion is within cutoff distance of any atom in residue_atoms.
-        
-        Parameters:
-        -----------
-        ion_pos : np.array
-            Ion position (x, y, z)
-        residue_atoms : AtomGroup
-            Atoms to check distance against
-            
-        Returns:
-        --------
-        bool : True if ion is within cutoff of any atom
-        """
-        distances = np.linalg.norm(residue_atoms.positions - ion_pos, axis=1)
-        return np.any(distances <= self.cutoff)
+        self.any_glu_close_frames = []
+        self.any_asn_close_frames = []
+        self.any_residue_close_frames = []
     
     def run_analysis(self):
         """Run the proximity analysis over all frames."""
@@ -94,26 +69,44 @@ class ResidueProximityAnalysis:
             any_glu_close = False
             any_asn_close = False
             
-            # Check each GLU residue individually
+            # Check each GLU residue
             for glu_resid, glu_atoms in self.glu_atom_groups.items():
+                ion_is_close = False
                 close_ions = []
+                
+                # Go through each ion
                 for ion in self.ions:
-                    if self.is_close(ion.position, glu_atoms):
+                    # Calculate distances from this ion to all atoms in this residue
+                    dists = np.linalg.norm(glu_atoms.positions - ion.position, axis=1)
+                    
+                    # Is any atom close enough?
+                    if np.min(dists) <= self.cutoff:
+                        ion_is_close = True
                         close_ions.append(ion.resid)
                 
-                if close_ions:
+                # If an ion was close, count this frame
+                if ion_is_close:
                     self.glu_close_frames[glu_resid].append(frame)
                     self.glu_close_details[glu_resid][frame] = close_ions
                     any_glu_close = True
             
-            # Check each ASN residue individually
+            # Check each ASN residue
             for asn_resid, asn_atoms in self.asn_atom_groups.items():
+                ion_is_close = False
                 close_ions = []
+                
+                # Go through each ion
                 for ion in self.ions:
-                    if self.is_close(ion.position, asn_atoms):
+                    # Calculate distances from this ion to all atoms in this residue
+                    dists = np.linalg.norm(asn_atoms.positions - ion.position, axis=1)
+                    
+                    # Is any atom close enough?
+                    if np.min(dists) <= self.cutoff:
+                        ion_is_close = True
                         close_ions.append(ion.resid)
                 
-                if close_ions:
+                # If an ion was close, count this frame
+                if ion_is_close:
                     self.asn_close_frames[asn_resid].append(frame)
                     self.asn_close_details[asn_resid][frame] = close_ions
                     any_asn_close = True
@@ -125,7 +118,7 @@ class ResidueProximityAnalysis:
                 self.any_asn_close_frames.append(frame)
             if any_glu_close or any_asn_close:
                 self.any_residue_close_frames.append(frame)
-    
+
     def print_results(self):
         """Print summary of proximity analysis."""
         total_frames = self.end_frame - self.start_frame + 1
@@ -136,14 +129,16 @@ class ResidueProximityAnalysis:
         print(f"Cutoff distance: {self.cutoff} Å")
         print(f"Total frames analyzed: {total_frames}")
         print(f"\n{'-'*70}")
-        print("INDIVIDUAL GLU RESIDUES:")
+        print("INDIVIDUAL GLU/ASP RESIDUES:")
         for resid in self.glu_residues:
             count = len(self.glu_close_frames[resid])
             pdb_label = self.convert_to_pdb(resid, self.channel_type)
-            print(f"  GLU {pdb_label}: {count} frames ({count/total_frames*100:.2f}%)")
+            # Determine actual residue type
+            res_type = "ASP" if (self.channel_type == "G12" and resid == 1105) else "GLU"
+            print(f"  {res_type} {pdb_label}: {count} frames ({count/total_frames*100:.2f}%)")
         
         print(f"\n{'-'*70}")
-        print("INDIVIDUAL ASN RESIDUES:")
+        print("INDIVIDUAL ASN/ASP RESIDUES:")
         for resid in self.asn_residues:
             count = len(self.asn_close_frames[resid])
             pdb_label = self.convert_to_pdb(resid, self.channel_type)
@@ -155,7 +150,7 @@ class ResidueProximityAnalysis:
         any_asn = len(self.any_asn_close_frames)
         any_res = len(self.any_residue_close_frames)
         
-        print(f"Frames with ion close to ANY GLU: {any_glu} ({any_glu/total_frames*100:.2f}%)")
+        print(f"Frames with ion close to ANY GLU/ASP: {any_glu} ({any_glu/total_frames*100:.2f}%)")
         print(f"Frames with ion close to ANY ASN: {any_asn} ({any_asn/total_frames*100:.2f}%)")
         print(f"Frames with ion close to ANY residue: {any_res} ({any_res/total_frames*100:.2f}%)")
         print(f"{'-'*70}")
@@ -237,9 +232,10 @@ class ResidueProximityAnalysis:
             presence = [1 if f in self.glu_close_frames[resid] else 0 for f in frames]
             ax.fill_between(frames, 0, presence, alpha=0.6, color='red')
             
-            # Use PDB numbering
+            # Use PDB numbering and correct residue type
             pdb_label = self.convert_to_pdb(resid, self.channel_type)
-            ax.set_ylabel(f'GLU {pdb_label}', fontsize=10)
+            res_type = "ASP" if (self.channel_type == "G12" and resid == 1105) else "GLU"
+            ax.set_ylabel(f'{res_type} {pdb_label}', fontsize=10)
             ax.set_ylim(-0.1, 1.1)
             ax.grid(True, alpha=0.3)
             ax.set_yticks([0, 1])
@@ -251,7 +247,7 @@ class ResidueProximityAnalysis:
                    transform=ax.transAxes, fontsize=9, va='center')
         
         axes[-1].set_xlabel('Frame', fontsize=12)
-        fig.suptitle(f'Ion Proximity to Individual GLU Residues (≤{self.cutoff} Å)', 
+        fig.suptitle(f'Ion Proximity to Individual GLU/ASP Residues (≤{self.cutoff} Å)', 
                     fontsize=14, y=0.995)
         
         plt.tight_layout()
@@ -306,9 +302,10 @@ class ResidueProximityAnalysis:
             presence = [1 if f in self.glu_close_frames[resid] else 0 for f in frames]
             ax.fill_between(frames, 0, presence, alpha=0.6, color='red')
             
-            # Use PDB numbering
+            # Use PDB numbering and correct residue type
             pdb_label = self.convert_to_pdb(resid, self.channel_type)
-            ax.set_ylabel(f'GLU {pdb_label}', fontsize=9)
+            res_type = "ASP" if (self.channel_type == "G12" and resid == 1105) else "GLU"
+            ax.set_ylabel(f'{res_type} {pdb_label}', fontsize=9)
             ax.set_ylim(-0.1, 1.1)
             ax.grid(True, alpha=0.3)
             ax.set_yticks([0, 1])
@@ -345,30 +342,17 @@ class ResidueProximityAnalysis:
         print(f"Combined timeline saved to: {plot_file}")
 
     def get_residue_label(self, resid, is_glu_group):
-        """
-        Get the correct residue label including amino acid type.
-        
-        Parameters:
-        -----------
-        resid : int
-            Residue ID
-        is_glu_group : bool
-            True if from glu_residues, False if from asn_residues
-        
-        Returns:
-        --------
-        str : Label like "GLU 152.A", "ASN 184.B", or "ASP 173.D"
-        """
+        """Get the correct residue label including amino acid type."""
         pdb_num = self.convert_to_pdb(resid, self.channel_type)
         
         if is_glu_group:
-            return f"GLU {pdb_num}"
-        else:
-            # Special case: residue 1105 in G12 is ASP, not ASN
+            # Check if it's ASP (special case for G12)
             if self.channel_type == "G12" and resid == 1105:
                 return f"ASP {pdb_num}"
             else:
-                return f"ASN {pdb_num}"
+                return f"GLU {pdb_num}"
+        else:
+            return f"ASN {pdb_num}"
     
     def plot_aggregate_comparison(self):
         """Create a summary plot comparing GLU vs ASN vs ALL."""
@@ -382,7 +366,7 @@ class ResidueProximityAnalysis:
         any_res = [1 if f in self.any_residue_close_frames else 0 for f in frames]
         
         # Plot with offset for visibility
-        ax.fill_between(frames, 0, any_glu, alpha=0.5, label='Any GLU', color='red')
+        ax.fill_between(frames, 0, any_glu, alpha=0.5, label='Any GLU/ASP', color='red')
         ax.fill_between(frames, -1, [-x for x in any_asn], alpha=0.5, label='Any ASN', color='blue')
         ax.fill_between(frames, 1.5, [x*0.5 + 1.5 for x in any_res], alpha=0.3, label='Any Residue', color='green')
         
@@ -394,7 +378,7 @@ class ResidueProximityAnalysis:
         
         # Add statistics text
         total = self.end_frame - self.start_frame + 1
-        stats_text = (f"Any GLU: {len(self.any_glu_close_frames)} frames ({len(self.any_glu_close_frames)/total*100:.1f}%)\n"
+        stats_text = (f"Any GLU/ASP: {len(self.any_glu_close_frames)} frames ({len(self.any_glu_close_frames)/total*100:.1f}%)\n"
                      f"Any ASN: {len(self.any_asn_close_frames)} frames ({len(self.any_asn_close_frames)/total*100:.1f}%)\n"
                      f"Any Residue: {len(self.any_residue_close_frames)} frames ({len(self.any_residue_close_frames)/total*100:.1f}%)")
         ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
@@ -421,7 +405,7 @@ class ResidueProximityAnalysis:
         ax1.set_xticks(range(len(self.glu_residues)))
         ax1.set_xticklabels(glu_labels)
         ax1.set_ylabel('Number of Frames', fontsize=12)
-        ax1.set_title(f'Ion Proximity to GLU Residues (≤{self.cutoff} Å)', fontsize=12, fontweight='bold')
+        ax1.set_title(f'Ion Proximity to GLU/ASP Residues (≤{self.cutoff} Å)', fontsize=12, fontweight='bold')
         ax1.grid(True, alpha=0.3, axis='y')
         
         # Add value labels on bars
@@ -492,7 +476,7 @@ class ResidueProximityAnalysis:
         
         # Add legend
         from matplotlib.patches import Patch
-        legend_elements = [Patch(facecolor='red', alpha=0.7, edgecolor='black', label='GLU'),
+        legend_elements = [Patch(facecolor='red', alpha=0.7, edgecolor='black', label='GLU/ASP'),
                           Patch(facecolor='blue', alpha=0.7, edgecolor='black', label='ASN')]
         ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
         
@@ -508,7 +492,7 @@ class ResidueProximityAnalysis:
         
         total_frames = self.end_frame - self.start_frame + 1
         
-        categories = ['Any GLU', 'Any ASN', 'Any Residue']
+        categories = ['Any GLU/ASP', 'Any ASN', 'Any Residue']
         counts = [
             len(self.any_glu_close_frames),
             len(self.any_asn_close_frames),
@@ -574,7 +558,7 @@ class ResidueProximityAnalysis:
         
         # Add legend
         from matplotlib.patches import Patch
-        legend_elements = [Patch(facecolor='red', alpha=0.7, edgecolor='black', label='GLU'),
+        legend_elements = [Patch(facecolor='red', alpha=0.7, edgecolor='black', label='GLU/ASP'),
                           Patch(facecolor='blue', alpha=0.7, edgecolor='black', label='ASN')]
         ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
         

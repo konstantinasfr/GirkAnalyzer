@@ -65,15 +65,51 @@ class ProximitySummaryAcrossRuns:
             
             if data:
                 self.run_data[run_name] = data
-                
                 # Store residue lists from first successful load
                 if self.glu_residues is None:
-                    self.glu_residues = data['glu_residues']
-                    self.asn_residues = data['asn_residues']
+                    # Sort by chain designation (extracted from PDB numbering)
+                    self.glu_residues = sorted(data['glu_residues'], 
+                                            key=lambda x: self.get_chain_sort_key(x))
+                    self.asn_residues = sorted(data['asn_residues'],
+                                            key=lambda x: self.get_chain_sort_key(x))
         
         print(f"Successfully loaded data from {len(self.run_data)} runs")
         return len(self.run_data) > 0
-    
+
+    def get_chain_sort_key(self, resid):
+        """
+        Get sorting key based on chain designation.
+        Order: A, B, C, D, G1, G2, etc.
+        """
+        pdb_label = self.convert_to_pdb(resid, self.channel_type)
+        
+        # Extract chain (everything after the number)
+        # e.g., "141.G1" -> "G1", "152.C" -> "C"
+        parts = pdb_label.split('.')
+        if len(parts) == 2:
+            chain = parts[1]
+        else:
+            chain = ""
+        
+        # Define sort order: A, B, C, D, then G1, G2, etc.
+        chain_order = {
+            'A': 0,
+            'B': 1,
+            'C': 2,
+            'D': 3,
+            'G1': 4,
+            'G2': 5,
+            'G3': 6,
+            'G4': 7
+        }
+        
+        # Get the order value, default to 999 for unknown chains
+        order = chain_order.get(chain, 999)
+        
+        # Return tuple: (order, residue_number) for secondary sorting
+        residue_num = int(parts[0]) if len(parts) == 2 else resid
+        return (order, residue_num)
+        
     def get_residue_label(self, resid, is_glu_group):
         """Get the correct residue label including amino acid type."""
         pdb_num = self.convert_to_pdb(resid, self.channel_type)
@@ -145,43 +181,44 @@ class ProximitySummaryAcrossRuns:
         means = ([stats['glu'][resid]['mean'] for resid in self.glu_residues] +
                 [stats['asn'][resid]['mean'] for resid in self.asn_residues])
         stds = ([stats['glu'][resid]['std'] for resid in self.glu_residues] +
-               [stats['asn'][resid]['std'] for resid in self.asn_residues])
+                [stats['asn'][resid]['std'] for resid in self.asn_residues])
         values_list = ([stats['glu'][resid]['values'] for resid in self.glu_residues] +
-                      [stats['asn'][resid]['values'] for resid in self.asn_residues])
+                    [stats['asn'][resid]['values'] for resid in self.asn_residues])
         
         # Labels with PDB numbering
         labels = ([self.get_residue_label(resid, True) for resid in self.glu_residues] +
-                 [self.get_residue_label(resid, False) for resid in self.asn_residues])
+                [self.get_residue_label(resid, False) for resid in self.asn_residues])
+        
         colors = ['red']*len(self.glu_residues) + ['blue']*len(self.asn_residues)
         
         # Create bars with error bars
         x = range(len(all_residues))
         bars = ax.bar(x, means, yerr=stds, color=colors, alpha=0.5, 
-                     edgecolor='black', linewidth=1.5, capsize=5, 
-                     error_kw={'linewidth': 2, 'ecolor': 'black'})
+                    edgecolor='black', linewidth=1.5, capsize=5,
+                    error_kw={'linewidth': 2, 'ecolor': 'black'})
         
         # Add individual run data points
         for i, (x_pos, values) in enumerate(zip(x, values_list)):
-            # Add some jitter to x position for visibility
             x_jitter = np.random.normal(x_pos, 0.04, size=len(values))
             ax.scatter(x_jitter, values, color='black', s=50, alpha=0.7, 
-                      zorder=5, edgecolors='white', linewidth=0.5)
+                    zorder=5, edgecolors='white', linewidth=0.5)
         
         ax.set_xticks(x)
-        ax.set_xticklabels(labels, rotation=45, ha='right')
-        ax.set_ylabel('Percentage of Frames (%)', fontsize=13)
-        ax.set_xlabel('Residue', fontsize=13)
+        ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=18)  # Increased
+        ax.set_ylabel('Percentage of Frames (%)', fontsize=20)  # Increased
+        ax.set_xlabel('Residue', fontsize=20)  # Increased
         ax.set_title(f'Ion Proximity Summary Across {len(self.run_data)} Runs (≤3.0 Å)', 
-                    fontsize=15, fontweight='bold')
+                    fontsize=22, fontweight='bold')  # Increased
         ax.set_ylim(0, 110)
         ax.grid(True, alpha=0.3, axis='y')
+        ax.tick_params(axis='y', labelsize=16)  # Increased
         
-        # Add value labels on bars
+        # Add value labels on bars - BIGGER
         for bar, mean, std in zip(bars, means, stds):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + std + 2,
-                   f'{mean:.1f}%\n±{std:.1f}',
-                   ha='center', va='bottom', fontsize=9)
+                    f'{mean:.1f}%\n±{std:.1f}',
+                    ha='center', va='bottom', fontsize=14, fontweight='bold')  # Increased and bold
         
         # Add legend
         from matplotlib.lines import Line2D
@@ -189,21 +226,21 @@ class ProximitySummaryAcrossRuns:
             Patch(facecolor='red', alpha=0.5, edgecolor='black', label='GLU'),
             Patch(facecolor='blue', alpha=0.5, edgecolor='black', label='ASN/ASP'),
             Line2D([0], [0], marker='o', color='w', markerfacecolor='black', 
-                   markersize=8, label='Individual runs', markeredgecolor='white')
+                markersize=8, label='Individual runs', markeredgecolor='white')
         ]
-        ax.legend(handles=legend_elements, loc='upper left', fontsize=11)
+        ax.legend(handles=legend_elements, loc='upper left', fontsize=16)  # Increased
         
         # Add run count text
-        ax.text(0.98, 0.98, f'n = {len(self.run_data)} runs', 
-               transform=ax.transAxes, fontsize=11, va='top', ha='right',
-               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        ax.text(0.98, 0.98, f'n = {len(self.run_data)} runs',
+                transform=ax.transAxes, fontsize=16, va='top', ha='right',  # Increased
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         
         plt.tight_layout()
         plot_file = self.output_dir / "proximity_summary_all_residues.png"
-        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+        plt.savefig(plot_file, dpi=150, bbox_inches='tight')  # Reduced to 150
         plt.close()
         print(f"Summary plot saved to: {plot_file}")
-    
+
     def plot_summary_glu_asn_separate(self, stats):
         """Create separate bar plots for GLU and ASN with error bars and individual run points."""
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
@@ -213,79 +250,81 @@ class ProximitySummaryAcrossRuns:
         glu_stds = [stats['glu'][resid]['std'] for resid in self.glu_residues]
         glu_values = [stats['glu'][resid]['values'] for resid in self.glu_residues]
         glu_labels = [self.get_residue_label(resid, True).replace(' ', '\n') 
-                     for resid in self.glu_residues]
+                    for resid in self.glu_residues]
         
         x1 = range(len(self.glu_residues))
         bars1 = ax1.bar(x1, glu_means, yerr=glu_stds, color='red', alpha=0.5,
-                       edgecolor='black', linewidth=1.5, capsize=5,
-                       error_kw={'linewidth': 2, 'ecolor': 'black'})
+                        edgecolor='black', linewidth=1.5, capsize=5,
+                        error_kw={'linewidth': 2, 'ecolor': 'black'})
         
         # Add individual points for GLU
         for i, (x_pos, values) in enumerate(zip(x1, glu_values)):
             x_jitter = np.random.normal(x_pos, 0.04, size=len(values))
-            ax1.scatter(x_jitter, values, color='black', s=60, alpha=0.7, 
-                       zorder=5, edgecolors='white', linewidth=0.5)
+            ax1.scatter(x_jitter, values, color='black', s=60, alpha=0.7,
+                    zorder=5, edgecolors='white', linewidth=0.5)
         
         ax1.set_xticks(x1)
-        ax1.set_xticklabels(glu_labels)
-        ax1.set_ylabel('Percentage of Frames (%)', fontsize=12)
+        ax1.set_xticklabels(glu_labels, fontsize=18)  # Increased
+        ax1.set_ylabel('Percentage of Frames (%)', fontsize=20)  # Increased
         ax1.set_title(f'GLU Residues - Summary (n={len(self.run_data)} runs)', 
-                     fontsize=13, fontweight='bold')
+                    fontsize=20, fontweight='bold')  # Increased
         ax1.set_ylim(0, 110)
         ax1.grid(True, alpha=0.3, axis='y')
+        ax1.tick_params(axis='y', labelsize=16)  # Increased
         
         for bar, mean, std in zip(bars1, glu_means, glu_stds):
             height = bar.get_height()
             ax1.text(bar.get_x() + bar.get_width()/2., height + std + 2,
                     f'{mean:.1f}%\n±{std:.1f}',
-                    ha='center', va='bottom', fontsize=10)
+                    ha='center', va='bottom', fontsize=15, fontweight='bold')  # Increased and bold
         
         # ASN plot
         asn_means = [stats['asn'][resid]['mean'] for resid in self.asn_residues]
         asn_stds = [stats['asn'][resid]['std'] for resid in self.asn_residues]
         asn_values = [stats['asn'][resid]['values'] for resid in self.asn_residues]
         asn_labels = [self.get_residue_label(resid, False).replace(' ', '\n') 
-                     for resid in self.asn_residues]
+                    for resid in self.asn_residues]
         
         x2 = range(len(self.asn_residues))
         bars2 = ax2.bar(x2, asn_means, yerr=asn_stds, color='blue', alpha=0.5,
-                       edgecolor='black', linewidth=1.5, capsize=5,
-                       error_kw={'linewidth': 2, 'ecolor': 'black'})
+                        edgecolor='black', linewidth=1.5, capsize=5,
+                        error_kw={'linewidth': 2, 'ecolor': 'black'})
         
         # Add individual points for ASN
         for i, (x_pos, values) in enumerate(zip(x2, asn_values)):
             x_jitter = np.random.normal(x_pos, 0.04, size=len(values))
-            ax2.scatter(x_jitter, values, color='black', s=60, alpha=0.7, 
-                       zorder=5, edgecolors='white', linewidth=0.5)
+            ax2.scatter(x_jitter, values, color='black', s=60, alpha=0.7,
+                    zorder=5, edgecolors='white', linewidth=0.5)
         
         ax2.set_xticks(x2)
-        ax2.set_xticklabels(asn_labels)
-        ax2.set_ylabel('Percentage of Frames (%)', fontsize=12)
+        ax2.set_xticklabels(asn_labels, fontsize=18)  # Increased
+        ax2.set_ylabel('Percentage of Frames (%)', fontsize=20)  # Increased
         ax2.set_title(f'ASN/ASP Residues - Summary (n={len(self.run_data)} runs)', 
-                     fontsize=13, fontweight='bold')
+                    fontsize=20, fontweight='bold')  # Increased
         ax2.set_ylim(0, 110)
         ax2.grid(True, alpha=0.3, axis='y')
+        ax2.tick_params(axis='y', labelsize=16)  # Increased
         
         for bar, mean, std in zip(bars2, asn_means, asn_stds):
             height = bar.get_height()
             ax2.text(bar.get_x() + bar.get_width()/2., height + std + 2,
                     f'{mean:.1f}%\n±{std:.1f}',
-                    ha='center', va='bottom', fontsize=10)
+                    ha='center', va='bottom', fontsize=15, fontweight='bold')  # Increased and bold
         
         # Add legend to first plot
         from matplotlib.lines import Line2D
         legend_elements = [
-            Line2D([0], [0], marker='o', color='w', markerfacecolor='black', 
-                   markersize=8, label='Individual runs', markeredgecolor='white')
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='black',
+                markersize=8, label='Individual runs', markeredgecolor='white')
         ]
-        ax1.legend(handles=legend_elements, loc='upper right', fontsize=10)
+        ax1.legend(handles=legend_elements, loc='upper right', fontsize=15)  # Increased
         
         plt.tight_layout()
         plot_file = self.output_dir / "proximity_summary_glu_asn_separate.png"
-        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+        plt.savefig(plot_file, dpi=150, bbox_inches='tight')  # Reduced to 150
         plt.close()
         print(f"Separate summary plot saved to: {plot_file}")
-    
+
     def plot_aggregate_summary(self, stats):
         """Create bar plot for aggregate statistics with individual run points."""
         fig, ax = plt.subplots(figsize=(10, 8))
@@ -306,48 +345,49 @@ class ProximitySummaryAcrossRuns:
             stats['aggregate']['percentage_any_asn']['values'],
             stats['aggregate']['percentage_any_residue']['values']
         ]
-        colors = ['red', 'blue', 'green']
         
+        colors = ['red', 'blue', 'green']
         x = range(len(categories))
         bars = ax.bar(x, means, yerr=stds, color=colors, alpha=0.5,
-                     edgecolor='black', linewidth=2, capsize=8,
-                     error_kw={'linewidth': 2.5, 'ecolor': 'black'})
+                    edgecolor='black', linewidth=2, capsize=8,
+                    error_kw={'linewidth': 2.5, 'ecolor': 'black'})
         
         # Add individual run data points
         for i, (x_pos, values) in enumerate(zip(x, values_list)):
             x_jitter = np.random.normal(x_pos, 0.03, size=len(values))
-            ax.scatter(x_jitter, values, color='black', s=80, alpha=0.7, 
-                      zorder=5, edgecolors='white', linewidth=1)
+            ax.scatter(x_jitter, values, color='black', s=80, alpha=0.7,
+                    zorder=5, edgecolors='white', linewidth=1)
         
         ax.set_xticks(x)
-        ax.set_xticklabels(categories)
-        ax.set_ylabel('Percentage of Frames (%)', fontsize=13)
+        ax.set_xticklabels(categories, fontsize=20)  # Increased
+        ax.set_ylabel('Percentage of Frames (%)', fontsize=22)  # Increased
         ax.set_title(f'Aggregate Proximity Summary (n={len(self.run_data)} runs, ≤3.0 Å)', 
-                    fontsize=15, fontweight='bold')
+                    fontsize=24, fontweight='bold')  # Increased
         ax.set_ylim(0, 120)
         ax.grid(True, alpha=0.3, axis='y')
+        ax.tick_params(axis='y', labelsize=18)  # Increased
         
-        # Add value labels
+        # Add value labels - MUCH BIGGER
         for bar, mean, std in zip(bars, means, stds):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + std + 3,
-                   f'{mean:.1f}%\n±{std:.1f}',
-                   ha='center', va='bottom', fontsize=12, fontweight='bold')
+                    f'{mean:.1f}%\n±{std:.1f}',
+                    ha='center', va='bottom', fontsize=18, fontweight='bold')  # Increased significantly
         
         # Add legend
         from matplotlib.lines import Line2D
         legend_elements = [
-            Line2D([0], [0], marker='o', color='w', markerfacecolor='black', 
-                   markersize=10, label='Individual runs', markeredgecolor='white')
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='black',
+                markersize=10, label='Individual runs', markeredgecolor='white')
         ]
-        ax.legend(handles=legend_elements, loc='upper left', fontsize=11)
+        ax.legend(handles=legend_elements, loc='upper left', fontsize=16)  # Increased
         
         plt.tight_layout()
         plot_file = self.output_dir / "proximity_summary_aggregate.png"
-        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+        plt.savefig(plot_file, dpi=150, bbox_inches='tight')  # Reduced to 150
         plt.close()
         print(f"Aggregate summary plot saved to: {plot_file}")
-    
+        
     def save_statistics_table(self, stats):
         """Save statistics to CSV and text files."""
         # Individual residues table
@@ -468,4 +508,5 @@ if __name__ == "__main__":
     main()
 
 
+# python3 proximity_summary_across_runs.py --base_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 --channel_type G12
 # python3 proximity_summary_across_runs.py --base_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 --channel_type G12

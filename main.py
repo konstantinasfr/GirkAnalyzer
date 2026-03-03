@@ -362,7 +362,7 @@ def main():
     # start_frame = 2800
     # # start_frame = 6500
     end_frame = len(u.trajectory) - 1
-    # end_frame = 4300
+    # end_frame = 4500
     print(f"Using end_frame = {end_frame} (last frame of trajectory)")
     
     ch1 = Channel(u, upper1, lower1, num=1, radius=2.5)
@@ -382,7 +382,9 @@ def main():
         analyzer = restore_analyzer_from_state(
             u, saved_state, results_dir, ch1, ch2, ch3, ch4,
             hbc_residues, hbc_diagonal_pairs,
-            sf_low_res_residues, sf_low_res_diagonal_pairs
+            sf_low_res_residues, sf_low_res_diagonal_pairs,
+            upper_gl_residues, upper_gl_diagonal_pairs,
+            lower_gl_residues, lower_gl_diagonal_pairs
         )
         
     else:
@@ -398,6 +400,10 @@ def main():
             hbc_residues=hbc_residues, hbc_diagonal_pairs=hbc_diagonal_pairs,
             sf_low_res_residues=sf_low_res_residues, 
             sf_low_res_diagonal_pairs=sf_low_res_diagonal_pairs,
+            upper_gl_residues=upper_gl_residues,
+            upper_gl_diagonal_pairs=upper_gl_diagonal_pairs,
+            lower_gl_residues=lower_gl_residues,
+            lower_gl_diagonal_pairs=lower_gl_diagonal_pairs,
             results_dir=results_dir,
             count_ions=True
         )
@@ -409,22 +415,75 @@ def main():
         save_analyzer_state(analyzer, results_dir)
 
 
-    from analysis.permeation_frame_significance import test_permeation_frame_significance
+    # from analysis.asn_axis_analysis import run_asn_axis_analysis
 
-        # The function will extract them from start_2 to end_2-1 for each ion
-    significance_results = test_permeation_frame_significance(
-        universe=u,
-        channel2=ch2,
-        all_residues=asn_residues + glu_residues,
-        permeation_events=analyzer.permeation_events,  # Must have 'ion_id', 'start_2', 'end_2'
-        results_dir=results_dir / "significance_analysis",
-        channel_type=channel_type,
-        n_bootstrap=1000,
-        sample_size=50,
-        min_frames_method2=100
+    # run_asn_axis_analysis(u, sf_residues, hbc_residues, asn_residues,
+    #                   results_dir, channel_type=args.channel_type,
+    #                   start_frame=start_frame, end_frame=end_frame,
+    #                   use_ca=False)
+
+
+    from analysis.ion_force_correlation_analysis import run_force_correlation_analysis
+
+    force_analyzer = run_force_correlation_analysis(
+        universe=u, channel1=ch1, channel2=ch2,
+        permeation_events=analyzer.permeation_events,
+        asn_residues=asn_residues, glu_residues=glu_residues,
+        results_dir=results_dir / "force_correlation_analysis"
     )
+
+    # from analysis.dihedral_analysis_module import run_dihedral_analysis
+
+    # # In your main(), after your ion permeation analysis:
+    # dihedral_results, peak_frames = run_dihedral_analysis(
+    #     u=u,                           # Your existing Universe
+    #     channel_type=args.channel_type,        # Or args.channel_type
+    #     results_dir=results_dir/ "dihedral_analysis"       # Your existing results directory
+    # )
+
+# # ========== GEOMETRY ANALYSIS (AFTER MAIN ANALYSIS) ==========
+#     if len(analyzer.permeation_events) > 0:
+#         print("\n" + "="*80)
+#         print("RUNNING RESIDUE GEOMETRY ANALYSIS")
+#         print("="*80)
+        
+#         # Import the geometry analyzer
+#         from analysis.analyze_angles import run_angle_analysis
+        
+        
+#         all_residues_for_angles = asn_residues + glu_residues  # Add any others you want
     
-    print("\n✓ Statistical significance analysis complete!")
+#         run_angle_analysis(
+#             topology_file=top_file,
+#             trajectory_file=traj_file,
+#             results_dir=results_dir,
+#             residue_ids=all_residues_for_angles,
+#             start_frame=start_frame,
+#             end_frame=end_frame,
+#             permeation_stage='end_2'  # Mark permeation events at end_2
+#         )
+        
+#         print("\n" + "="*80)
+#         print("GEOMETRY ANALYSIS COMPLETE!")
+#         print("="*80)
+
+    # from analysis.permeation_frame_significance import test_permeation_frame_significance
+
+    #     # The function will extract them from start_2 to end_2-1 for each ion
+    # significance_results = test_permeation_frame_significance(
+    #     universe=u,
+    #     channel2=ch2,
+    #     all_residues=asn_residues + glu_residues,
+    #     permeation_events=analyzer.permeation_events,  # Must have 'ion_id', 'start_2', 'end_2'
+    #     results_dir=results_dir / "significance_analysis_end1",
+    #     channel_type=channel_type,
+    #     n_bootstrap=1000,
+    #     sample_size=50,
+    #     min_frames_method2=100,
+    #     use_end1=True  # Use end_1 instead of start_2!
+    # )
+    
+    # print("\n✓ Statistical significance analysis complete!")
 
     # from analysis.occupancy_alignment import run_comprehensive_end2_analysis
 

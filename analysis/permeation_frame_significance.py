@@ -11,7 +11,8 @@ from analysis.converter import convert_to_pdb_numbering
 def test_permeation_frame_significance(
     universe, channel2, all_residues, permeation_events,
     results_dir=".", channel_type="G12",
-    n_bootstrap=1000, sample_size=50, min_frames_method2=80
+    n_bootstrap=1000, sample_size=50, min_frames_method2=80,
+    use_end1=False
 ):
     """
     Statistical significance test with TWO methods:
@@ -27,7 +28,7 @@ def test_permeation_frame_significance(
     all_residues : list
         8 residue IDs (4 ASN + 4 GLU)
     permeation_events : list
-        Permeation events with 'ion_id', 'start_2', and 'end_2'
+        Permeation events with 'ion_id', 'end_1', 'start_2', and 'end_2'
     results_dir : Path or str
     channel_type : str
     n_bootstrap : int
@@ -36,6 +37,9 @@ def test_permeation_frame_significance(
         Size of each bootstrap sample for Method 1 (default: 50)
     min_frames_method2 : int
         Minimum non-permeating frames required for Method 2 (default: 80)
+    use_end1 : bool
+        If True, use range(end_1, end_2) for cavity frames
+        If False, use range(start_2, end_2) for cavity frames (default)
     
     Returns:
     --------
@@ -61,7 +65,7 @@ def test_permeation_frame_significance(
         report.write(text + '\n')
     
     def get_distance_vector(frame_idx, ion_id):
-        """Get 8D vector of distances from THIS SPECIFIC ION to each residue."""
+        """Get 8D vector of MINIMUM distances from THIS SPECIFIC ION to each residue's closest atom."""
         universe.trajectory[frame_idx]
         channel2.compute_geometry(2)
         
@@ -76,9 +80,11 @@ def test_permeation_frame_significance(
             res_atoms = universe.select_atoms(f"resid {resid}")
             if len(res_atoms) == 0:
                 return None
-            res_com = res_atoms.center_of_mass()
-            dist = np.linalg.norm(ion_pos - res_com)
-            distance_vector.append(dist)
+            
+            # Calculate distance to EACH atom in the residue, then take MINIMUM
+            min_dist = np.min([np.linalg.norm(ion_pos - atom_pos) 
+                              for atom_pos in res_atoms.positions])
+            distance_vector.append(min_dist)
         
         return np.array(distance_vector)
     
@@ -102,7 +108,7 @@ def test_permeation_frame_significance(
     
     print_and_write("\n" + "="*80)
     print_and_write("PERMEATION FRAME SIGNIFICANCE ANALYSIS")
-    print_and_write("ION-SPECIFIC STATE 2 FRAMES")
+    print_and_write("ION IN GLU/ASN CAVITY vs ION LEAVING CAVITY")
     print_and_write("="*80)
     print_and_write(f"Number of residues in vector: {len(all_residues)}")
     print_and_write(f"Residue IDs (internal): {all_residues}")
@@ -113,43 +119,115 @@ def test_permeation_frame_significance(
     # STEP 1: Collect vectors for ALL ions
     # =========================================================================
     print_and_write("\n" + "-"*80)
-    print_and_write("STEP 1: Collecting ALL ion-specific state 2 vectors...")
+    print_and_write("STEP 1: Collecting vectors from all ions...")
     print_and_write("-"*80)
     
-    all_state2_vectors = []  # ALL state 2 frames from ALL ions (NO end_2!)
-    all_end2_vectors = []    # ALL end_2 frames
+    all_state2_vectors = []  # Ion in GLU/ASN cavity (end_1 to end_2-1)
+    all_end2_vectors = []    # Ion leaving GLU/ASN cavity (end_2 frame)
     all_end2_ion_ids = []
     all_end2_frames = []
-    ion_end2_vectors = {}    # NEW: Store individual ion end_2 vectors
+    ion_end2_vectors = {}    # Store individual ion end_2 vectors
+    
+    # Track frame statistics
+    total_frames_attempted = 0
+    total_frames_valid = 0
+    total_end2_attempted = 0
+    total_end2_valid = 0
+    frames_per_ion = []
     
     for event_idx, event in enumerate(permeation_events):
         ion_id = event['ion_id']
         start_2 = event['start_2']
         end_2 = event['end_2']
         
-        if (event_idx + 1) % 10 == 0 or event_idx == 0:
-            print(f"Processing ion {ion_id} ({event_idx+1}/{len(permeation_events)}): "
-                  f"frames {start_2} to {end_2} (duration: {end_2-start_2+1} frames)")
+        # Choose frame range start based on parameter
+        if use_end1:
+            end_1 = event.get('end_1', start_2)
+            frame_range_start = end_1
+            range_label = "end_1 (leaves SF)"
+        else:
+            frame_range_start = start_2
+            range_label = "start_2 (enters cavity)"
         
-        # State 2 frames: start_2 to (end_2 - 1) - DO NOT INCLUDE end_2!
-        for frame_idx in range(start_2, end_2):
+        frame_range_end = end_2
+        expected_frames = frame_range_end - frame_range_start
+        
+        if (event_idx + 1) % 10 == 0 or event_idx == 0:
+            print(f"\n=== Processing ion {ion_id} ({event_idx+1}/{len(permeation_events)}) ===")
+            print(f"  {range_label}={frame_range_start}, end_2 (leaves cavity)={end_2}")
+            print(f"  → Using frames {frame_range_start} to {frame_range_end-1} (ion in cavity)")
+            print(f"  → Expected cavity frames: {expected_frames}")
+        
+        # Ion in GLU/ASN cavity: frame_range_start to (end_2 - 1) - DO NOT INCLUDE end_2!
+        frames_collected_this_ion = 0
+        for frame_idx in range(frame_range_start, end_2):
+            total_frames_attempted += 1
             vec = get_distance_vector(frame_idx, ion_id)
             if vec is not None:
                 all_state2_vectors.append(vec)
+                total_frames_valid += 1
+                frames_collected_this_ion += 1
         
-        # end_2 frame: separate
+        frames_per_ion.append({
+            'ion_id': ion_id,
+            'expected': expected_frames,
+            'collected': frames_collected_this_ion
+        })
+        
+        if (event_idx + 1) % 10 == 0 or event_idx == 0:
+            print(f"  → Actually collected: {frames_collected_this_ion} frames")
+            if frames_collected_this_ion < expected_frames:
+                print(f"  ⚠ WARNING: Missing {expected_frames - frames_collected_this_ion} frames!")
+        
+        # Ion leaving cavity frame (end_2): separate
+        total_end2_attempted += 1
         vec_end2 = get_distance_vector(end_2, ion_id)
         if vec_end2 is not None:
             all_end2_vectors.append(vec_end2)
             all_end2_ion_ids.append(ion_id)
             all_end2_frames.append(end_2)
             ion_end2_vectors[ion_id] = vec_end2  # Store individual vector
+            total_end2_valid += 1
     
     all_state2_vectors = np.array(all_state2_vectors)
     all_end2_vectors = np.array(all_end2_vectors)
     
-    print_and_write(f"\n✓ Total state 2 vectors (NO end_2 included): {len(all_state2_vectors)}")
-    print_and_write(f"✓ Total end_2 vectors: {len(all_end2_vectors)}")
+    # DETAILED FRAME STATISTICS
+    print_and_write(f"\n" + "="*80)
+    print_and_write(f"FRAME COLLECTION STATISTICS")
+    print_and_write(f"="*80)
+    print_and_write(f"Ion in GLU/ASN cavity frames (end_1 to end_2-1):")
+    print_and_write(f"  Total attempted: {total_frames_attempted}")
+    print_and_write(f"  Total valid:     {total_frames_valid}")
+    print_and_write(f"  Invalid/missing: {total_frames_attempted - total_frames_valid}")
+    print_and_write(f"  Success rate:    {100*total_frames_valid/total_frames_attempted:.1f}%")
+    print_and_write(f"\nIon leaving cavity frames (end_2):")
+    print_and_write(f"  Total attempted: {total_end2_attempted}")
+    print_and_write(f"  Total valid:     {total_end2_valid}")
+    print_and_write(f"  Invalid/missing: {total_end2_attempted - total_end2_valid}")
+    print_and_write(f"  Success rate:    {100*total_end2_valid/total_end2_attempted:.1f}%")
+    
+    # Show distribution of frames per ion
+    collected_counts = [item['collected'] for item in frames_per_ion]
+    print_and_write(f"\nFrames collected per ion (in cavity):")
+    print_and_write(f"  Mean:   {np.mean(collected_counts):.1f}")
+    print_and_write(f"  Median: {np.median(collected_counts):.1f}")
+    print_and_write(f"  Min:    {np.min(collected_counts)}")
+    print_and_write(f"  Max:    {np.max(collected_counts)}")
+    print_and_write(f"  Total:  {sum(collected_counts)}")
+    
+    # Show ions with missing frames
+    ions_with_missing = [item for item in frames_per_ion if item['collected'] < item['expected']]
+    if ions_with_missing:
+        print_and_write(f"\n⚠ WARNING: {len(ions_with_missing)} ions have missing frames:")
+        for item in ions_with_missing[:10]:  # Show first 10
+            print_and_write(f"  Ion {item['ion_id']}: expected {item['expected']}, got {item['collected']}")
+        if len(ions_with_missing) > 10:
+            print_and_write(f"  ... and {len(ions_with_missing) - 10} more")
+    
+    print_and_write(f"\n✓ FINAL COUNTS:")
+    print_and_write(f"  Total 'ion in cavity' vectors: {len(all_state2_vectors)}")
+    print_and_write(f"  Total 'ion leaving cavity' vectors: {len(all_end2_vectors)}")
     
     if len(all_state2_vectors) == 0 or len(all_end2_vectors) == 0:
         print_and_write("ERROR: Not enough valid vectors for analysis!")
@@ -157,8 +235,14 @@ def test_permeation_frame_significance(
         return None
     
     # State 2 duration statistics
-    durations = [event['end_2'] - event['start_2'] + 1 for event in permeation_events]
-    print_and_write(f"\nState 2 duration statistics:")
+    if use_end1:
+        durations = [event['end_2'] - event.get('end_1', event['start_2']) for event in permeation_events]
+        range_desc = "end_1 (leaves SF) to end_2 (leaves cavity)"
+    else:
+        durations = [event['end_2'] - event['start_2'] for event in permeation_events]
+        range_desc = "start_2 (enters cavity) to end_2 (leaves cavity)"
+    
+    print_and_write(f"\nTime in cavity statistics ({range_desc}):")
     print_and_write(f"  Mean duration: {np.mean(durations):.1f} frames")
     print_and_write(f"  Median duration: {np.median(durations):.1f} frames")
     print_and_write(f"  Min duration: {np.min(durations)} frames")
@@ -169,12 +253,13 @@ def test_permeation_frame_significance(
     # =========================================================================
     print_and_write("\n" + "="*80)
     print_and_write("METHOD 1: CENTRAL LIMIT THEOREM BOOTSTRAP")
-    print_and_write("Tests if end_2 MEAN is unusual compared to state 2 distribution")
+    print_and_write("Tests if 'ion leaving cavity' configuration is unusual")
+    print_and_write("compared to 'ion in cavity' distribution")
     print_and_write("="*80)
     
     # Check sample size
     if len(all_state2_vectors) < sample_size:
-        print_and_write(f"\n⚠ WARNING: Only {len(all_state2_vectors)} state 2 frames.")
+        print_and_write(f"\n⚠ WARNING: Only {len(all_state2_vectors)} 'ion in cavity' frames.")
         print_and_write(f"   Need at least {sample_size} for bootstrap.")
         print_and_write(f"   SKIPPING METHOD 1.")
         method1_results = None
@@ -187,7 +272,7 @@ def test_permeation_frame_significance(
         end2_mean = np.mean(all_end2_vectors, axis=0)
         
         print_and_write(f"\nObserved means:")
-        print_and_write(f"{'Residue (PDB)':<15} {'State 2':<12} {'end_2':<12} {'Difference':<12}")
+        print_and_write(f"{'Residue (PDB)':<15} {'In cavity':<12} {'Leaving':<12} {'Difference':<12}")
         print_and_write("-"*55)
         for i, resid in enumerate(all_residues):
             pdb_name = residue_pdb_map[resid]
@@ -206,7 +291,7 @@ def test_permeation_frame_significance(
             if (boot_idx + 1) % 200 == 0:
                 print(f"  Bootstrap {boot_idx + 1}/{n_bootstrap}")
             
-            # Random sample of size sample_size from state 2 (NO end_2!)
+            # Random sample from 'ion in cavity' frames
             sample_indices = np.random.choice(len(all_state2_vectors), size=sample_size, replace=False)
             sample_vectors = all_state2_vectors[sample_indices]
             
@@ -266,15 +351,15 @@ def test_permeation_frame_significance(
                 significance = "    (ns)"
             
             print_and_write(f"\nResidue {pdb_name} (internal ID: {resid}):")
-            print_and_write(f"  Bootstrap mean: {mu_boot:.2f} ± {sigma_boot:.2f} Å")
-            print_and_write(f"  end_2 mean:     {end2_value:.2f} Å")
+            print_and_write(f"  Bootstrap mean: {mu_boot:.2f} ± {sigma_boot:.2f} Å (ion in cavity)")
+            print_and_write(f"  Leaving mean:   {end2_value:.2f} Å (ion leaving cavity)")
             print_and_write(f"  Z-score:        {z_score:+.2f}")
             print_and_write(f"  p-value:        {p_value:.4f} {significance}")
         
         # NEW: Individual ion analysis
         print_and_write("\n" + "-"*80)
         print_and_write("INDIVIDUAL ION ANALYSIS")
-        print_and_write("Where does each ion's end_2 fall in the bootstrap distribution?")
+        print_and_write("Where does each ion fall when it leaves the cavity?")
         print_and_write("-"*80)
         
         individual_ion_results = []
@@ -384,7 +469,7 @@ def test_permeation_frame_significance(
         print_and_write(f"Significant residues: {n_significant}/{len(all_residues)}")
         
         if n_significant > 0:
-            print_and_write(f"\nResidues with significant mean shift at end_2:")
+            print_and_write(f"\nResidues with significant difference when ion leaves cavity:")
             for resid, res in results_per_residue.items():
                 if res['is_significant']:
                     direction = "FARTHER" if res['end2_mean'] > res['state2_mean'] else "CLOSER"
@@ -417,7 +502,7 @@ def test_permeation_frame_significance(
     p = all_state2_vectors.shape[1]
     
     if n1 < min_frames_method2:
-        print_and_write(f"\n⚠ WARNING: Only {n1} state 2 frames.")
+        print_and_write(f"\n⚠ WARNING: Only {n1} 'ion in cavity' frames.")
         print_and_write(f"   Minimum recommended: {min_frames_method2} frames")
         print_and_write(f"   SKIPPING METHOD 2.")
         hotelling_results = None
@@ -425,16 +510,16 @@ def test_permeation_frame_significance(
         print_and_write(f"\n✓ Sample size check: {n1} frames (>= {min_frames_method2})")
         
         print_and_write(f"\nGroup sizes:")
-        print_and_write(f"  State 2 (non-permeating): n1 = {n1}")
-        print_and_write(f"  end_2 (permeating):       n2 = {n2}")
-        print_and_write(f"  Dimensions:               p  = {p}")
+        print_and_write(f"  Ion in cavity:      n1 = {n1}")
+        print_and_write(f"  Ion leaving cavity: n2 = {n2}")
+        print_and_write(f"  Dimensions:         p  = {p}")
         
         mean1 = np.mean(all_state2_vectors, axis=0)
         mean2 = np.mean(all_end2_vectors, axis=0)
         diff = mean2 - mean1
         
         print_and_write(f"\nMean vectors:")
-        print_and_write(f"{'Residue (PDB)':<15} {'State 2':<12} {'end_2':<12} {'Difference':<12}")
+        print_and_write(f"{'Residue (PDB)':<15} {'In cavity':<12} {'Leaving':<12} {'Difference':<12}")
         print_and_write("-"*55)
         for i, resid in enumerate(all_residues):
             pdb_name = residue_pdb_map[resid]
@@ -468,10 +553,10 @@ def test_permeation_frame_significance(
             
             print_and_write(f"\nConclusion:")
             if p_value_hotelling < 0.05:
-                print_and_write(f"  ✓ The end_2 frame (permeation) is SIGNIFICANTLY DIFFERENT")
-                print_and_write(f"    from typical state 2 frames (p = {p_value_hotelling:.4e})")
+                print_and_write(f"  ✓ Ion configuration when LEAVING cavity is SIGNIFICANTLY DIFFERENT")
+                print_and_write(f"    from typical 'ion in cavity' configuration (p = {p_value_hotelling:.4e})")
             else:
-                print_and_write(f"  ✗ No significant difference between end_2 and state 2 frames")
+                print_and_write(f"  ✗ No significant difference between 'in cavity' and 'leaving cavity'")
             
             hotelling_results = {
                 'method': 'hotellings_t2',
@@ -592,6 +677,16 @@ def test_permeation_frame_significance(
     print("SAVING RESULTS")
     print("="*80)
     
+    # PRINT FINAL FRAME COUNTS CLEARLY
+    print("\n" + "="*80)
+    print("FINAL FRAME COUNTS USED IN ANALYSIS")
+    print("="*80)
+    print(f"Frames used for GAUSSIAN (ion in cavity): {len(all_state2_vectors)}")
+    print(f"Frames tested AGAINST gaussian (ion leaving): {len(all_end2_vectors)}")
+    print(f"Number of ions (permeation events): {len(permeation_events)}")
+    print(f"Average frames per ion: {len(all_state2_vectors)/len(permeation_events):.1f}")
+    print("="*80 + "\n")
+    
     combined_results = {
         'analysis_info': {
             'n_residues': int(len(all_residues)),
@@ -601,10 +696,18 @@ def test_permeation_frame_significance(
             'n_state2_frames_total': int(len(all_state2_vectors)),
             'n_end2_frames': int(len(all_end2_vectors)),
             'mean_state2_duration': float(np.mean(durations)),
-            'median_state2_duration': float(np.median(durations))
+            'median_state2_duration': float(np.median(durations)),
+            'frames_used_for_gaussian': int(len(all_state2_vectors)),  # EXPLICIT
+            'frames_tested_against_gaussian': int(len(all_end2_vectors)),  # EXPLICIT
+            'use_end1': bool(use_end1),  # Record which frame range was used
+            'frame_range': 'end_1 to end_2' if use_end1 else 'start_2 to end_2'
         },
         'method1_clt_bootstrap': method1_results if method1_results else {},
-        'method2_hotelling': hotelling_results if hotelling_results else {}
+        'method2_hotelling': hotelling_results if hotelling_results else {},
+        'raw_vectors': {
+            'state2_vectors': all_state2_vectors.tolist(),  # Save for pooling!
+            'end2_vectors': all_end2_vectors.tolist()       # Save for pooling!
+        }
     }
     
     output_file = results_dir / "permeation_significance_analysis.json"
@@ -612,6 +715,94 @@ def test_permeation_frame_significance(
         json.dump(combined_results, f, indent=2)
     print(f"✓ JSON saved: {output_file}")
     print(f"✓ Report saved: {report_file}")
+    
+    # Create a MANIFEST file for external scripts to easily detect and parse
+    manifest_file = results_dir / "ANALYSIS_MANIFEST.txt"
+    with open(manifest_file, 'w') as f:
+        f.write("PERMEATION SIGNIFICANCE ANALYSIS - FILE MANIFEST\n")
+        f.write("="*80 + "\n\n")
+        f.write("This directory contains permeation frame significance analysis results.\n")
+        f.write("External scripts can parse these files to create summary analyses.\n\n")
+        
+        f.write("KEY METRICS:\n")
+        f.write("-"*80 + "\n")
+        f.write(f"Frames used for Gaussian (ion in cavity): {len(all_state2_vectors)}\n")
+        f.write(f"Frames tested against Gaussian (leaving): {len(all_end2_vectors)}\n")
+        f.write(f"Number of permeation events: {len(permeation_events)}\n")
+        f.write(f"Number of residues tracked: {len(all_residues)}\n\n")
+        
+        f.write("FILES IN THIS DIRECTORY:\n")
+        f.write("-"*80 + "\n")
+        f.write("1. permeation_significance_report.txt\n")
+        f.write("   - Human-readable detailed report\n")
+        f.write("   - Contains all statistical results and interpretations\n\n")
+        
+        f.write("2. permeation_significance_analysis.json\n")
+        f.write("   - Machine-readable complete results\n")
+        f.write("   - Contains all numerical data, statistics, and p-values\n")
+        f.write("   - Key fields:\n")
+        f.write("     * analysis_info: Frame counts, residue info\n")
+        f.write("     * method1_clt_bootstrap: Bootstrap results, z-scores, p-values\n")
+        f.write("     * method2_hotelling: Hotelling's T² test results\n\n")
+        
+        f.write("3. individual_ion_analysis.csv\n")
+        f.write("   - Per-ion results in spreadsheet format\n")
+        f.write("   - Columns: ion_id, residue distances, z-scores, percentiles\n\n")
+        
+        f.write("4. PLOTS (PNG files):\n")
+        if method1_results:
+            f.write("   - clt_bootstrap_distributions.png: Bootstrap distributions per residue\n")
+            f.write("   - clt_zscores.png: Z-score bar chart\n")
+            f.write("   - individual_ion_distributions.png: Individual ion positions\n")
+            f.write("   - individual_ion_heatmap.png: Ion-residue z-score heatmap\n\n")
+        
+        f.write("5. ANALYSIS_MANIFEST.txt (this file)\n")
+        f.write("   - Directory contents and parsing guide\n\n")
+        
+        f.write("STATISTICAL RESULTS SUMMARY:\n")
+        f.write("-"*80 + "\n")
+        
+        if method1_results:
+            f.write("Method 1 (CLT Bootstrap):\n")
+            f.write(f"  Significant residues: {method1_results['n_significant_residues']}/{len(all_residues)}\n")
+            if method1_results.get('multivariate_result'):
+                mv = method1_results['multivariate_result']
+                f.write(f"  Multivariate test: {'SIGNIFICANT' if mv['is_significant'] else 'NOT SIGNIFICANT'}\n")
+                f.write(f"  Multivariate p-value: {mv['p_value']:.4e}\n")
+        
+        if hotelling_results:
+            f.write("\nMethod 2 (Hotelling's T²):\n")
+            f.write(f"  Result: {'SIGNIFICANT' if hotelling_results['is_significant'] else 'NOT SIGNIFICANT'}\n")
+            f.write(f"  p-value: {hotelling_results['p_value']:.4e}\n")
+        
+        f.write("\n" + "="*80 + "\n")
+        f.write("For external script parsing, use: permeation_significance_analysis.json\n")
+        f.write("="*80 + "\n")
+    
+    print(f"✓ Manifest saved: {manifest_file}")
+    
+    # Create a simple summary file for quick reference
+    quick_summary_file = results_dir / "QUICK_SUMMARY.txt"
+    with open(quick_summary_file, 'w') as f:
+        f.write("QUICK SUMMARY\n")
+        f.write("="*60 + "\n\n")
+        f.write(f"Gaussian built from: {len(all_state2_vectors)} frames\n")
+        f.write(f"Tested frames: {len(all_end2_vectors)} frames\n")
+        f.write(f"Permeation events: {len(permeation_events)}\n\n")
+        
+        if method1_results and method1_results.get('multivariate_result'):
+            mv = method1_results['multivariate_result']
+            f.write(f"Method 1 Multivariate: {'SIGNIFICANT ***' if mv['is_significant'] else 'NOT SIGNIFICANT'}\n")
+            f.write(f"  p-value: {mv['p_value']:.4e}\n\n")
+        
+        if hotelling_results:
+            f.write(f"Method 2 Hotelling's T²: {'SIGNIFICANT ***' if hotelling_results['is_significant'] else 'NOT SIGNIFICANT'}\n")
+            f.write(f"  p-value: {hotelling_results['p_value']:.4e}\n\n")
+        
+        if method1_results:
+            f.write(f"Significant residues: {method1_results['n_significant_residues']}/{len(all_residues)}\n")
+    
+    print(f"✓ Quick summary saved: {quick_summary_file}")
     
     # Create CSV for individual ions
     if method1_results and 'individual_ion_results' in method1_results:
@@ -631,14 +822,20 @@ def test_permeation_frame_significance(
     print("✓ ANALYSIS COMPLETE!")
     print("="*80)
     print(f"\nOutput files in: {results_dir}")
-    print(f"  1. permeation_significance_report.txt  (human-readable report)")
-    print(f"  2. permeation_significance_analysis.json  (full data)")
-    print(f"  3. individual_ion_analysis.csv  (per-ion results)")
+    print(f"  1. ANALYSIS_MANIFEST.txt  (file guide for external scripts)")
+    print(f"  2. QUICK_SUMMARY.txt  (key results at a glance)")
+    print(f"  3. permeation_significance_report.txt  (human-readable report)")
+    print(f"  4. permeation_significance_analysis.json  (machine-readable data)")
+    print(f"  5. individual_ion_analysis.csv  (per-ion results)")
     if method1_results:
-        print(f"  4. clt_bootstrap_distributions.png")
-        print(f"  5. clt_zscores.png")
-        print(f"  6. individual_ion_distributions.png (NEW!)")
-        print(f"  7. individual_ion_heatmap.png (NEW!)")
+        print(f"  6. clt_bootstrap_distributions.png")
+        print(f"  7. clt_zscores.png")
+        print(f"  8. individual_ion_distributions.png")
+        print(f"  9. individual_ion_heatmap.png")
+    print("\n" + "="*80)
+    print(f"Frames used for Gaussian: {len(all_state2_vectors)}")
+    print(f"Frames tested: {len(all_end2_vectors)}")
+    print("="*80)
     
     return combined_results
 
@@ -688,7 +885,7 @@ def create_clt_plots(method1_results, all_residues, residue_pdb_map, output_dir)
         
         # Histogram
         ax.hist(boot_dist, bins=50, alpha=0.6, color='steelblue', 
-               edgecolor='black', density=True, label='Bootstrap means')
+               edgecolor='black', density=True, label='Bootstrap (in cavity)')
         
         # Fitted Gaussian
         mu = res['bootstrap_mean']
@@ -699,7 +896,7 @@ def create_clt_plots(method1_results, all_residues, residue_pdb_map, output_dir)
         
         # end_2 mean
         ax.axvline(res['end2_mean'], color='green', linestyle='--', 
-                  linewidth=2, label='end_2 mean')
+                  linewidth=2, label='Leaving cavity mean')
         
         # Significance
         sig_marker = ""
@@ -718,7 +915,7 @@ def create_clt_plots(method1_results, all_residues, residue_pdb_map, output_dir)
         ax.legend(fontsize=8, loc='best')
         ax.grid(True, alpha=0.3)
     
-    plt.suptitle('CLT Bootstrap Analysis: Distribution of Sample Means\n(State 2 frames only, no end_2)', 
+    plt.suptitle('CLT Bootstrap Analysis: Distribution of Sample Means\n(Ion in GLU/ASN cavity)', 
                 fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(output_dir / "clt_bootstrap_distributions.png", dpi=300, bbox_inches='tight')
@@ -755,7 +952,7 @@ def create_clt_plots(method1_results, all_residues, residue_pdb_map, output_dir)
     ax.set_xticklabels(pdb_names, fontsize=12, fontweight='bold')
     ax.set_xlabel('Residue (PDB numbering)', fontsize=14, fontweight='bold')
     ax.set_ylabel('Z-score', fontsize=14, fontweight='bold')
-    ax.set_title('CLT Bootstrap Analysis: Z-scores for Each Residue\n(end_2 mean vs State 2 bootstrap distribution)', 
+    ax.set_title('CLT Bootstrap Analysis: Z-scores for Each Residue\n(Ion leaving cavity vs ion in cavity)', 
                 fontsize=16, fontweight='bold', pad=20)
     ax.legend(fontsize=11, loc='best')
     ax.grid(True, alpha=0.3, axis='y')
@@ -795,7 +992,7 @@ def create_individual_ion_plots(method1_results, all_residues, residue_pdb_map, 
         
         # Histogram
         ax.hist(boot_dist, bins=50, alpha=0.4, color='steelblue', 
-               edgecolor='black', density=True, label='Bootstrap (state 2)')
+               edgecolor='black', density=True, label='Bootstrap (in cavity)')
         
         # Fitted Gaussian
         mu = res['bootstrap_mean']
@@ -818,12 +1015,12 @@ def create_individual_ion_plots(method1_results, all_residues, residue_pdb_map, 
         
         # Plot mean end_2
         ax.axvline(res['end2_mean'], color='green', linestyle='--', 
-                  linewidth=2, label='Mean end_2', zorder=4)
+                  linewidth=2, label='Mean (leaving)', zorder=4)
         
         # Mark first ion for legend
         if len(ion_values) > 0:
             ax.scatter([ion_values[0]], [y_max * 0.95], color='red', s=30, 
-                      marker='v', label='Individual end_2', zorder=5)
+                      marker='v', label='Individual (leaving)', zorder=5)
         
         ax.set_title(f"{pdb_name} (z={res['z_score']:+.2f})", 
                     fontsize=11, fontweight='bold')
@@ -832,7 +1029,7 @@ def create_individual_ion_plots(method1_results, all_residues, residue_pdb_map, 
         ax.legend(fontsize=7, loc='best')
         ax.grid(True, alpha=0.3)
     
-    plt.suptitle('Individual Ion end_2 Positions in Bootstrap Distributions', 
+    plt.suptitle('Individual Ions Leaving GLU/ASN Cavity', 
                 fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(output_dir / "individual_ion_distributions.png", dpi=300, bbox_inches='tight')
@@ -872,7 +1069,7 @@ def create_individual_ion_plots(method1_results, all_residues, residue_pdb_map, 
     
     ax.set_xlabel('Residue (PDB numbering)', fontsize=12, fontweight='bold')
     ax.set_ylabel('Ion ID', fontsize=12, fontweight='bold')
-    ax.set_title('Individual Ion Z-scores at end_2\n(Red = farther than typical, Blue = closer than typical)', 
+    ax.set_title('Individual Ion Z-scores When Leaving Cavity\n(Red = farther than typical, Blue = closer than typical)', 
                 fontsize=14, fontweight='bold', pad=20)
     
     # Add grid
@@ -884,3 +1081,237 @@ def create_individual_ion_plots(method1_results, all_residues, residue_pdb_map, 
     plt.savefig(output_dir / "individual_ion_heatmap.png", dpi=300, bbox_inches='tight')
     plt.close()
     print("  ✓ Individual ion heatmap saved")
+
+
+# =============================================================================
+# HELPER FUNCTION FOR COMBINING MULTIPLE SIMULATIONS
+# =============================================================================
+
+def combine_multiple_simulations(
+    simulations_data,
+    results_dir="combined_analysis",
+    channel_type="G12",
+    n_bootstrap=1000,
+    sample_size=50,
+    min_frames_method2=80
+):
+    """
+    Combine permeation data from multiple simulations and run analysis.
+    
+    This pools all ion-residue distance vectors from ALL simulations together,
+    then runs the statistical tests on the combined dataset.
+    
+    Parameters:
+    -----------
+    simulations_data : list of dict
+        Each dict should contain:
+        - 'universe': MDAnalysis.Universe
+        - 'channel2': Channel object
+        - 'all_residues': list of residue IDs
+        - 'permeation_events': list of permeation events
+        - 'name': str (optional, for tracking which simulation)
+    results_dir : str or Path
+        Where to save combined results
+    channel_type : str
+        Channel type (e.g., "G12")
+    n_bootstrap, sample_size, min_frames_method2 : int
+        Bootstrap parameters
+        
+    Returns:
+    --------
+    dict with combined analysis results
+    
+    Example usage:
+    --------------
+    simulations_data = [
+        {
+            'universe': universe1,
+            'channel2': channel2_1,
+            'all_residues': residues1,
+            'permeation_events': events1,
+            'name': 'simulation_1'
+        },
+        {
+            'universe': universe2,
+            'channel2': channel2_2,
+            'all_residues': residues2,
+            'permeation_events': events2,
+            'name': 'simulation_2'
+        },
+        # ... more simulations
+    ]
+    
+    combined_results = combine_multiple_simulations(
+        simulations_data,
+        results_dir="combined_analysis"
+    )
+    """
+    from pathlib import Path
+    
+    results_dir = Path(results_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    
+    print("\n" + "="*80)
+    print("COMBINING MULTIPLE SIMULATIONS")
+    print("="*80)
+    print(f"Number of simulations: {len(simulations_data)}")
+    
+    # Get distance vector function (same as in main function)
+    def get_distance_vector(universe, channel2, all_residues, frame_idx, ion_id):
+        """Get 8D vector of distances from THIS SPECIFIC ION to each residue."""
+        universe.trajectory[frame_idx]
+        channel2.compute_geometry(2)
+        
+        ion = universe.select_atoms(f"resid {ion_id}")
+        if len(ion) == 0:
+            return None
+        
+        ion_pos = ion.positions[0]
+        
+        distance_vector = []
+        for resid in all_residues:
+            res_atoms = universe.select_atoms(f"resid {resid}")
+            if len(res_atoms) == 0:
+                return None
+            res_com = res_atoms.center_of_mass()
+            dist = np.linalg.norm(ion_pos - res_com)
+            distance_vector.append(dist)
+        
+        return np.array(distance_vector)
+    
+    # Collect ALL vectors from ALL simulations
+    all_combined_state2 = []
+    all_combined_end2 = []
+    all_combined_end2_ion_ids = []
+    all_combined_end2_frames = []
+    ion_end2_vectors_combined = {}
+    
+    simulation_stats = []
+    
+    for sim_idx, sim_data in enumerate(simulations_data):
+        universe = sim_data['universe']
+        channel2 = sim_data['channel2']
+        all_residues = sorted(sim_data['all_residues'])
+        permeation_events = sim_data['permeation_events']
+        sim_name = sim_data.get('name', f'sim_{sim_idx+1}')
+        
+        print(f"\n--- Processing {sim_name} ---")
+        print(f"  Permeation events: {len(permeation_events)}")
+        
+        state2_count = 0
+        end2_count = 0
+        
+        for event in permeation_events:
+            ion_id = event['ion_id']
+            end_1 = event.get('end_1', event['start_2'])
+            end_2 = event['end_2']
+            
+            # Collect 'in cavity' frames
+            for frame_idx in range(end_1, end_2):
+                vec = get_distance_vector(universe, channel2, all_residues, frame_idx, ion_id)
+                if vec is not None:
+                    all_combined_state2.append(vec)
+                    state2_count += 1
+            
+            # Collect 'leaving cavity' frame
+            vec_end2 = get_distance_vector(universe, channel2, all_residues, end_2, ion_id)
+            if vec_end2 is not None:
+                all_combined_end2.append(vec_end2)
+                all_combined_end2_ion_ids.append(f"{sim_name}:{ion_id}")
+                all_combined_end2_frames.append(end_2)
+                ion_end2_vectors_combined[f"{sim_name}:{ion_id}"] = vec_end2
+                end2_count += 1
+        
+        simulation_stats.append({
+            'name': sim_name,
+            'n_events': len(permeation_events),
+            'n_state2_frames': state2_count,
+            'n_end2_frames': end2_count
+        })
+        
+        print(f"  → Collected {state2_count} 'in cavity' frames")
+        print(f"  → Collected {end2_count} 'leaving cavity' frames")
+    
+    # Summary
+    print("\n" + "="*80)
+    print("COMBINED DATA SUMMARY")
+    print("="*80)
+    total_state2 = sum(s['n_state2_frames'] for s in simulation_stats)
+    total_end2 = sum(s['n_end2_frames'] for s in simulation_stats)
+    
+    print(f"Total 'in cavity' frames: {total_state2}")
+    print(f"Total 'leaving cavity' frames: {total_end2}")
+    print(f"Total permeation events: {sum(s['n_events'] for s in simulation_stats)}")
+    
+    print("\nPer-simulation breakdown:")
+    for stat in simulation_stats:
+        print(f"  {stat['name']}: {stat['n_state2_frames']} in cavity, {stat['n_end2_frames']} leaving")
+    
+    # Convert to numpy arrays
+    all_combined_state2 = np.array(all_combined_state2)
+    all_combined_end2 = np.array(all_combined_end2)
+    
+    # Now create a "virtual" combined dataset to pass to main function
+    # We'll use the first simulation's universe and channel for the analysis
+    # (the actual frames have already been collected)
+    
+    print("\n" + "="*80)
+    print("RUNNING COMBINED STATISTICAL ANALYSIS")
+    print("="*80)
+    print("Note: Analysis uses pooled data from all simulations")
+    
+    # Create a minimal permeation_events list (just for metadata)
+    combined_events = []
+    for stat in simulation_stats:
+        combined_events.extend([{'simulation': stat['name']}] * stat['n_events'])
+    
+    # Use the residues from first simulation (should be same for all)
+    all_residues = sorted(simulations_data[0]['all_residues'])
+    
+    # Convert residue IDs to PDB numbering
+    from analysis.converter import convert_to_pdb_numbering
+    residue_pdb_map = {}
+    for resid in all_residues:
+        residue_pdb_map[resid] = convert_to_pdb_numbering(resid, channel_type)
+    
+    # Now run the analysis using the collected vectors
+    # We'll directly call the analysis parts (Method 1 and Method 2)
+    # rather than re-collecting frames
+    
+    print(f"\nUsing {len(all_combined_state2)} 'in cavity' vectors")
+    print(f"Using {len(all_combined_end2)} 'leaving cavity' vectors")
+    
+    # Save a summary file
+    summary_file = results_dir / "combined_simulations_summary.txt"
+    with open(summary_file, 'w') as f:
+        f.write("COMBINED SIMULATIONS SUMMARY\n")
+        f.write("="*80 + "\n\n")
+        f.write(f"Number of simulations: {len(simulations_data)}\n")
+        f.write(f"Total 'in cavity' frames: {total_state2}\n")
+        f.write(f"Total 'leaving cavity' frames: {total_end2}\n")
+        f.write(f"Total permeation events: {sum(s['n_events'] for s in simulation_stats)}\n\n")
+        f.write("Per-simulation breakdown:\n")
+        for stat in simulation_stats:
+            f.write(f"  {stat['name']}:\n")
+            f.write(f"    Events: {stat['n_events']}\n")
+            f.write(f"    'In cavity' frames: {stat['n_state2_frames']}\n")
+            f.write(f"    'Leaving cavity' frames: {stat['n_end2_frames']}\n")
+    
+    print(f"\n✓ Summary saved to: {summary_file}")
+    
+    # Note: For full analysis, you would need to adapt the main function
+    # to accept pre-collected vectors rather than collecting them itself
+    # For now, return the combined data
+    
+    return {
+        'all_state2_vectors': all_combined_state2,
+        'all_end2_vectors': all_combined_end2,
+        'simulation_stats': simulation_stats,
+        'residue_pdb_map': residue_pdb_map,
+        'all_residues': all_residues,
+        'ion_end2_info': {
+            'ion_ids': all_combined_end2_ion_ids,
+            'frames': all_combined_end2_frames,
+            'vectors': ion_end2_vectors_combined
+        }
+    }

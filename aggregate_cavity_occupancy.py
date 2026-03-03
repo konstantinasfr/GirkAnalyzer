@@ -13,7 +13,7 @@ class CavityOccupancyAggregator:
     Creates plots for subunit combinations, residue frequencies, and ion counts.
     """
     
-    def __init__(self, base_directory, threshold=3.0):
+    def __init__(self, base_directory, threshold=3.0, channel_type="G12"):
         """
         Parameters:
         -----------
@@ -21,9 +21,12 @@ class CavityOccupancyAggregator:
             Base directory containing run subdirectories (RUN1, RUN2, etc.)
         threshold : float
             Threshold value used in the analysis
+        channel_type : str
+            Channel type ('G2', 'G12', 'G12_GAT', 'G12_ML')
         """
         self.base_dir = Path(base_directory)
         self.threshold = threshold
+        self.channel_type = channel_type
         
         # Convert threshold to string (handle 3.0 -> "3")
         if isinstance(self.threshold, float) and self.threshold.is_integer():
@@ -34,10 +37,29 @@ class CavityOccupancyAggregator:
         self.all_results = []
         self.residue_combination_counts = Counter()
         self.subunit_combination_counts = Counter()
-        self.residue_appearance_counts = Counter()  # How many times each residue appears
-        self.subunit_appearance_counts = Counter()  # How many times each subunit appears
+        self.residue_appearance_counts = Counter()
+        self.subunit_appearance_counts = Counter()
         self.total_combinations = 0
         self.cavity_ion_counts = []
+    
+    def convert_D_to_G1(self, label):
+        """Convert subunit D to G1 in labels, but ONLY for non-G2 channels"""
+        if self.channel_type == "G2":
+            return label  # Don't convert for G2!
+        
+        if label and isinstance(label, str):
+            # Replace D when it's at the end of subunit combinations
+            label = label.replace('_D', '_G1')
+            # Replace D when preceded by a dot (residue numbering)
+            label = label.replace('.D', '.G1')
+            # Replace standalone D
+            if label == 'D':
+                label = 'G1'
+            # Replace D at the start of a combination
+            if label.startswith('D_'):
+                label = 'G1_' + label[2:]
+            return label
+        return label
         
     def load_all_runs(self):
         """Load cavity occupancy results from all subdirectories."""
@@ -111,10 +133,11 @@ class CavityOccupancyAggregator:
         # Get top 15 combinations
         top_combos = self.subunit_combination_counts.most_common(15)
         
-        combos = [c[0] for c in top_combos]
+        combos = [self.convert_D_to_G1(c[0]) for c in top_combos]  # Convert D to G1
         counts = [c[1] for c in top_combos]
         
-        fig, ax = plt.subplots(figsize=(14, 7))
+        # Narrower plot
+        fig, ax = plt.subplots(figsize=(10, 6))
         
         # Color by number of subunits involved
         colors = []
@@ -132,20 +155,25 @@ class CavityOccupancyAggregator:
         bars = ax.bar(range(len(combos)), counts, color=colors, alpha=0.7, 
                      edgecolor='black', linewidth=1.5)
         
-        # Add count labels
+        # Add count labels - bigger font
         for i, (bar, count) in enumerate(zip(bars, counts)):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
                    f'{count}',
-                   ha='center', va='bottom', fontsize=11, fontweight='bold')
+                   ha='center', va='bottom', fontsize=16, fontweight='bold')
         
         ax.set_xticks(range(len(combos)))
-        ax.set_xticklabels(combos, fontsize=12, fontweight='bold', rotation=45, ha='right')
-        ax.set_ylabel('Frequency (Number of Events)', fontsize=14, fontweight='bold')
-        ax.set_xlabel('Subunit Combination', fontsize=14, fontweight='bold')
-        ax.set_title(f'Subunit Combinations at end_2\n(Threshold={self.threshold}Å)', 
-                    fontsize=16, fontweight='bold', pad=20)
+        ax.set_xticklabels(combos, fontsize=20, fontweight='bold', rotation=45, ha='right')
+        ax.set_ylabel('Frequency', fontsize=22, fontweight='bold')
+        ax.set_xlabel('Subunit Combination', fontsize=22, fontweight='bold')
+        ax.set_title(f'Ion Leaves GLU/ASN Cavity - Subunit Combinations', 
+                    fontsize=22, fontweight='bold', pad=18)
         ax.grid(True, alpha=0.3, axis='y')
+        ax.tick_params(axis='both', labelsize=18)
+        
+        # Add gap at top
+        max_count = max(counts)
+        ax.set_ylim(0, max_count * 1.1)
         
         # Legend
         from matplotlib.patches import Patch
@@ -155,7 +183,7 @@ class CavityOccupancyAggregator:
             Patch(facecolor='orange', edgecolor='black', label='3 subunits'),
             Patch(facecolor='salmon', edgecolor='black', label='4 subunits')
         ]
-        ax.legend(handles=legend_elements, loc='upper right', fontsize=11)
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=15)
         
         plt.tight_layout()
         output_file = output_dir / f"subunit_combinations_t{self.threshold_str}.png"
@@ -178,10 +206,11 @@ class CavityOccupancyAggregator:
         # Sort by percentage (descending)
         sorted_residues = sorted(residue_percentages.items(), key=lambda x: x[1], reverse=True)
         
-        residues = [r[0] for r in sorted_residues]
+        residues = [self.convert_D_to_G1(r[0]) for r in sorted_residues]  # Convert D to G1
         percentages = [r[1] for r in sorted_residues]
         
-        fig, ax = plt.subplots(figsize=(12, 7))
+        # Narrower plot
+        fig, ax = plt.subplots(figsize=(10, 6))
         
         # Color by residue type
         colors = []
@@ -198,27 +227,28 @@ class CavityOccupancyAggregator:
         bars = ax.bar(range(len(residues)), percentages, color=colors, alpha=0.7,
                      edgecolor='black', linewidth=1.5)
         
-        # Add percentage labels
+        # Add percentage labels - bigger font
         for i, (bar, pct) in enumerate(zip(bars, percentages)):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + 1,
                    f'{pct:.1f}%',
-                   ha='center', va='bottom', fontsize=11, fontweight='bold')
+                   ha='center', va='bottom', fontsize=16, fontweight='bold')
         
         # Reference lines
         ax.axhline(y=100, color='green', linestyle='--', linewidth=1.5, alpha=0.5, 
-                  label='100% (all events)')
+                  label='100%')
         ax.axhline(y=50, color='orange', linestyle='--', linewidth=1.5, alpha=0.5,
-                  label='50% (half of events)')
+                  label='50%')
         
         ax.set_xticks(range(len(residues)))
-        ax.set_xticklabels(residues, fontsize=12, fontweight='bold', rotation=45, ha='right')
-        ax.set_ylabel('Percentage of Events (%)', fontsize=14, fontweight='bold')
-        ax.set_xlabel('Residue (PDB)', fontsize=14, fontweight='bold')
-        ax.set_title(f'Residue Appearance Frequency at end_2\n(Threshold={self.threshold}Å)', 
-                    fontsize=16, fontweight='bold', pad=20)
-        ax.set_ylim([0, 105])
+        ax.set_xticklabels(residues, fontsize=20, fontweight='bold', rotation=45, ha='right')
+        ax.set_ylabel('Percentage of Events (%)', fontsize=22, fontweight='bold')
+        ax.set_xlabel('Residue', fontsize=22, fontweight='bold')
+        ax.set_title(f'Ion Leaves GLU/ASN Cavity - Residue Frequency', 
+                    fontsize=22, fontweight='bold', pad=18)
+        ax.set_ylim([0, 110])
         ax.grid(True, alpha=0.3, axis='y')
+        ax.tick_params(axis='both', labelsize=18)
         
         # Legend
         from matplotlib.patches import Patch
@@ -229,7 +259,7 @@ class CavityOccupancyAggregator:
             plt.Line2D([0], [0], color='green', linestyle='--', label='100%'),
             plt.Line2D([0], [0], color='orange', linestyle='--', label='50%')
         ]
-        ax.legend(handles=legend_elements, loc='upper right', fontsize=11)
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=15)
         
         plt.tight_layout()
         output_file = output_dir / f"residue_appearance_percentage_t{self.threshold_str}.png"
@@ -252,10 +282,11 @@ class CavityOccupancyAggregator:
         # Sort alphabetically
         sorted_subunits = sorted(subunit_percentages.items())
         
-        subunits = [s[0] for s in sorted_subunits]
+        subunits = [self.convert_D_to_G1(s[0]) for s in sorted_subunits]  # Convert D to G1
         percentages = [s[1] for s in sorted_subunits]
         
-        fig, ax = plt.subplots(figsize=(10, 7))
+        # Narrower plot
+        fig, ax = plt.subplots(figsize=(8, 6))
         
         # Different colors for each subunit
         colors = ['steelblue', 'coral', 'lightgreen', 'plum'][:len(subunits)]
@@ -263,28 +294,29 @@ class CavityOccupancyAggregator:
         bars = ax.bar(range(len(subunits)), percentages, color=colors, alpha=0.7,
                      edgecolor='black', linewidth=1.5, width=0.6)
         
-        # Add percentage labels
+        # Add percentage labels - bigger font
         for i, (bar, pct) in enumerate(zip(bars, percentages)):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + 1,
                    f'{pct:.1f}%',
-                   ha='center', va='bottom', fontsize=12, fontweight='bold')
+                   ha='center', va='bottom', fontsize=16, fontweight='bold')
         
         # Reference lines
         ax.axhline(y=100, color='green', linestyle='--', linewidth=1.5, alpha=0.5, 
-                  label='100% (all events)')
+                  label='100%')
         ax.axhline(y=50, color='orange', linestyle='--', linewidth=1.5, alpha=0.5,
-                  label='50% (half of events)')
+                  label='50%')
         
         ax.set_xticks(range(len(subunits)))
-        ax.set_xticklabels(subunits, fontsize=14, fontweight='bold')
-        ax.set_ylabel('Percentage of Events (%)', fontsize=14, fontweight='bold')
-        ax.set_xlabel('Subunit', fontsize=14, fontweight='bold')
-        ax.set_title(f'Subunit Appearance Frequency at end_2\n(Threshold={self.threshold}Å)', 
-                    fontsize=16, fontweight='bold', pad=20)
-        ax.set_ylim([0, 105])
+        ax.set_xticklabels(subunits, fontsize=20, fontweight='bold')
+        ax.set_ylabel('Percentage of Events (%)', fontsize=22, fontweight='bold')
+        ax.set_xlabel('Subunit', fontsize=22, fontweight='bold')
+        ax.set_title(f'Ion Leaves GLU/ASN Cavity - Subunit Frequency', 
+                    fontsize=22, fontweight='bold', pad=18)
+        ax.set_ylim([0, 110])
         ax.grid(True, alpha=0.3, axis='y')
-        ax.legend(fontsize=12, loc='upper right')
+        ax.tick_params(axis='both', labelsize=18)
+        ax.legend(fontsize=15, loc='upper right')
         
         plt.tight_layout()
         output_file = output_dir / f"subunit_appearance_percentage_t{self.threshold_str}.png"
@@ -308,35 +340,41 @@ class CavityOccupancyAggregator:
         ion_counts = [c[0] for c in sorted_counts]
         frequencies = [c[1] for c in sorted_counts]
         
-        fig, ax = plt.subplots(figsize=(10, 7))
+        # Narrower plot
+        fig, ax = plt.subplots(figsize=(10, 6))
         
         bars = ax.bar(ion_counts, frequencies, color='steelblue', alpha=0.7,
                      edgecolor='black', linewidth=1.5, width=0.8)
         
-        # Add frequency labels
+        # Add frequency labels - bigger font
         for bar, freq in zip(bars, frequencies):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
                    f'{freq}',
-                   ha='center', va='bottom', fontsize=11, fontweight='bold')
+                   ha='center', va='bottom', fontsize=16, fontweight='bold')
         
         # Add mean line
         mean_ions = np.mean(self.cavity_ion_counts)
         ax.axvline(x=mean_ions, color='red', linestyle='--', linewidth=2,
                   label=f'Mean = {mean_ions:.1f}')
         
-        ax.set_xlabel('Number of Ions in Cavity (Channel 2)', fontsize=14, fontweight='bold')
-        ax.set_ylabel('Frequency (Number of Events)', fontsize=14, fontweight='bold')
-        ax.set_title(f'Ion Count Distribution in Cavity at end_2\n(Threshold={self.threshold}Å)', 
-                    fontsize=16, fontweight='bold', pad=20)
+        ax.set_xlabel('Number of Ions in Cavity', fontsize=22, fontweight='bold')
+        ax.set_ylabel('Frequency', fontsize=22, fontweight='bold')
+        ax.set_title(f'Ion Leaves GLU/ASN Cavity - Ion Count Distribution', 
+                    fontsize=22, fontweight='bold', pad=18)
         ax.grid(True, alpha=0.3, axis='y')
-        ax.legend(fontsize=12)
+        ax.tick_params(axis='both', labelsize=18)
+        ax.legend(fontsize=15)
+        
+        # Add gap at top
+        max_freq = max(frequencies)
+        ax.set_ylim(0, max_freq * 1.1)
         
         # Add statistics text
         stats_text = f'Mean: {mean_ions:.1f}\nStd: {np.std(self.cavity_ion_counts):.1f}\nRange: {min(self.cavity_ion_counts)}-{max(self.cavity_ion_counts)}'
         ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
-               fontsize=11, verticalalignment='top',
-               bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='black'))
+               fontsize=14, verticalalignment='top', fontweight='bold',
+               bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='black', linewidth=2))
         
         plt.tight_layout()
         output_file = output_dir / f"cavity_ion_counts_t{self.threshold_str}.png"
@@ -358,7 +396,7 @@ class CavityOccupancyAggregator:
         
         self.create_subunit_combination_plot(output_dir)
         self.create_residue_percentage_plot(output_dir)
-        self.create_subunit_percentage_plot(output_dir)  # NEW: Subunit percentages
+        self.create_subunit_percentage_plot(output_dir)
         self.create_cavity_ion_count_plot(output_dir)
     
     def create_summary_table(self, output_dir=None):
@@ -387,7 +425,7 @@ class CavityOccupancyAggregator:
                 res_type = 'Unknown'
             
             residue_table.append({
-                'Residue_PDB': residue,
+                'Residue_PDB': self.convert_D_to_G1(residue),  # Convert D to G1
                 'Type': res_type,
                 'Appearances': count,
                 'Percentage': percentage
@@ -398,7 +436,6 @@ class CavityOccupancyAggregator:
         df_residue.to_excel(excel_file, index=False, float_format='%.1f')
         print(f"\n✓ Residue appearances table: {excel_file}")
         
-        # Also save as CSV
         csv_file = output_dir / f"residue_appearances_t{self.threshold_str}.csv"
         df_residue.to_csv(csv_file, index=False, float_format='%.1f')
         print(f"✓ Residue appearances CSV: {csv_file}")
@@ -407,7 +444,7 @@ class CavityOccupancyAggregator:
         subunit_table = []
         for combo, count in self.subunit_combination_counts.most_common():
             subunit_table.append({
-                'Subunit_Combination': combo,
+                'Subunit_Combination': self.convert_D_to_G1(combo),  # Convert D to G1
                 'Frequency': count,
                 'Percentage': (count / len(self.all_results)) * 100 if self.all_results else 0
             })
@@ -417,12 +454,6 @@ class CavityOccupancyAggregator:
         df_subunit.to_excel(excel_file, index=False, float_format='%.1f')
         print(f"✓ Subunit combinations table: {excel_file}")
         
-        # Also save as CSV
-        csv_file = output_dir / f"subunit_combinations_t{self.threshold_str}.csv"
-        df_subunit.to_csv(csv_file, index=False, float_format='%.1f')
-        print(f"✓ Subunit combinations CSV: {csv_file}")
-        
-        # Also save as CSV
         csv_file = output_dir / f"subunit_combinations_t{self.threshold_str}.csv"
         df_subunit.to_csv(csv_file, index=False, float_format='%.1f')
         print(f"✓ Subunit combinations CSV: {csv_file}")
@@ -456,6 +487,13 @@ def main():
         help="Threshold value used in the analysis (default: 3.0)"
     )
     parser.add_argument(
+        "-c", "--channel",
+        type=str,
+        default="G12",
+        choices=['G2', 'G12', 'G12_GAT', 'G12_ML'],
+        help="Channel type (default: G12). Use G2 to keep D labels, G12/G12_GAT/G12_ML to convert D to G1"
+    )
+    parser.add_argument(
         "--output_dir",
         type=str,
         default=None,
@@ -465,7 +503,7 @@ def main():
     args = parser.parse_args()
     
     # Create aggregator
-    aggregator = CavityOccupancyAggregator(args.base_directory, args.threshold)
+    aggregator = CavityOccupancyAggregator(args.base_directory, args.threshold, args.channel)
     
     if not aggregator.load_all_runs():
         print("No data found. Exiting.")

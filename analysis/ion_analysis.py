@@ -9,7 +9,11 @@ import copy
 
 class IonPermeationAnalysis:
     def __init__(self, universe, ion_selection, start_frame, end_frame, channel1, channel2, channel3, channel4,
-                 hbc_residues, hbc_diagonal_pairs, sf_low_res_residues, sf_low_res_diagonal_pairs, results_dir,count_ions=True):
+                hbc_residues, hbc_diagonal_pairs, 
+                sf_low_res_residues, sf_low_res_diagonal_pairs,
+                upper_gl_residues, upper_gl_diagonal_pairs,
+                lower_gl_residues, lower_gl_diagonal_pairs,
+                results_dir, count_ions=True):
         
         self.u = universe
         self.ion_selection = ion_selection
@@ -23,6 +27,10 @@ class IonPermeationAnalysis:
         self.hbc_diagonal_pairs = hbc_diagonal_pairs
         self.sf_low_res_residues = sf_low_res_residues
         self.sf_low_res_diagonal_pairs = sf_low_res_diagonal_pairs
+        self.upper_gl_residues = upper_gl_residues
+        self.upper_gl_diagonal_pairs = upper_gl_diagonal_pairs
+        self.lower_gl_residues = lower_gl_residues
+        self.lower_gl_diagonal_pairs = lower_gl_diagonal_pairs
         self.count_ions = count_ions
         
         # Track regions
@@ -112,6 +120,8 @@ class IonPermeationAnalysis:
 
         self.hbc_diameters = []
         self.sf_low_res_diameters = []
+        self.upper_gl_diameters = []
+        self.lower_gl_diameters = []
 
         for ts in tqdm(self.u.trajectory[self.start_frame:self.end_frame+1],
                     total=(self.end_frame - self.start_frame + 1),
@@ -124,7 +134,13 @@ class IonPermeationAnalysis:
             sf_low_res_atoms = {resid: self.u.select_atoms(f"resid {resid}") for resid in self.sf_low_res_residues}
             self.sf_low_res_diameters.append(self.compute_constriction_point_diameters(ts.frame, sf_low_res_atoms, self.sf_low_res_diagonal_pairs))
 
-            if  self.count_ions:
+            upper_gl_atoms = {resid: self.u.select_atoms(f"resid {resid}") for resid in self.upper_gl_residues}
+            self.upper_gl_diameters.append(self.compute_constriction_point_diameters(ts.frame, upper_gl_atoms, self.upper_gl_diagonal_pairs))
+
+            lower_gl_atoms = {resid: self.u.select_atoms(f"resid {resid}") for resid in self.lower_gl_residues}
+            self.lower_gl_diameters.append(self.compute_constriction_point_diameters(ts.frame, lower_gl_atoms, self.lower_gl_diagonal_pairs))
+
+            if self.count_ions:
                 self.ion_counter(ts)
 
     def extract_permeation_events(self, stages_reached):
@@ -314,6 +330,36 @@ class IonPermeationAnalysis:
             json.dump(self.permeation_table, f, indent=2)
         print(f"Permeation summary table saved to: {output_file}")
 
+    def save_gate_distances(self):
+        """Save gate distance measurements to CSV files"""
+        print(f"\n{'='*50}")
+        print(f"SAVING GATE DISTANCE DATA...")
+        print(f"{'='*50}")
+        
+        # Save HBC distances
+        hbc_df = pd.DataFrame(self.hbc_diameters)
+        hbc_file = self.results_dir / "hbc_distances.csv"
+        hbc_df.to_csv(hbc_file, index=False)
+        print(f"HBC distances saved to: {hbc_file}")
+        
+        # Save SF distances
+        sf_df = pd.DataFrame(self.sf_low_res_diameters)
+        sf_file = self.results_dir / "sf_distances.csv"
+        sf_df.to_csv(sf_file, index=False)
+        print(f"SF distances saved to: {sf_file}")
+        
+        # Save Upper G-loop distances
+        upper_gl_df = pd.DataFrame(self.upper_gl_diameters)
+        upper_gl_file = self.results_dir / "upper_gl_distances.csv"
+        upper_gl_df.to_csv(upper_gl_file, index=False)
+        print(f"Upper G-loop distances saved to: {upper_gl_file}")
+        
+        # Save Lower G-loop distances
+        lower_gl_df = pd.DataFrame(self.lower_gl_diameters)
+        lower_gl_file = self.results_dir / "lower_gl_distances.csv"
+        lower_gl_df.to_csv(lower_gl_file, index=False)
+        print(f"Lower G-loop distances saved to: {lower_gl_file}")
+
     def print_results(self):
         """Print summary of permeation events"""
         
@@ -339,8 +385,6 @@ class IonPermeationAnalysis:
             print(f"{'-'*90}")
             print(f"Total permeation events: {len(self.permeation_events)}")
 
-
-            
             # Count permeations per ion
             from collections import Counter
             ion_counts = Counter([event['ion_id'] for event in self.permeation_events])
@@ -362,7 +406,7 @@ class IonPermeationAnalysis:
             print(f"SAVING RESULTS...")
             print(f"{'='*50}")
 
-                    # Store table-style dict for saving
+            # Store table-style dict for saving
             self.permeation_table = []
 
             for event in self.permeation_events:
@@ -383,11 +427,21 @@ class IonPermeationAnalysis:
             self.save_stages_reached()
             self.save_permeation_table()
 
-        # Plot diameters
+        self.save_gate_distances() 
+
+        # Plot all gate diameters
+        print(f"\n{'='*50}")
+        print(f"GENERATING PLOTS...")
+        print(f"{'='*50}")
+        
         self.plot_residue_distances(self.hbc_diameters, self.results_dir, "hbc_pairs_distances.png", 
                                     "HBC Residue Pair Distances Over Time", "end_3")
         self.plot_residue_distances(self.sf_low_res_diameters, self.results_dir, "sf_pairs_distances.png", 
                                     "SF Residue Pair Distances Over Time", "end_1")
+        self.plot_residue_distances(self.upper_gl_diameters, self.results_dir, "upper_gl_pairs_distances.png", 
+                                    "Upper G-Loop Residue Pair Distances Over Time", "end_4")
+        self.plot_residue_distances(self.lower_gl_diameters, self.results_dir, "lower_gl_pairs_distances.png", 
+                                    "Lower G-Loop Residue Pair Distances Over Time", "end_4")
 
     def moving_average(self, values, window=50):
         """Simple moving average for smoothing."""
