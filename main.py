@@ -432,14 +432,14 @@ def main():
         results_dir=results_dir / "force_correlation_analysis"
     )
 
-    # from analysis.dihedral_analysis_module import run_dihedral_analysis
+    from analysis.dihedral_analysis_module import run_dihedral_analysis
 
-    # # In your main(), after your ion permeation analysis:
-    # dihedral_results, peak_frames = run_dihedral_analysis(
-    #     u=u,                           # Your existing Universe
-    #     channel_type=args.channel_type,        # Or args.channel_type
-    #     results_dir=results_dir/ "dihedral_analysis"       # Your existing results directory
-    # )
+    # In your main(), after your ion permeation analysis:
+    dihedral_results, peak_frames = run_dihedral_analysis(
+        u=u,                           # Your existing Universe
+        channel_type=args.channel_type,        # Or args.channel_type
+        results_dir=results_dir/ "dihedral_analysis"       # Your existing results directory
+    )
 
 # # ========== GEOMETRY ANALYSIS (AFTER MAIN ANALYSIS) ==========
 #     if len(analyzer.permeation_events) > 0:

@@ -326,3 +326,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# python3 aggregate_alignment_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2 --output_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/aggregate_alignment_results

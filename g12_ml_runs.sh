@@ -1,0 +1,15 @@
+python3 main.py --channel_type G12_ML --run_number 1
+python3 main.py --channel_type G12_ML --run_number 2
+python3 main.py --channel_type G12_ML --run_number 3
+python3 main.py --channel_type G12_ML --run_number 4
+python3 main.py --channel_type G12_ML --run_number 5
+python3 main.py --channel_type G12_ML --run_number 6
+python3 main.py --channel_type G12_ML --run_number 7
+python3 main.py --channel_type G12_ML --run_number 8
+python3 main.py --channel_type G12_ML --run_number 9
+python3 main.py --channel_type G12_ML --run_number 10
+python3 main.py --channel_type G12_ML --run_number 11
+python3 main.py --channel_type G12_ML --run_number 12
+python3 main.py --channel_type G12_ML --run_number 13
+python3 main.py --channel_type G12_ML --run_number 14
+python3 main.py --channel_type G12_ML --run_number 15
