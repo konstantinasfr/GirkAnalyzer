@@ -241,12 +241,9 @@ def fit_gmm_with_init(data, means_init, n_init=20, random_state=42):
 def extract_components(gmm):
     """
     Extract GMM components sorted by mean (in [-180, 180]).
-
-    Returns
-    -------
-    list of dicts: [{'mean', 'std', 'weight'}, ...]
+    Means are rounded to nearest integer for consistent display everywhere.
     """
-    means   = np.array([back_to_180(m) for m in gmm.means_[:, 0]])
+    means   = np.array([round(back_to_180(m)) for m in gmm.means_[:, 0]])
     stds    = np.sqrt(gmm.covariances_[:, 0, 0])
     weights = gmm.weights_
 
@@ -264,38 +261,29 @@ def extract_components(gmm):
 def assign_labels(gmm, data):
     """
     METHOD 1: Probabilistic assignment (GMM maximum likelihood).
-    Assigns each frame to the component with highest probability — which
-    depends on both distance AND Gaussian width (std). A wider Gaussian
-    can claim frames that are geometrically closer to a narrower one.
+    Returns the back-converted mean angle rounded to nearest integer
+    so all downstream displays are consistent.
     """
     raw_labels = gmm.predict(data.reshape(-1, 1))
-    means_180  = np.array([back_to_180(m) for m in gmm.means_[:, 0]])
-    return means_180[raw_labels]
+    means_180  = np.array([round(back_to_180(m)) for m in gmm.means_[:, 0]])
+    return means_180[raw_labels].astype(float)
 
 
 def assign_labels_nearest(gmm, data_raw):
     """
     METHOD 2: Nearest-mean assignment (geometric / hard boundary).
-    Assigns each frame to the component whose mean is geometrically
-    closest, using CIRCULAR distance to handle ±180° wrap correctly.
-    Ignores Gaussian width — purely based on angle proximity.
-
-    Parameters
-    ----------
-    gmm      : fitted GaussianMixture
-    data_raw : np.ndarray (N,)  raw angles in [-180, 180] (NOT fitting space)
+    Returns the back-converted mean angle rounded to nearest integer
+    so all downstream displays are consistent.
     """
-    means_180 = np.array([back_to_180(m) for m in gmm.means_[:, 0]])
+    means_180 = np.array([round(back_to_180(m)) for m in gmm.means_[:, 0]])
 
     def circ_dist(a, b):
         d = np.abs(a - b) % 360
         return np.where(d > 180, 360 - d, d)
 
-    # for each frame find the component with smallest circular distance
-    # distances shape: (N, K)
     distances  = np.stack([circ_dist(data_raw, m) for m in means_180], axis=1)
     raw_labels = np.argmin(distances, axis=1)
-    return means_180[raw_labels]
+    return means_180[raw_labels].astype(float)
 
 
 # =============================================================================
@@ -575,6 +563,229 @@ def run_gmm_analysis(combined_data, peak_analysis, output_dir, n_init=20, channe
     return gmm_results
 
 
+def save_example_frames(combined_data, gmm_results, output_dir):
+    """
+    For every residue, find example frames for each chi1×chi2 combination.
+    Frames are selected as those whose RAW angles are closest to the
+    Gaussian means, sorted by total circular distance from (chi1_mean, chi2_mean).
+
+    Saves: run, frame index, raw chi1, raw chi2, dist_chi1, dist_chi2, total_dist.
+    """
+    output_dir = Path(output_dir)
+    out_path   = output_dir / 'example_frames_per_combination.txt'
+
+    def circ_dist(a, b):
+        """Circular distance between two angles in degrees."""
+        d = abs(a - b) % 360
+        return d if d <= 180 else 360 - d
+
+    N_EXAMPLES = 5  # show top N closest frames per combo per run
+
+    with open(out_path, 'w') as f:
+        f.write("EXAMPLE FRAMES PER CHI1×CHI2 COMBINATION\n")
+        f.write("Frames are sorted by total circular distance from the Gaussian means.\n")
+        f.write("=" * 100 + "\n\n")
+
+        for res_name, res in gmm_results.items():
+            pdb_label = res['pdb_label']
+            if 'chi1' not in res or 'chi2' not in res:
+                continue
+
+            lpr1       = res['chi1']['labels_per_run']
+            lpr2       = res['chi2']['labels_per_run']
+            comps1     = res['chi1']['components']
+            comps2     = res['chi2']['components']
+            chi1_data  = combined_data[res_name]['chi1']
+            chi2_data  = combined_data[res_name]['chi2']
+
+            combos = [(c1['mean'], c2['mean'])
+                      for c1 in comps1 for c2 in comps2]
+
+            f.write(f"{res_name}  (PDB: {pdb_label})\n")
+            f.write("─" * 100 + "\n")
+
+            for m1, m2 in combos:
+                combo_str = f'{m1:.0f}°/{m2:.0f}°'
+                f.write(f"\n  Combo: {combo_str}  "
+                        f"(χ1 mean={m1:.0f}°, χ2 mean={m2:.0f}°)\n")
+                f.write(f"  {'Run':<10} {'Frame':>8} "
+                        f"{'Raw χ1':>10} {'Raw χ2':>10} "
+                        f"{'Δχ1':>8} {'Δχ2':>8} {'Total Δ':>10}\n")
+                f.write(f"  {'─'*8:<10} {'─'*6:>8} "
+                        f"{'─'*8:>10} {'─'*8:>10} "
+                        f"{'─'*6:>8} {'─'*6:>8} {'─'*8:>10}\n")
+
+                found_any = False
+                for run_name in sorted(lpr1.keys()):
+                    if run_name not in lpr2:
+                        continue
+
+                    l1   = lpr1[run_name]
+                    l2   = lpr2[run_name]
+                    raw1 = np.array(chi1_data[run_name]) \
+                           if isinstance(chi1_data, dict) else np.array(chi1_data)
+                    raw2 = np.array(chi2_data[run_name]) \
+                           if isinstance(chi2_data, dict) else np.array(chi2_data)
+
+                    # frames assigned to this combo
+                    mask = (np.abs(l1 - m1) < 0.5) & (np.abs(l2 - m2) < 0.5)
+                    frame_indices = np.where(mask)[0]
+
+                    if len(frame_indices) == 0:
+                        continue
+
+                    # compute distance of each frame's raw angles from the means
+                    distances = np.array([
+                        circ_dist(float(raw1[i]), m1) + circ_dist(float(raw2[i]), m2)
+                        for i in frame_indices
+                    ])
+
+                    # sort by total distance, take top N_EXAMPLES
+                    sorted_idx = np.argsort(distances)[:N_EXAMPLES]
+
+                    for si in sorted_idx:
+                        fi   = frame_indices[si]
+                        r1   = float(raw1[fi])
+                        r2   = float(raw2[fi])
+                        d1   = circ_dist(r1, m1)
+                        d2   = circ_dist(r2, m2)
+                        dtot = d1 + d2
+                        f.write(f"  {run_name:<10} {fi:>8} "
+                                f"{r1:>10.2f}° {r2:>10.2f}° "
+                                f"{d1:>8.2f}° {d2:>8.2f}° {dtot:>10.2f}°\n")
+                    found_any = True
+
+                if not found_any:
+                    f.write(f"  — not found in any run\n")
+
+            f.write("\n" + "=" * 100 + "\n\n")
+
+    print(f"✅ Example frames saved to: {out_path}")
+
+
+def plot_run_colored_histograms(combined_data, gmm_results, output_dir,
+                                channel_type='G12'):
+    """
+    2×2 histograms where each bar is colored by how many RUNS contributed
+    frames to that bin. Darker = more runs contributed, lighter = fewer runs.
+
+    This reveals whether each conformational region is consistently sampled
+    across all runs or only appears in a subset of runs.
+    """
+    output_dir = Path(output_dir)
+    hist_dir   = output_dir / 'run_coverage_histograms'
+    hist_dir.mkdir(exist_ok=True)
+
+    if channel_type == 'G2':
+        pdb_order = {'ASN_ASP': ['184.B', '184.C', '184.A', '184.D'],
+                     'GLU':     ['152.B', '152.C', '152.A', '152.D']}
+    else:
+        pdb_order = {'ASN_ASP': ['184.B', '184.C', '184.A', '173.D'],
+                     'GLU':     ['152.B', '152.C', '152.A', '141.D']}
+
+    N_BINS    = 180
+    BIN_WIDTH = 2
+    BIN_EDGES = np.linspace(-180, 180, N_BINS + 1)
+    CENTERS   = (BIN_EDGES[:-1] + BIN_EDGES[1:]) / 2
+
+    for group, order in pdb_order.items():
+        ordered_keys = []
+        for pdb in order:
+            for res_name in gmm_results:
+                if gmm_results[res_name]['pdb_label'] == pdb:
+                    ordered_keys.append(res_name)
+                    break
+
+        if len(ordered_keys) < 4:
+            continue
+
+        for chi_key, chi_label in [('chi1', 'χ1'), ('chi2', 'χ2')]:
+
+            fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+            axes = axes.flatten()
+            fig.suptitle(
+                f'{channel_type}  —  {chi_label}  |  Run coverage per histogram bin',
+                fontsize=22, fontweight='bold', y=1.01
+            )
+
+            for idx, res_name in enumerate(ordered_keys[:4]):
+                ax        = axes[idx]
+                pdb_label = gmm_results[res_name]['pdb_label']
+                chi_data  = combined_data[res_name].get(chi_key, {})
+                comps     = gmm_results[res_name][chi_key]['components']
+
+                if not isinstance(chi_data, dict):
+                    ax.set_visible(False)
+                    continue
+
+                run_names = sorted(chi_data.keys())
+                n_runs    = len(run_names)
+
+                # for each bin, count how many runs have at least 1 frame there
+                # and total count across all runs
+                runs_per_bin  = np.zeros(N_BINS, dtype=int)
+                total_per_bin = np.zeros(N_BINS, dtype=int)
+
+                for run_name in run_names:
+                    run_angles = np.array(chi_data[run_name])
+                    run_hist, _ = np.histogram(run_angles, bins=BIN_EDGES)
+                    runs_per_bin  += (run_hist > 0).astype(int)
+                    total_per_bin += run_hist
+
+                # color each bar by fraction of runs that contributed
+                # 0 runs → white, all runs → darkest color
+                import matplotlib.colors as mcolors
+                import matplotlib.cm as cm
+
+                # YlOrRd: yellow (1 run) → orange → dark red (all runs)
+                # much more distinguishable than Blues
+                # start from 1 — bins with 0 runs simply not drawn
+                cmap = cm.YlOrRd
+                norm = mcolors.Normalize(vmin=1, vmax=n_runs)
+
+                # draw bars one by one with individual colors
+                for bi, (cnt, n_contrib) in enumerate(zip(total_per_bin, runs_per_bin)):
+                    if cnt > 0:
+                        ax.bar(CENTERS[bi], cnt, width=BIN_WIDTH,
+                               color=cmap(norm(n_contrib)),
+                               edgecolor='none', alpha=0.95)
+
+                # GMM component means as vertical lines
+                for i, c in enumerate(comps):
+                    color = COMPONENT_COLORS[i % len(COMPONENT_COLORS)]
+                    ax.axvline(c['mean'], color=color, lw=2.5, ls='--', alpha=0.9,
+                               label=f'{c["mean"]:.0f}°')
+                    ax.axvspan(c['mean'] - c['std'], c['mean'] + c['std'],
+                               alpha=0.07, color=color)
+
+                # colorbar
+                sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+                sm.set_array([])
+                cbar = plt.colorbar(sm, ax=ax, fraction=0.035, pad=0.02)
+                cbar.set_label('Runs contributing', fontsize=11)
+                tick_vals = sorted(set([1, n_runs // 2, n_runs]))
+                cbar.set_ticks(tick_vals)
+                cbar.set_ticklabels([str(t) for t in tick_vals])
+                cbar.ax.tick_params(labelsize=11)
+
+                ax.set_title(f'{pdb_label}', fontsize=28, fontweight='bold', pad=12)
+                ax.set_xlabel(f'{chi_label} Angle (degrees)', fontsize=24, fontweight='bold')
+                ax.set_ylabel('Total frame count', fontsize=24, fontweight='bold')
+                ax.set_xlim(-180, 180)
+                ax.tick_params(axis='both', labelsize=19)
+                ax.grid(True, alpha=0.2, linestyle='--')
+                ax.set_facecolor('#F8F9FA')
+                ax.legend(fontsize=13, loc='upper right', framealpha=0.9,
+                          title='GMM means', title_fontsize=11)
+
+            plt.tight_layout()
+            fname     = f'run_coverage_{group}_{chi_key}.png'
+            save_path = hist_dir / fname
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f"  ✅ Saved: {save_path}")
+
+
 # =============================================================================
 # PLOTTING
 # =============================================================================
@@ -708,8 +919,10 @@ def _plot_2x2_occupancy(ordered_keys, combined_data, gmm_results,
         labels_all = res_gmm['labels']   # per-frame mean angle values
         n_frames   = len(labels_all)
 
+        # sort components by absolute value of mean for display
+        components = sorted(components, key=lambda c: abs(c['mean']))
+
         x_labels  = [f'{c["mean"]:.0f}°\n±{c["std"]:.0f}°' for c in components]
-        # count frames whose label == this component mean
         counts    = [int(np.sum(np.isclose(labels_all, c['mean'], atol=0.01)))
                      for c in components]
         occupancy = [cnt / n_frames * 100 for cnt in counts]
@@ -1462,6 +1675,142 @@ def save_permeation_report(perm_combo, output_dir, frame_label='at_exit'):
     print(f"  ✅ Saved: {json_path}")
 
 
+def plot_permeation_histograms(combined_data, gmm_results, perm_frames,
+                               output_dir, channel_type='G12',
+                               offset=0, frame_label='at_exit'):
+    """
+    2×2 histograms of raw χ1 and χ2 angles at permeation event frames only.
+    One plot per group (ASN_ASP, GLU) per chi angle — same 2×2 layout as the
+    overall histograms but using only the subset of frames at ion exit events.
+
+    The GMM component means are overlaid as vertical dashed lines for reference.
+    """
+    output_dir = Path(output_dir)
+
+    if channel_type == 'G2':
+        pdb_order = {'ASN_ASP': ['184.B', '184.C', '184.A', '184.D'],
+                     'GLU':     ['152.B', '152.C', '152.A', '152.D']}
+    else:
+        pdb_order = {'ASN_ASP': ['184.B', '184.C', '184.A', '173.D'],
+                     'GLU':     ['152.B', '152.C', '152.A', '141.D']}
+
+    COMPONENT_COLORS_LIST = ['#E63946', '#2A9D8F', '#FF6B00', '#6A0572']
+    BIN_WIDTH = 2
+    N_BINS    = 180
+
+    for group, order in pdb_order.items():
+        # get ordered residue keys
+        ordered_keys = []
+        for pdb in order:
+            for res_name in gmm_results:
+                if gmm_results[res_name]['pdb_label'] == pdb:
+                    ordered_keys.append(res_name)
+                    break
+
+        if len(ordered_keys) < 4:
+            continue
+
+        for chi_key, chi_label, bar_color in [
+            ('chi1', 'χ1', 'steelblue'),
+            ('chi2', 'χ2', 'coral')
+        ]:
+            fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+            axes = axes.flatten()
+            fig.suptitle(
+                f'{channel_type}  —  {chi_label}  |  Ion exit: '
+                f'{frame_label.replace("_", " ")}  ({len(perm_frames)} runs)',
+                fontsize=22, fontweight='bold', y=1.01
+            )
+
+            for idx, res_name in enumerate(ordered_keys[:4]):
+                ax        = axes[idx]
+                pdb_label = gmm_results[res_name]['pdb_label']
+                lpr       = gmm_results[res_name][chi_key]['labels_per_run']
+                comps     = gmm_results[res_name][chi_key]['components']
+                raw_data  = get_all_frames(combined_data[res_name][chi_key])
+
+                # collect raw angle values at permeation event frames
+                event_angles = []
+                for run_name, frames in perm_frames.items():
+                    if run_name not in lpr:
+                        continue
+                    n_run = len(lpr[run_name])
+                    # get run offset in the concatenated raw array
+                    chi_data = combined_data[res_name][chi_key]
+                    run_start = 0
+                    for rn in sorted(chi_data.keys()):
+                        if rn == run_name:
+                            break
+                        run_start += len(chi_data[rn])
+
+                    run_raw = np.array(chi_data[run_name])
+                    for frame in frames:
+                        target = frame + offset
+                        if 0 <= target < n_run:
+                            event_angles.append(float(run_raw[target]))
+
+                if len(event_angles) == 0:
+                    ax.set_visible(False)
+                    continue
+
+                event_angles = np.array(event_angles)
+
+                # histogram of event frames
+                hist, bins = np.histogram(event_angles, bins=N_BINS, range=(-180, 180))
+                centers    = (bins[:-1] + bins[1:]) / 2
+                ax.bar(centers, hist, width=BIN_WIDTH, alpha=0.75,
+                       color=bar_color, edgecolor='none')
+                ax.text(0.97, 0.97, f'n = {len(event_angles)} events',
+                        transform=ax.transAxes, fontsize=13, ha='right', va='top',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                                  edgecolor='gray', alpha=0.8))
+
+                # compute occupancy at exit frames from labels
+                lpr      = gmm_results[res_name][chi_key]['labels_per_run']
+                n_events = len(event_angles)
+                event_labels = []
+                for run_name, frames in perm_frames.items():
+                    if run_name not in lpr:
+                        continue
+                    n_run = len(lpr[run_name])
+                    for frame in frames:
+                        target = frame + offset
+                        if 0 <= target < n_run:
+                            event_labels.append(float(lpr[run_name][target]))
+
+                # overlay GMM component means as vertical lines
+                # mean from full trajectory, occupancy % from exit frames only
+                for i, c in enumerate(comps):
+                    color      = COMPONENT_COLORS_LIST[i % len(COMPONENT_COLORS_LIST)]
+                    mean_val   = c['mean']
+                    # count how many exit-frame labels match this component
+                    exit_count = sum(1 for l in event_labels
+                                     if abs(l - mean_val) < 0.5)
+                    exit_pct   = exit_count / n_events * 100 if n_events > 0 else 0.0
+                    ax.axvline(mean_val, color=color, lw=2.5, ls='--', alpha=0.95,
+                               label=f'{mean_val:.0f}°  ({exit_pct:.0f}% at exit)')
+                    ax.axvspan(mean_val - c['std'], mean_val + c['std'],
+                               alpha=0.08, color=color)
+
+                ax.set_title(f'{pdb_label}', fontsize=30, fontweight='bold', pad=12)
+                ax.set_xlabel(f'{chi_label} Angle (degrees)', fontsize=26, fontweight='bold')
+                ax.set_ylabel('Count', fontsize=26, fontweight='bold')
+                ax.set_xlim(-180, 180)
+                ax.tick_params(axis='both', labelsize=20)
+                ax.grid(True, alpha=0.2, linestyle='--')
+                ax.set_facecolor('#F8F9FA')
+                ax.legend(fontsize=14, loc='upper right', framealpha=0.9,
+                          edgecolor='gray', title='GMM states (% at exit frames)',
+                          title_fontsize=12)
+
+            plt.tight_layout()
+            fname     = f'hist_{frame_label}_{group}_{chi_key}.png'
+            save_path = output_dir / fname
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f"  ✅ Saved: {save_path}")
+
+
 def write_debug_report(combined_data, gmm_results, combo_results,
                        output_dir, channel_type):
     """
@@ -1925,6 +2274,15 @@ Examples:
     ordered_asn, ordered_glu = plot_gmm_fits(
         combined_data, gmm_results, output_dir, channel_type=args.channel)
 
+    # example frames per combination — method-independent, run once
+    print("\n=== SAVING EXAMPLE FRAMES PER COMBINATION ===")
+    save_example_frames(combined_data, gmm_results, output_dir)
+
+    # run-coverage histograms — method-independent, run once
+    print("\n=== CREATING RUN COVERAGE HISTOGRAMS → run_coverage_histograms/ ===")
+    plot_run_colored_histograms(combined_data, gmm_results, output_dir,
+                                channel_type=args.channel)
+
     # ── run combinations + permeation for BOTH assignment methods ──────────
     methods = [
         ('probabilistic', 'labels',         'labels_per_run'),
@@ -1999,6 +2357,15 @@ Examples:
                             perm_combo, perm_dir, chi_key='chi2',
                             channel_type=args.channel, group=grp,
                             frame_label=frame_label)
+
+                    # raw angle histograms at event frames — method-independent
+                    # save directly in perm_dir (same for both methods)
+                    print(f"  Creating event histograms → ion_exit_{frame_label}/")
+                    plot_permeation_histograms(
+                        combined_data, gmm_results, perm_frames,
+                        perm_dir, channel_type=args.channel,
+                        offset=offset, frame_label=frame_label
+                    )
             else:
                 print("  No permeation_table.json files found — skipping")
 
@@ -2031,7 +2398,6 @@ Examples:
 if __name__ == '__main__':
     exit(main())
 
-    
 """
 python3 gmm_dihedral_analysis.py \
 /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/dihedral_analysis/combined_dihedral_data.pkl \

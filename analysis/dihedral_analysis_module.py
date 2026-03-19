@@ -57,8 +57,8 @@ def get_residue_lists(channel_type):
         asp_residues = [1105]
     elif channel_type == "G12_ML":
         glu_residues = [99, 424, 749, 1074]
-        asn_residues = [131, 456, 781]
-        asp_residues = [1106]
+        asn_residues = [456, 781, 1106]
+        asp_residues = [131]
     else:
         raise ValueError(f"Unknown channel type: {channel_type}")
     
@@ -66,6 +66,236 @@ def get_residue_lists(channel_type):
 
 
 def analyze_residue_orientations(u, channel_type="G12"):
+    """
+    Analyze dihedral angles for GLU, ASN, and ASP residues.
+    Includes extensive debug prints to verify correct residue/label mapping.
+    """
+
+    glu_residues, asn_residues, asp_residues = get_residue_lists(channel_type)
+
+    print(f"\n{'='*70}")
+    print(f"DIHEDRAL ANALYSIS - Channel type: {channel_type}")
+    print(f"{'='*70}")
+    print(f"Total frames: {len(u.trajectory)}")
+    print(f"GLU residues: {glu_residues}")
+    print(f"ASN residues: {asn_residues}")
+    print(f"ASP residues: {asp_residues}")
+
+    # ── DEBUG: verify converter gives correct labels ──────────────────────────
+    print(f"\n  {'─'*60}")
+    print(f"  PDB LABEL MAPPING VERIFICATION")
+    print(f"  {'─'*60}")
+    print(f"  {'ResID':>6}  {'List':>5}  {'PDB Label':>12}  Check")
+    print(f"  {'-'*50}")
+    all_ok = True
+    for resid in glu_residues:
+        lbl = convert_to_pdb_numbering(resid, channel_type)
+        prefix = lbl.split('.')[0] if '.' in lbl else '??'
+        ok = prefix in ('152', '141')
+        flag = '✅' if ok else '❌ WRONG — expected 152.x or 141.x'
+        print(f"  {resid:>6}  {'GLU':>5}  {lbl:>12}  {flag}")
+        if not ok: all_ok = False
+    for resid in asn_residues:
+        lbl = convert_to_pdb_numbering(resid, channel_type)
+        prefix = lbl.split('.')[0] if '.' in lbl else '??'
+        ok = prefix == '184'
+        flag = '✅' if ok else '❌ WRONG — expected 184.x'
+        print(f"  {resid:>6}  {'ASN':>5}  {lbl:>12}  {flag}")
+        if not ok: all_ok = False
+    for resid in asp_residues:
+        lbl = convert_to_pdb_numbering(resid, channel_type)
+        prefix = lbl.split('.')[0] if '.' in lbl else '??'
+        ok = prefix == '173'
+        flag = '✅' if ok else '❌ WRONG — expected 173.x'
+        print(f"  {resid:>6}  {'ASP':>5}  {lbl:>12}  {flag}")
+        if not ok: all_ok = False
+    if all_ok:
+        print(f"\n  ✅ ALL LABELS CORRECT")
+    else:
+        print(f"\n  ❌ LABEL ERRORS DETECTED — check convert_to_pdb_numbering and get_residue_lists!")
+    print(f"  {'─'*60}\n")
+    # ─────────────────────────────────────────────────────────────────────────
+
+    results = {}
+
+    def get_atom(resid, name):
+        ag = u.select_atoms(f"resid {resid} and name {name}")
+        return ag[0] if len(ag) else None
+
+    # -------------------------------------------------------------------------
+    # 1) GLU DIHEDRALS
+    # -------------------------------------------------------------------------
+    print("\n=== ANALYZING GLU RESIDUES ===")
+
+    for resid in glu_residues:
+        pdb_label = convert_to_pdb_numbering(resid, channel_type)
+        prefix    = pdb_label.split('.')[0] if '.' in pdb_label else '??'
+        print(f"GLU resid={resid}  pdb_label={pdb_label}  "
+              f"{'✅' if prefix in ('152','141') else '❌ WRONG LABEL'}")
+
+        # verify topology resname
+        probe   = u.select_atoms(f"resid {resid}")
+        resname = probe[0].resname if len(probe) > 0 else 'NOT FOUND'
+        print(f"  topology resname = {resname}  "
+              f"{'✅' if resname == 'GLU' else '⚠️  not GLU in topology'}")
+
+        res_ag = u.select_atoms(f"resid {resid}").residues
+        if len(res_ag) == 0:
+            print(f"  [WARN] GLU {resid} not found")
+            continue
+
+        res = res_ag[0]
+
+        chi1_sel = res.chi1_selection()
+        if chi1_sel is not None and len(chi1_sel) == 4:
+            dih1 = Dihedral([chi1_sel]).run()
+            chi1 = dih1.results.angles[:, 0]
+            print(f"  chi1: {len(chi1)} frames, mean={chi1.mean():.1f}°  ✅")
+        else:
+            print(f"  [WARN] χ1 missing")
+            chi1 = None
+
+        a_CA  = get_atom(resid, "CA")
+        a_CB  = get_atom(resid, "CB")
+        a_CG  = get_atom(resid, "CG")
+        a_CD  = get_atom(resid, "CD")
+
+        if all([a_CA, a_CB, a_CG, a_CD]):
+            ag2  = u.atoms[[a_CA.ix, a_CB.ix, a_CG.ix, a_CD.ix]]
+            dih2 = Dihedral([ag2]).run()
+            chi2 = dih2.results.angles[:, 0]
+            print(f"  chi2: {len(chi2)} frames, mean={chi2.mean():.1f}°  ✅")
+        else:
+            print(f"  [WARN] χ2 missing atoms  CA={a_CA} CB={a_CB} CG={a_CG} CD={a_CD}")
+            chi2 = None
+
+        a_OE1 = get_atom(resid, "OE1")
+        if all([a_CB, a_CG, a_CD, a_OE1]):
+            ag3  = u.atoms[[a_CB.ix, a_CG.ix, a_CD.ix, a_OE1.ix]]
+            dih3 = Dihedral([ag3]).run()
+            chi3 = dih3.results.angles[:, 0]
+            print(f"  chi3: {len(chi3)} frames, mean={chi3.mean():.1f}°  ✅")
+        else:
+            print(f"  [WARN] χ3 missing atoms")
+            chi3 = None
+
+        results[f"GLU_{resid}"] = {
+            "chi1": chi1, "chi2": chi2, "chi3": chi3,
+            "pdb_label": pdb_label, "residue_type": "GLU"
+        }
+
+    # -------------------------------------------------------------------------
+    # 2) ASN DIHEDRALS
+    # -------------------------------------------------------------------------
+    print("\n=== ANALYZING ASN RESIDUES ===")
+
+    for resid in asn_residues:
+        pdb_label = convert_to_pdb_numbering(resid, channel_type)
+        prefix    = pdb_label.split('.')[0] if '.' in pdb_label else '??'
+        print(f"ASN resid={resid}  pdb_label={pdb_label}  "
+              f"{'✅' if prefix == '184' else '❌ WRONG LABEL — expected 184.x'}")
+
+        probe   = u.select_atoms(f"resid {resid}")
+        resname = probe[0].resname if len(probe) > 0 else 'NOT FOUND'
+        print(f"  topology resname = {resname}  "
+              f"{'✅' if resname == 'ASN' else '⚠️  not ASN in topology'}")
+
+        if len(u.select_atoms(f"resid {resid}")) == 0:
+            print(f"  [WARN] ASN {resid} not found")
+            continue
+
+        a_N   = get_atom(resid, "N")
+        a_CA  = get_atom(resid, "CA")
+        a_CB  = get_atom(resid, "CB")
+        a_CG  = get_atom(resid, "CG")
+        a_OD1 = get_atom(resid, "OD1")
+
+        if all([a_N, a_CA, a_CB, a_CG]):
+            ag1  = u.atoms[[a_N.ix, a_CA.ix, a_CB.ix, a_CG.ix]]
+            dih1 = Dihedral([ag1]).run()
+            chi1 = dih1.results.angles[:, 0]
+            print(f"  chi1: {len(chi1)} frames, mean={chi1.mean():.1f}°  ✅")
+        else:
+            print(f"  [WARN] χ1 missing atoms  N={a_N} CA={a_CA} CB={a_CB} CG={a_CG}")
+            chi1 = None
+
+        if all([a_CA, a_CB, a_CG, a_OD1]):
+            ag2  = u.atoms[[a_CA.ix, a_CB.ix, a_CG.ix, a_OD1.ix]]
+            dih2 = Dihedral([ag2]).run()
+            chi2 = dih2.results.angles[:, 0]
+            print(f"  chi2: {len(chi2)} frames, mean={chi2.mean():.1f}°  ✅")
+        else:
+            print(f"  [WARN] χ2 missing atoms  CA={a_CA} CB={a_CB} CG={a_CG} OD1={a_OD1}")
+            chi2 = None
+
+        results[f"ASN_{resid}"] = {
+            "chi1": chi1, "chi2": chi2,
+            "pdb_label": pdb_label, "residue_type": "ASN"
+        }
+
+    # -------------------------------------------------------------------------
+    # 3) ASP DIHEDRALS
+    # -------------------------------------------------------------------------
+    print("\n=== ANALYZING ASP RESIDUES ===")
+
+    for resid in asp_residues:
+        pdb_label = convert_to_pdb_numbering(resid, channel_type)
+        prefix    = pdb_label.split('.')[0] if '.' in pdb_label else '??'
+        print(f"ASP resid={resid}  pdb_label={pdb_label}  "
+              f"{'✅' if prefix == '173' else '❌ WRONG LABEL — expected 173.x'}")
+
+        probe   = u.select_atoms(f"resid {resid}")
+        resname = probe[0].resname if len(probe) > 0 else 'NOT FOUND'
+        print(f"  topology resname = {resname}  "
+              f"{'✅' if resname == 'ASP' else '⚠️  not ASP in topology'}")
+
+        if len(u.select_atoms(f"resid {resid}")) == 0:
+            print(f"  [WARN] ASP {resid} not found")
+            continue
+
+        a_N   = get_atom(resid, "N")
+        a_CA  = get_atom(resid, "CA")
+        a_CB  = get_atom(resid, "CB")
+        a_CG  = get_atom(resid, "CG")
+        a_OD1 = get_atom(resid, "OD1")
+
+        if all([a_N, a_CA, a_CB, a_CG]):
+            ag1  = u.atoms[[a_N.ix, a_CA.ix, a_CB.ix, a_CG.ix]]
+            dih1 = Dihedral([ag1]).run()
+            chi1 = dih1.results.angles[:, 0]
+            print(f"  chi1: {len(chi1)} frames, mean={chi1.mean():.1f}°  ✅")
+        else:
+            print(f"  [WARN] χ1 missing atoms  N={a_N} CA={a_CA} CB={a_CB} CG={a_CG}")
+            chi1 = None
+
+        if all([a_CA, a_CB, a_CG, a_OD1]):
+            ag2  = u.atoms[[a_CA.ix, a_CB.ix, a_CG.ix, a_OD1.ix]]
+            dih2 = Dihedral([ag2]).run()
+            chi2 = dih2.results.angles[:, 0]
+            print(f"  chi2: {len(chi2)} frames, mean={chi2.mean():.1f}°  ✅")
+        else:
+            print(f"  [WARN] χ2 missing atoms  CA={a_CA} CB={a_CB} CG={a_CG} OD1={a_OD1}")
+            chi2 = None
+
+        results[f"ASP_{resid}"] = {
+            "chi1": chi1, "chi2": chi2,
+            "pdb_label": pdb_label, "residue_type": "ASP"
+        }
+
+    # ── DEBUG: final summary ──────────────────────────────────────────────────
+    print(f"\n  {'─'*60}")
+    print(f"  RESULTS SUMMARY")
+    print(f"  {'─'*60}")
+    print(f"  {'Key':>15}  {'PDB Label':>12}  {'Type':>5}  chi1  chi2")
+    for key, val in results.items():
+        c1 = '✅' if val['chi1'] is not None else '❌'
+        c2 = '✅' if val['chi2'] is not None else '❌'
+        print(f"  {key:>15}  {val['pdb_label']:>12}  "
+              f"{val['residue_type']:>5}  {c1}    {c2}")
+    print(f"  {'─'*60}\n")
+    # ─────────────────────────────────────────────────────────────────────────
+
+    return results
     """
     Analyze dihedral angles for GLU, ASN, and ASP residues.
     

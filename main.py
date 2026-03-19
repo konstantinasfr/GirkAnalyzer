@@ -423,14 +423,14 @@ def main():
     #                   use_ca=False)
 
 
-    from analysis.ion_force_correlation_analysis import run_force_correlation_analysis
+    # from analysis.ion_force_correlation_analysis import run_force_correlation_analysis
 
-    force_analyzer = run_force_correlation_analysis(
-        universe=u, channel1=ch1, channel2=ch2,
-        permeation_events=analyzer.permeation_events,
-        asn_residues=asn_residues, glu_residues=glu_residues,
-        results_dir=results_dir / "force_correlation_analysis"
-    )
+    # force_analyzer = run_force_correlation_analysis(
+    #     universe=u, channel1=ch1, channel2=ch2,
+    #     permeation_events=analyzer.permeation_events,
+    #     asn_residues=asn_residues, glu_residues=glu_residues,
+    #     results_dir=results_dir / "force_correlation_analysis"
+    # )
 
     from analysis.dihedral_analysis_module import run_dihedral_analysis
 
@@ -439,6 +439,29 @@ def main():
         u=u,                           # Your existing Universe
         channel_type=args.channel_type,        # Or args.channel_type
         results_dir=results_dir/ "dihedral_analysis"       # Your existing results directory
+    )
+
+    #     # at the top of main.py
+    # if args.channel_type == "G12_ML":
+    #     from analysis.ligand_distance_analysis import run_ligand_distance_analysis
+    #     run_ligand_distance_analysis(
+    #         u=u,
+    #         results_dir=results_dir,
+    #         start_frame=start_frame,
+    #         end_frame=end_frame
+    #     )
+
+    from analysis.ion_proximity_analysis import run_ion_proximity_analysis
+
+    run_ion_proximity_analysis(
+        u=u,
+        results_dir=results_dir,
+        glu_residues=glu_residues,
+        asn_residues=asn_residues,
+        channel_type=args.channel_type,
+        start_frame=start_frame,
+        end_frame=end_frame,
+        threshold=4
     )
 
 # # ========== GEOMETRY ANALYSIS (AFTER MAIN ANALYSIS) ==========
