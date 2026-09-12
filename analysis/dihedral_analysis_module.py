@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
+from analysis.converter import convert_to_pdb_numbering
 
 try:
     import MDAnalysis as mda
@@ -19,30 +20,7 @@ except ImportError:
     print("WARNING: MDAnalysis not found. Dihedral analysis will be skipped.")
 
 
-def convert_to_pdb_numbering(residue_id, channel_type):
-    """Converts a residue ID to PDB-style numbering."""
-    if channel_type == "G2":
-        glu_mapping = {98: "152.A", 426: "152.C", 754: "152.B", 1082: "152.D"}
-        asn_mapping = {130: "184.A", 458: "184.C", 786: "184.B", 1114: "184.D"}
-        if residue_id in glu_mapping:
-            return glu_mapping[residue_id]
-        if residue_id in asn_mapping:
-            return asn_mapping[residue_id]
-    elif channel_type == "G12" or channel_type == "G12_GAT":
-        glu_mapping = {422: "152.A", 98: "152.B", 747: "152.C", 1073: "141.D"}
-        asn_asp_mapping = {454: "184.A", 130: "184.B", 779: "184.C", 1105: "173.D"}
-        if residue_id in glu_mapping:
-            return glu_mapping[residue_id]
-        if residue_id in asn_asp_mapping:
-            return asn_asp_mapping[residue_id]
-    elif channel_type == "G12_ML":
-        glu_mapping = {749: "152.A", 1074: "152.B", 424: "152.C", 99: "141.D"}
-        asn_asp_mapping = {781: "184.A", 1106: "184.B", 456: "184.C", 131: "173.D"}
-        if residue_id in glu_mapping:
-            return glu_mapping[residue_id]
-        if residue_id in asn_asp_mapping:
-            return asn_asp_mapping[residue_id]
-    return str(residue_id)
+
 
 
 def get_residue_lists(channel_type):
@@ -51,10 +29,14 @@ def get_residue_lists(channel_type):
         glu_residues = [98, 426, 754, 1082]
         asn_residues = [130, 458, 786, 1114]
         asp_residues = []
-    elif channel_type == "G12" or channel_type == "G12_GAT":
+    elif channel_type == "G12_GAT":
         glu_residues = [98, 422, 747, 1073]
         asn_residues = [130, 454, 779]
         asp_residues = [1105]
+    elif channel_type == "G12":
+        glu_residues = [99, 424, 748, 1073]
+        asn_residues = [456, 780, 1105]
+        asp_residues = [131]
     elif channel_type == "G12_ML":
         glu_residues = [99, 424, 749, 1074]
         asn_residues = [456, 781, 1106]

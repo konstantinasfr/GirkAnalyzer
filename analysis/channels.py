@@ -42,7 +42,8 @@ class Channel:
             self.lower_center[2] -= offset
         elif gate_num in [1]:
             self.lower_center[2] -= offset
-
+        elif gate_num in [3]:
+            self.lower_center[2] -= 2
 
         self.channel_vector = self.lower_center - self.upper_center
         self.channel_length = np.linalg.norm(self.channel_vector)

@@ -124,7 +124,7 @@ class ProximitySummaryAcrossRuns:
                 return f"ASN {pdb_num}"
     
     def calculate_statistics(self):
-        """Calculate mean and std for each residue across runs."""
+        """Calculate mean and std for each residue across runs (mean of per-run percentages)."""
         stats = {
             'glu': {},
             'asn': {}
@@ -171,6 +171,48 @@ class ProximitySummaryAcrossRuns:
             }
         
         return stats
+
+    def calculate_pooled_statistics(self):
+        """
+        Calculate percentages by pooling raw frame counts across ALL runs,
+        as if every run were one long concatenated trajectory. This is
+        different from calculate_statistics(), which averages per-run
+        percentages (and can be skewed by short runs counting as much as
+        long ones). Here, every individual frame counts equally.
+        """
+        pooled = {'glu': {}, 'asn': {}, 'aggregate': {}}
+
+        total_frames_all = sum(data['total_frames'] for data in self.run_data.values())
+        pooled['total_frames_all'] = total_frames_all
+        pooled['n_runs'] = len(self.run_data)
+
+        # GLU: raw counts are stored per run, so sum them directly
+        for resid in self.glu_residues:
+            total_count = sum(data['individual_glu_counts'][str(resid)] for data in self.run_data.values())
+            pooled['glu'][resid] = {
+                'count': total_count,
+                'percentage': 100.0 * total_count / total_frames_all if total_frames_all > 0 else np.nan
+            }
+
+        # ASN/ASP: same approach
+        for resid in self.asn_residues:
+            total_count = sum(data['individual_asn_counts'][str(resid)] for data in self.run_data.values())
+            pooled['asn'][resid] = {
+                'count': total_count,
+                'percentage': 100.0 * total_count / total_frames_all if total_frames_all > 0 else np.nan
+            }
+
+        # Aggregate categories ("Any GLU" / "Any ASN" / "Any Residue") are only
+        # stored as per-run percentages in the JSON, not raw counts. Pooling
+        # those correctly means frame-weighting each run's percentage before
+        # combining, which is mathematically equivalent to pooling the
+        # underlying counts: sum(count_i) / sum(frames_i)
+        #                   = sum(pct_i * frames_i / 100) / sum(frames_i)
+        for key in ['percentage_any_glu', 'percentage_any_asn', 'percentage_any_residue']:
+            weighted_sum = sum(data[key] * data['total_frames'] for data in self.run_data.values())
+            pooled['aggregate'][key] = weighted_sum / total_frames_all if total_frames_all > 0 else np.nan
+
+        return pooled
     
     def plot_summary_all_residues(self, stats):
         """Create summary bar plot for all 8 residues with error bars and individual run points."""
@@ -207,7 +249,7 @@ class ProximitySummaryAcrossRuns:
         ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=18)  # Increased
         ax.set_ylabel('Percentage of Frames (%)', fontsize=20)  # Increased
         ax.set_xlabel('Residue', fontsize=20)  # Increased
-        ax.set_title(f'Ion Proximity Summary Across {len(self.run_data)} Runs (≤3.0 Å)', 
+        ax.set_title(f'{self.channel_type}: Ion Proximity Summary Across {len(self.run_data)} Runs (\u22643.0 \u00c5)', 
                     fontsize=22, fontweight='bold')  # Increased
         ax.set_ylim(0, 110)
         ax.grid(True, alpha=0.3, axis='y')
@@ -217,7 +259,7 @@ class ProximitySummaryAcrossRuns:
         for bar, mean, std in zip(bars, means, stds):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + std + 2,
-                    f'{mean:.1f}%\n±{std:.1f}',
+                    f'{mean:.1f}%\n\u00b1{std:.1f}',
                     ha='center', va='bottom', fontsize=14, fontweight='bold')  # Increased and bold
         
         # Add legend
@@ -266,7 +308,7 @@ class ProximitySummaryAcrossRuns:
         ax1.set_xticks(x1)
         ax1.set_xticklabels(glu_labels, fontsize=18)  # Increased
         ax1.set_ylabel('Percentage of Frames (%)', fontsize=20)  # Increased
-        ax1.set_title(f'GLU Residues - Summary (n={len(self.run_data)} runs)', 
+        ax1.set_title(f'{self.channel_type}: GLU Residues - Summary (n={len(self.run_data)} runs)', 
                     fontsize=20, fontweight='bold')  # Increased
         ax1.set_ylim(0, 110)
         ax1.grid(True, alpha=0.3, axis='y')
@@ -275,7 +317,7 @@ class ProximitySummaryAcrossRuns:
         for bar, mean, std in zip(bars1, glu_means, glu_stds):
             height = bar.get_height()
             ax1.text(bar.get_x() + bar.get_width()/2., height + std + 2,
-                    f'{mean:.1f}%\n±{std:.1f}',
+                    f'{mean:.1f}%\n\u00b1{std:.1f}',
                     ha='center', va='bottom', fontsize=15, fontweight='bold')  # Increased and bold
         
         # ASN plot
@@ -299,7 +341,7 @@ class ProximitySummaryAcrossRuns:
         ax2.set_xticks(x2)
         ax2.set_xticklabels(asn_labels, fontsize=18)  # Increased
         ax2.set_ylabel('Percentage of Frames (%)', fontsize=20)  # Increased
-        ax2.set_title(f'ASN/ASP Residues - Summary (n={len(self.run_data)} runs)', 
+        ax2.set_title(f'{self.channel_type}: ASN/ASP Residues - Summary (n={len(self.run_data)} runs)', 
                     fontsize=20, fontweight='bold')  # Increased
         ax2.set_ylim(0, 110)
         ax2.grid(True, alpha=0.3, axis='y')
@@ -308,7 +350,7 @@ class ProximitySummaryAcrossRuns:
         for bar, mean, std in zip(bars2, asn_means, asn_stds):
             height = bar.get_height()
             ax2.text(bar.get_x() + bar.get_width()/2., height + std + 2,
-                    f'{mean:.1f}%\n±{std:.1f}',
+                    f'{mean:.1f}%\n\u00b1{std:.1f}',
                     ha='center', va='bottom', fontsize=15, fontweight='bold')  # Increased and bold
         
         # Add legend to first plot
@@ -361,7 +403,7 @@ class ProximitySummaryAcrossRuns:
         ax.set_xticks(x)
         ax.set_xticklabels(categories, fontsize=20)  # Increased
         ax.set_ylabel('Percentage of Frames (%)', fontsize=22)  # Increased
-        ax.set_title(f'Aggregate Proximity Summary (n={len(self.run_data)} runs, ≤3.0 Å)', 
+        ax.set_title(f'{self.channel_type}: Aggregate Proximity Summary (n={len(self.run_data)} runs, \u22643.0 \u00c5)', 
                     fontsize=24, fontweight='bold')  # Increased
         ax.set_ylim(0, 120)
         ax.grid(True, alpha=0.3, axis='y')
@@ -371,7 +413,7 @@ class ProximitySummaryAcrossRuns:
         for bar, mean, std in zip(bars, means, stds):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + std + 3,
-                    f'{mean:.1f}%\n±{std:.1f}',
+                    f'{mean:.1f}%\n\u00b1{std:.1f}',
                     ha='center', va='bottom', fontsize=18, fontweight='bold')  # Increased significantly
         
         # Add legend
@@ -387,6 +429,159 @@ class ProximitySummaryAcrossRuns:
         plt.savefig(plot_file, dpi=150, bbox_inches='tight')  # Reduced to 150
         plt.close()
         print(f"Aggregate summary plot saved to: {plot_file}")
+
+    def plot_pooled_summary(self, pooled):
+        """
+        Create a bar plot treating all runs as one long concatenated trajectory:
+        percentage = (total frames within threshold across ALL runs) /
+                     (total frames across ALL runs) * 100.
+        No error bars here since there's only one pooled value per residue,
+        not a distribution across runs.
+        """
+        fig, ax = plt.subplots(figsize=(14, 8))
+
+        all_residues = list(self.glu_residues) + list(self.asn_residues)
+        percentages = ([pooled['glu'][resid]['percentage'] for resid in self.glu_residues] +
+                       [pooled['asn'][resid]['percentage'] for resid in self.asn_residues])
+        counts = ([pooled['glu'][resid]['count'] for resid in self.glu_residues] +
+                  [pooled['asn'][resid]['count'] for resid in self.asn_residues])
+
+        labels = ([self.get_residue_label(resid, True) for resid in self.glu_residues] +
+                  [self.get_residue_label(resid, False) for resid in self.asn_residues])
+
+        colors = ['red'] * len(self.glu_residues) + ['blue'] * len(self.asn_residues)
+
+        x = range(len(all_residues))
+        bars = ax.bar(x, percentages, color=colors, alpha=0.5,
+                      edgecolor='black', linewidth=1.5, zorder=3)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=18)
+        ax.set_ylabel('Percentage of Pooled Frames (%)', fontsize=20)
+        ax.set_xlabel('Residue', fontsize=20)
+        ax.set_title(
+            f'{self.channel_type}: Ion Proximity Summary - All {pooled["n_runs"]} Runs Pooled '
+            f'({pooled["total_frames_all"]:,} total frames, \u22643.0 \u00c5)',
+            fontsize=20, fontweight='bold'
+        )
+        ax.set_ylim(0, max(percentages) * 1.25 if percentages else 100)
+        ax.grid(True, alpha=0.3, axis='y', zorder=0)
+        ax.set_axisbelow(True)
+        ax.tick_params(axis='y', labelsize=16)
+
+        for bar, pct, count in zip(bars, percentages, counts):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width() / 2., height + max(percentages) * 0.02,
+                    f'{pct:.1f}%\n(n={count:,})',
+                    ha='center', va='bottom', fontsize=14, fontweight='bold')
+
+        legend_elements = [
+            Patch(facecolor='red', alpha=0.5, edgecolor='black', label='GLU'),
+            Patch(facecolor='blue', alpha=0.5, edgecolor='black', label='ASN/ASP'),
+        ]
+        ax.legend(handles=legend_elements, loc='upper left', fontsize=16)
+
+        plt.tight_layout()
+        plot_file = self.output_dir / "proximity_summary_pooled_residues.png"
+        plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"Pooled summary plot saved to: {plot_file}")
+
+    def plot_pooled_aggregate(self, pooled):
+        """
+        Pooled version of the aggregate summary (Any GLU / Any ASN/ASP /
+        Any Residue), computed as one frame-weighted percentage across all
+        runs rather than a mean-of-run-percentages with error bars.
+        """
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        categories = ['Any GLU', 'Any ASN/ASP', 'Any Residue']
+        percentages = [
+            pooled['aggregate']['percentage_any_glu'],
+            pooled['aggregate']['percentage_any_asn'],
+            pooled['aggregate']['percentage_any_residue'],
+        ]
+
+        colors = ['red', 'blue', 'green']
+        x = range(len(categories))
+        bars = ax.bar(x, percentages, color=colors, alpha=0.5,
+                      edgecolor='black', linewidth=2, zorder=3)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(categories, fontsize=20)
+        ax.set_ylabel('Percentage of Pooled Frames (%)', fontsize=22)
+        ax.set_title(
+            f'{self.channel_type}: Aggregate Proximity Summary - All {pooled["n_runs"]} Runs Pooled\n'
+            f'({pooled["total_frames_all"]:,} total frames, \u22643.0 \u00c5)',
+            fontsize=20, fontweight='bold'
+        )
+        ax.set_ylim(0, 110)
+        ax.grid(True, alpha=0.3, axis='y', zorder=0)
+        ax.set_axisbelow(True)
+        ax.tick_params(axis='y', labelsize=18)
+
+        for bar, pct in zip(bars, percentages):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width() / 2., height + 2,
+                    f'{pct:.1f}%',
+                    ha='center', va='bottom', fontsize=18, fontweight='bold')
+
+        plt.tight_layout()
+        plot_file = self.output_dir / "proximity_summary_pooled_aggregate.png"
+        plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"Pooled aggregate summary plot saved to: {plot_file}")
+
+    def save_pooled_statistics_table(self, pooled):
+        """Save pooled statistics to CSV."""
+        rows = []
+
+        for resid in self.glu_residues:
+            label = self.get_residue_label(resid, True)
+            rows.append({
+                'Residue': label,
+                'Type': 'GLU',
+                'Pooled_Count': pooled['glu'][resid]['count'],
+                'Pooled_Percentage (%)': pooled['glu'][resid]['percentage'],
+            })
+
+        for resid in self.asn_residues:
+            label = self.get_residue_label(resid, False)
+            residue_type = 'ASP' if (self.channel_type == "G12" and resid == 1105) else 'ASN'
+            rows.append({
+                'Residue': label,
+                'Type': residue_type,
+                'Pooled_Count': pooled['asn'][resid]['count'],
+                'Pooled_Percentage (%)': pooled['asn'][resid]['percentage'],
+            })
+
+        df = pd.DataFrame(rows)
+        csv_file = self.output_dir / "proximity_summary_pooled_statistics.csv"
+        df.to_csv(csv_file, index=False)
+        print(f"Pooled statistics table saved to: {csv_file}")
+
+        txt_file = self.output_dir / "proximity_summary_pooled_statistics.txt"
+        with open(txt_file, 'w') as f:
+            f.write(f"POOLED ION PROXIMITY STATISTICS ({pooled['n_runs']} RUNS, "
+                     f"{pooled['total_frames_all']:,} TOTAL FRAMES)\n")
+            f.write("=" * 80 + "\n\n")
+            f.write("INDIVIDUAL RESIDUES:\n")
+            f.write("-" * 80 + "\n")
+            f.write(f"{'Residue':<15} {'Type':<8} {'Pooled Count':<15} {'Pooled %':<10}\n")
+            f.write("-" * 80 + "\n")
+            for _, row in df.iterrows():
+                f.write(f"{row['Residue']:<15} {row['Type']:<8} "
+                        f"{row['Pooled_Count']:<15} {row['Pooled_Percentage (%)']:.2f}\n")
+
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("AGGREGATE STATISTICS (frame-weighted pooling):\n")
+            f.write("-" * 80 + "\n")
+            for key, label in [('percentage_any_glu', 'Any GLU'),
+                                ('percentage_any_asn', 'Any ASN/ASP'),
+                                ('percentage_any_residue', 'Any Residue')]:
+                f.write(f"{label:<20} Pooled %: {pooled['aggregate'][key]:.2f}%\n")
+
+        print(f"Pooled statistics text file saved to: {txt_file}")
         
     def save_statistics_table(self, stats):
         """Save statistics to CSV and text files."""
@@ -465,7 +660,7 @@ class ProximitySummaryAcrossRuns:
             print("Error: No valid run data found!")
             return
         
-        # Calculate statistics
+        # Calculate statistics (mean of per-run percentages, with error bars)
         print("\nCalculating statistics...")
         stats = self.calculate_statistics()
         
@@ -478,6 +673,17 @@ class ProximitySummaryAcrossRuns:
         # Save statistics
         print("\nSaving statistics tables...")
         self.save_statistics_table(stats)
+
+        # Pooled statistics (all runs concatenated into one long trajectory)
+        print("\nCalculating pooled statistics (all runs as one trajectory)...")
+        pooled = self.calculate_pooled_statistics()
+
+        print("\nGenerating pooled summary plots...")
+        self.plot_pooled_summary(pooled)
+        self.plot_pooled_aggregate(pooled)
+
+        print("\nSaving pooled statistics tables...")
+        self.save_pooled_statistics_table(pooled)
         
         print("\n" + "="*70)
         print("SUMMARY ANALYSIS COMPLETE!")
@@ -510,3 +716,9 @@ if __name__ == "__main__":
 
 # python3 proximity_summary_across_runs.py --base_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 --channel_type G12
 # python3 proximity_summary_across_runs.py --base_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 --channel_type G12
+'''
+python3 proximity_summary_across_runs.py --base_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2 --channel_type G2
+python3 proximity_summary_across_runs.py --base_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 --channel_type G12
+python3 proximity_summary_across_runs.py --base_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_ML --channel_type G12_ML
+python3 proximity_summary_across_runs.py --base_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_GAT --channel_type G12_GAT
+'''

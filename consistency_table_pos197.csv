@@ -1,0 +1,5 @@
+Subunit,Centroid_phi,Centroid_psi,Median_phi,Median_psi,Avg_spread_deg,Max_spread_deg,N_runs_with_split,N_runs_total,N_runs_near_median_end,N_split_runs_near_median_start,Consistency
+G1,-56.0,140.0,-55.0,140.0,6.3,11.6,2,20,20,0,Extremely consistent — nearly every run lands almost exactly here
+2a,-55.0,140.0,-53.0,141.0,5.6,18.1,8,20,19,0,Extremely consistent — nearly every run lands almost exactly here
+2c,-52.0,139.0,-52.0,138.0,5.1,14.8,0,20,19,0,Extremely consistent — nearly every run lands almost exactly here
+2b,-71.0,137.0,-56.0,139.0,25.8,75.5,7,20,14,2,Moderately consistent

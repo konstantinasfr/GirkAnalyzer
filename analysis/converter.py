@@ -68,32 +68,102 @@ import pandas as pd
 #     else:
 #         return "SF"
 
+#--------------------------------------------------------------------------------
 def get_first_ion_id_part(ion_id):
     return ion_id.split('_')[0]
 
 
-def convert_to_pdb_numbering(residue_id, channel_type):
-    """Converts a residue ID to PDB-style numbering."""
-    if channel_type == "G2":
-        glu_mapping = {98: "152.A", 426: "152.C", 754: "152.B", 1082: "152.D"}
-        asn_mapping = {130: "184.A", 458: "184.C", 786: "184.B", 1114: "184.D"}
-        if residue_id in glu_mapping:
-            return glu_mapping[residue_id]
-        if residue_id in asn_mapping:
-            return asn_mapping[residue_id]
-    elif channel_type == "G12" or channel_type == "G12_GAT" :
-        glu_mapping = {422: "152.A", 98: "152.B", 747: "152.C", 1073: "141.G1"}
-        asn_asp_mapping = {454: "184.A", 130: "184.B", 779: "184.C", 1105: "173.G1"}
-        if residue_id in glu_mapping:
-            return glu_mapping[residue_id]
-        if residue_id in asn_asp_mapping:
-            return asn_asp_mapping[residue_id]
-    elif channel_type == "G12_ML":
-        glu_mapping = {749: "152.A", 1074: "152.B", 424: "152.C", 99: "141.G1"}
-        asn_asp_mapping = {781: "184.A", 1106: "184.B", 456: "184.C", 131: "173.G1"}
-        if residue_id in glu_mapping:
-            return glu_mapping[residue_id]
-        if residue_id in asn_asp_mapping:
-            return asn_asp_mapping[residue_id]
-    return str(residue_id)
+# def convert_to_pdb_numbering(residue_id, channel_type):
+#     """Converts a residue ID to PDB-style numbering."""
+#     if channel_type == "G2":
+#         glu_mapping = {98: "152.A", 426: "152.C", 754: "152.B", 1082: "152.D"}
+#         asn_mapping = {130: "184.A", 458: "184.C", 786: "184.B", 1114: "184.D"}
+#         if residue_id in glu_mapping:
+#             return glu_mapping[residue_id]
+#         if residue_id in asn_mapping:
+#             return asn_mapping[residue_id]
+#     elif channel_type == "G12_GAT" :
+#         glu_mapping = {422: "152.A", 98: "152.B", 747: "152.C", 1073: "141.G1"}
+#         asn_asp_mapping = {454: "184.A", 130: "184.B", 779: "184.C", 1105: "173.G1"}
+#         if residue_id in glu_mapping:
+#             return glu_mapping[residue_id]
+#         if residue_id in asn_asp_mapping:
+#             return asn_asp_mapping[residue_id]
+#     elif channel_type == "G12":
+#         glu_mapping = {748: "152.A", 1073: "152.B", 424: "152.C", 99: "141.G1"}
+#         asn_asp_mapping = {780: "184.A", 1105: "184.B", 456: "184.C", 131: "173.G1"}
+#         if residue_id in glu_mapping:
+#             return glu_mapping[residue_id]
+#         if residue_id in asn_asp_mapping:
+#             return asn_asp_mapping[residue_id]
+#     elif channel_type == "G12_ML":
+#         glu_mapping = {749: "152.A", 1074: "152.B", 424: "152.C", 99: "141.G1"}
+#         asn_asp_mapping = {781: "184.A", 1106: "184.B", 456: "184.C", 131: "173.G1"}
+#         if residue_id in glu_mapping:
+#             return glu_mapping[residue_id]
+#         if residue_id in asn_asp_mapping:
+#             return asn_asp_mapping[residue_id]
+#     return str(residue_id)
     
+
+"""
+analysis/converter.py
+======================
+Unified residue ID -> PDB numbering converter.
+
+Use to_pdb(resid, channel_type) everywhere.
+The old convert_to_pdb_numbering is kept as a backwards-compatibility shim.
+"""
+
+
+def to_pdb(resid: int, channel_type: str) -> str:
+    """
+    Convert an MDAnalysis resid to PDB-style numbering.
+
+    Supported channel_type values (case-insensitive):
+        "G12", "G2"        – same offsets
+        "G12_ML", "ML"
+        "G12_GAT", "GAT"
+
+    Returns str(resid) for unknown channel types.
+    """
+    ct = channel_type.upper().strip()
+
+    if ct in ("G2"):
+        END1, END2, END3, END4 = 328, 656, 984, 1312
+        o = 54
+        if   resid <= END1: return f"{resid + o}.2a"
+        elif resid <= END2: return f"{resid - END1 + o}.2c"
+        elif resid <= END3: return f"{resid - END2 + o}.2b"
+        elif resid <= END4: return f"{resid - END3 + o}.2d"
+    elif ct in ("G12"):
+        END1, END2, END3, END4 = 326, 650, 975, 1300
+        o1, o = 42, 54
+        if   resid <= END1: return f"{resid + o1}.G1"
+        elif resid <= END2: return f"{resid - END1 + o}.2b"
+        elif resid <= END3: return f"{resid - END2 + o}.2a"
+        elif resid <= END4: return f"{resid - END3 + o}.2c"
+
+    elif ct in ("G12_ML", "ML"):
+        END1, END2, END3, END4 = 326, 651, 976, 1300
+        o1, o = 42, 53
+        if   resid <= END1: return f"{resid + o1}.G1"
+        elif resid <= END2: return f"{resid - END1 + 1 + o}.2c"
+        elif resid <= END3: return f"{resid - END2 + 1 + o}.2a"
+        elif resid <= END4: return f"{resid - END3 + 1 + o}.2b"
+
+    elif ct in ("G12_GAT", "GAT"):
+        END1, END2, END3, END4 = 324, 649, 974, 1300
+        o1, o = 42, 54
+        if   resid <= END1: return f"{resid + o}.2b"
+        elif resid <= END2: return f"{resid - END1 + o}.2a"
+        elif resid <= END3: return f"{resid - END2 + o}.2c"
+        elif resid <= END4: return f"{resid - END3 + o1}.G1"
+
+    return str(resid)
+
+
+# Backwards-compatibility shim — existing code calling this still works unchanged
+def convert_to_pdb_numbering(residue_id: int, channel_type: str) -> str:
+    """Deprecated — use to_pdb() instead."""
+    return to_pdb(residue_id, channel_type)

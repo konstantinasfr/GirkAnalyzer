@@ -409,4 +409,7 @@ if __name__ == "__main__":
 # Or with custom output directory:
 # python aggregate_duration_results.py /path/to/G12 --threshold 3.0 --min_duration 5 --output_dir /path/to/output
 
+'''
 # python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12  --threshold 3.0 --min_duration 5 --output_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/aggregate_duration_results
+# python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2  --threshold 3.0 --min_duration 5 --output_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/aggregate_duration_results
+'''
