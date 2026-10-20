@@ -2,6 +2,11 @@ import MDAnalysis as mda
 import numpy as np
 import json
 from pathlib import Path
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+from matplotlib.ticker import MaxNLocator
 from analysis.converter import convert_to_pdb_numbering
 
 
@@ -264,6 +269,8 @@ class ClosestResidueAnalysis:
         return {
             'ion_id': int(ion_id),
             'event_start_frame': int(event['start_1']),
+            'end_2_frame': int(end_2_frame),
+            'end_3_frame': int(end_3_frame),
             'case_1_end_2_closest': case_1_result,  # Just closest at end_2
             'case_2_end_2_threshold': case_2_result,  # Walk backwards to threshold
             'case_3_end_3_closest': case_3_result,  # Just closest at end_3
@@ -351,6 +358,8 @@ class ClosestResidueAnalysis:
         
         output_data = {
             'threshold': self.threshold,
+            'channel_type': self.channel_type,
+            'residue_types': self.residue_types,
             'asn_residues': self.asn_residues,
             'glu_residues': self.glu_residues,
             'results': self.results
@@ -476,6 +485,216 @@ class ClosestResidueAnalysis:
         return summary
 
 
+    # ------------------------------------------------------------------
+    # Plots
+    # ------------------------------------------------------------------
+
+    # Same palette as aggregate_closest_residue.py so per-run and
+    # all-runs figures read the same way.
+    COLOR_MAP = {
+        'GLU': '#E8746B',   # muted coral
+        'ASN': '#5AA9C9',   # muted blue
+        'ASP': '#6FBF73',   # muted green
+        'Unknown': '#B0B0B0',
+    }
+    TYPE_ORDER = ['GLU', 'ASN', 'ASP', 'Unknown']
+
+    # (result key, stage label, file stem, uses threshold, end-frame key)
+    PLOT_CASES = [
+        ('case_1_end_2_closest',   'Ion Leaves GLU/ASN Cavity', 'ion_leaves_cavity_closest',             False, 'end_2_frame'),
+        ('case_2_end_2_threshold', 'Ion Leaves GLU/ASN Cavity', 'ion_leaves_cavity_threshold_crossing',  True,  'end_2_frame'),
+        ('case_3_end_3_closest',   'Ion Leaves HBC',            'ion_leaves_hbc_closest',                False, 'end_3_frame'),
+        ('case_4_end_3_threshold', 'Ion Leaves HBC',            'ion_leaves_hbc_threshold_crossing',     True,  'end_3_frame'),
+    ]
+
+    def create_bar_plot(self, case_key, case_title, output_file, uses_threshold):
+        """
+        Bar plot for one case: how often each residue was the closest one,
+        with count, percentage of events and average distance on each bar.
+
+        For the threshold cases (2 & 4), events where the ion NEVER came
+        within the threshold are drawn as a hatched segment on top of the
+        bar, because for those events the residue shown is just the closest
+        one found, not a real contact.
+        """
+        per_res = {}
+        for r in self.results:
+            c = r.get(case_key)
+            if not c or c.get('closest_residue_pdb') is None:
+                continue
+            d = per_res.setdefault(c['closest_residue_pdb'], {
+                'type': c.get('residue_type') or 'Unknown',
+                'reached': 0, 'not_reached': 0, 'distances': []})
+            if uses_threshold and c['distance'] >= self.threshold:
+                d['not_reached'] += 1
+            else:
+                d['reached'] += 1
+            d['distances'].append(c['distance'])
+
+        if not per_res:
+            print(f"No data for {case_title}")
+            return
+
+        sorted_res = sorted(per_res.items(),
+                            key=lambda x: x[1]['reached'] + x[1]['not_reached'], reverse=True)
+        residues = [k for k, _ in sorted_res]
+        reached = [v['reached'] for _, v in sorted_res]
+        not_reached = [v['not_reached'] for _, v in sorted_res]
+        totals = [a + b for a, b in zip(reached, not_reached)]
+        avg_distances = [np.mean(v['distances']) for _, v in sorted_res]
+        colors = [self.COLOR_MAP.get(v['type'], self.COLOR_MAP['Unknown']) for _, v in sorted_res]
+
+        n_events = sum(totals)
+        percentages = [100.0 * t / n_events for t in totals]
+
+        plt.rcParams['font.family'] = 'DejaVu Sans'
+        fig, ax = plt.subplots(figsize=(10, 6.2))
+        x = np.arange(len(residues))
+
+        bars = ax.bar(x, reached, color=colors, alpha=0.85, edgecolor='black',
+                      linewidth=1.2, width=0.65, zorder=3)
+        if any(not_reached):
+            ax.bar(x, not_reached, bottom=reached, color=colors, alpha=0.35,
+                   edgecolor='black', linewidth=1.2, width=0.65, hatch='//', zorder=3)
+
+        max_count = max(totals)
+        ax.set_ylim(0, max_count * 1.35)
+
+        for bar, total, pct, avg_dist in zip(bars, totals, percentages, avg_distances):
+            ax.text(bar.get_x() + bar.get_width() / 2., total + max_count * 0.03,
+                    f'{total} ({pct:.1f}%)\n{avg_dist:.2f} Å',
+                    ha='center', va='bottom', fontsize=14, fontweight='bold', zorder=4)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(residues, fontsize=17, fontweight='bold', rotation=40, ha='right')
+        ax.set_ylabel('Number of Times Closest', fontsize=19, fontweight='bold', labelpad=10)
+        ax.set_xlabel('Residue', fontsize=19, fontweight='bold', labelpad=10)
+        ax.set_title(f"{case_title}\n(n = {n_events} events)", fontsize=20, fontweight='bold', pad=22)
+        ax.tick_params(axis='both', labelsize=15)
+
+        ax.grid(True, alpha=0.25, axis='y', zorder=0)
+        ax.set_axisbelow(True)
+        for spine in ['top', 'right']:
+            ax.spines[spine].set_visible(False)
+        for spine in ['left', 'bottom']:
+            ax.spines[spine].set_linewidth(1.1)
+
+        present_types = sorted({v['type'] for _, v in sorted_res},
+                               key=lambda t: self.TYPE_ORDER.index(t) if t in self.TYPE_ORDER else len(self.TYPE_ORDER))
+        legend_elements = [Patch(facecolor=self.COLOR_MAP.get(t, self.COLOR_MAP['Unknown']),
+                                 edgecolor='black', label=t) for t in present_types]
+        if any(not_reached):
+            legend_elements.append(Patch(facecolor='white', edgecolor='black', hatch='//',
+                                         label=f'never < {self.threshold} Å\n(closest shown)'))
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=13, frameon=True, framealpha=0.9)
+
+        plt.tight_layout()
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"✓ Plot saved: {output_file}")
+
+    def create_lag_plot(self, output_file):
+        """
+        For the threshold cases (2 & 4): how many frames before the exit
+        frame (end_2 / end_3) the last contact happened. Lag 0 means the
+        ion was still in contact at the exit frame. Events that never
+        reached the threshold are left out.
+        """
+        threshold_cases = [c for c in self.PLOT_CASES if c[3]]
+        if not any(r.get(c[4]) is not None for r in self.results for c in threshold_cases):
+            print("Skipping lag plot: results have no end_2/end_3 frames (re-run the analysis to get them).")
+            return
+
+        plt.rcParams['font.family'] = 'DejaVu Sans'
+        fig, axes = plt.subplots(1, len(threshold_cases), figsize=(14, 5.5), sharey=False)
+
+        for ax, (case_key, stage, _, _, end_key) in zip(np.atleast_1d(axes), threshold_cases):
+            lags_by_type = {}
+            for r in self.results:
+                c = r.get(case_key)
+                if not c or r.get(end_key) is None or c['distance'] >= self.threshold:
+                    continue
+                lags_by_type.setdefault(c.get('residue_type') or 'Unknown', []).append(r[end_key] - c['frame'])
+
+            ax.set_title(f"{stage}", fontsize=17, fontweight='bold', pad=12)
+            ax.set_xlabel('Frames before exit frame', fontsize=15, fontweight='bold')
+            ax.set_ylabel('Number of events', fontsize=15, fontweight='bold')
+            for spine in ['top', 'right']:
+                ax.spines[spine].set_visible(False)
+            ax.grid(True, alpha=0.25, axis='y', zorder=0)
+            ax.set_axisbelow(True)
+
+            if not lags_by_type:
+                ax.text(0.5, 0.5, 'no contacts', transform=ax.transAxes, ha='center', va='center', fontsize=14)
+                continue
+
+            types = [t for t in self.TYPE_ORDER if t in lags_by_type]
+            all_lags = np.concatenate([lags_by_type[t] for t in types])
+            bins = np.histogram_bin_edges(all_lags, bins=min(30, max(5, int(all_lags.max()) + 1)))
+            ax.hist([lags_by_type[t] for t in types], bins=bins, stacked=True,
+                    color=[self.COLOR_MAP[t] for t in types], edgecolor='black',
+                    linewidth=0.8, alpha=0.85, label=types, zorder=3)
+            ax.axvline(np.median(all_lags), color='black', linestyle='--', linewidth=1.2,
+                       label=f'median = {np.median(all_lags):.0f}')
+            ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+            # Headroom so the one-row legend sits above the bars, never on them
+            ax.set_ylim(0, ax.get_ylim()[1] * 1.3)
+            ax.legend(fontsize=12, frameon=True, framealpha=0.9, loc='upper center',
+                      ncol=len(types) + 1, columnspacing=1.0, handlelength=1.5)
+
+        fig.suptitle(f"{self.channel_type}: Last contact (< {self.threshold} Å) before exit",
+                     fontsize=19, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"✓ Plot saved: {output_file}")
+
+    def create_plots(self, output_dir=None):
+        """
+        Create all per-run plots under results_dir/plots/:
+          - one bar plot per case (same layout as aggregate_closest_residue.py)
+          - a lag histogram for the threshold cases
+        """
+        if not self.results:
+            print("No results to plot.")
+            return
+
+        output_dir = Path(output_dir) if output_dir else self.results_dir / "plots"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        print("\nCreating closest-residue plots...")
+
+        for case_key, stage, stem, uses_threshold, _ in self.PLOT_CASES:
+            # Cases 1 & 3 are snapshots at the exit frame, so the threshold
+            # has no effect on them and is left out of the title.
+            if uses_threshold:
+                title = f"{self.channel_type}: {stage} - Threshold={self.threshold}Å"
+            else:
+                title = f"{self.channel_type}: {stage} - Closest Residue"
+            self.create_bar_plot(case_key, title,
+                                 output_dir / f"{stem}_threshold{self.threshold}.png",
+                                 uses_threshold)
+
+        self.create_lag_plot(output_dir / f"last_contact_lag_threshold{self.threshold}.png")
+
+
+def plot_closest_residue_results(json_file, output_dir=None, channel_type=None):
+    """
+    Re-create the per-run plots from an existing closest_residue_analysis.json
+    without touching the trajectory.
+    """
+    json_file = Path(json_file)
+    with open(json_file) as f:
+        data = json.load(f)
+
+    analyzer = ClosestResidueAnalysis.__new__(ClosestResidueAnalysis)
+    analyzer.results = data['results']
+    analyzer.threshold = data['threshold']
+    analyzer.channel_type = channel_type or data.get('channel_type', '')
+    analyzer.results_dir = json_file.parent
+    analyzer.create_plots(output_dir)
+    return analyzer
+
+
 def run_closest_residue_analysis(universe, permeation_events, asn_residues, 
                                   glu_residues, channel_type="G12", threshold=3.5, 
                                   analysis_start_frame=0, residue_types=['ASN', 'GLU'], 
@@ -514,5 +733,16 @@ def run_closest_residue_analysis(universe, permeation_events, asn_residues,
     analyzer.run_analysis()
     analyzer.save_results()
     analyzer.create_summary()
+    analyzer.create_plots()
     
     return analyzer
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Re-plot closest_residue_analysis.json for one run")
+    parser.add_argument("json_file", help="Path to closest_residue_analysis.json")
+    parser.add_argument("--output_dir", default=None, help="Default: <json dir>/plots")
+    parser.add_argument("--channel_type", default=None, help="Label for plot titles (e.g. G12)")
+    args = parser.parse_args()
+    plot_closest_residue_results(args.json_file, args.output_dir, args.channel_type)
