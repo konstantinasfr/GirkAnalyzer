@@ -2,7 +2,13 @@ import MDAnalysis as mda
 import numpy as np
 import json
 from pathlib import Path
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 from analysis.converter import convert_to_pdb_numbering
+from matplotlib.ticker import MaxNLocator
+from analysis.closest_residue_analysis import ClosestResidueAnalysis, residue_names_from_topology, ONE_LETTER
 
 class LastAndLongestDurationAnalysis:
     """
@@ -62,13 +68,9 @@ class LastAndLongestDurationAnalysis:
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.results = []
         
-        # Special handling for ASP in G12
-        if channel_type == "G12":
-            self.asp_residue = 1105
-        elif channel_type == "G12_ML":
-            self.asp_residue = 131
-        else:
-            self.asp_residue = None
+        # Residue names come from the topology, so mutants are labelled
+        # correctly (e.g. Q141 in E141Q, N173 in D173N) without hard-coding.
+        self.resnames = residue_names_from_topology(self.u, asn_residues + glu_residues)
         
         # Build reverse mapping if in subunit mode (residue_id -> subunit_name)
         self.residue_to_subunit = {}
@@ -101,10 +103,7 @@ class LastAndLongestDurationAnalysis:
                     if min_dist_to_res < min_distance:
                         min_distance = min_dist_to_res
                         closest_resid = resid
-                        if self.asp_residue is not None and resid == self.asp_residue:
-                            closest_type = 'ASP'
-                        else:
-                            closest_type = 'ASN'
+                        closest_type = self.resnames.get(resid, 'Unknown')
         
         # Check GLU residues
         if 'GLU' in self.residue_types:
@@ -117,7 +116,7 @@ class LastAndLongestDurationAnalysis:
                     if min_dist_to_res < min_distance:
                         min_distance = min_dist_to_res
                         closest_resid = resid
-                        closest_type = 'GLU'
+                        closest_type = self.resnames.get(resid, 'Unknown')
         
         if closest_resid and min_distance < self.threshold:
             return {
@@ -336,6 +335,7 @@ class LastAndLongestDurationAnalysis:
         
         return {
             'ion_id': int(ion_id),
+            'end_1_frame': int(end_1_frame),
             'end_2_frame': int(end_2_frame),
             'mode': result['mode'],
             'last_identifier': result['last_identifier'],
@@ -433,6 +433,7 @@ class LastAndLongestDurationAnalysis:
             'threshold': self.threshold,
             'min_duration': self.min_duration,
             'mode': mode_str,
+            'channel_type': self.channel_type,
             'subunit_groups': self.subunit_groups,
             'asn_residues': self.asn_residues,
             'glu_residues': self.glu_residues,
@@ -510,19 +511,23 @@ class LastAndLongestDurationAnalysis:
                 'min_duration': self.min_duration,
                 'mode': 'subunit',
                 'last_subunit_counts': last_counts,
-                'longest_subunit_counts': longest_counts
+                'longest_subunit_counts': longest_counts,
+                'last_none_count': sum(1 for r in self.results if not r['last_identifier']),
+                'longest_none_count': sum(1 for r in self.results if not r['longest_identifier'])
             }
         else:
             # Count by residue type - LAST
             last_asn = sum(1 for r in self.results if r['last_residues'] and any(res['residue_type'] == 'ASN' for res in r['last_residues']))
             last_asp = sum(1 for r in self.results if r['last_residues'] and any(res['residue_type'] == 'ASP' for res in r['last_residues']))
             last_glu = sum(1 for r in self.results if r['last_residues'] and any(res['residue_type'] == 'GLU' for res in r['last_residues']))
+            last_gln = sum(1 for r in self.results if r['last_residues'] and any(res['residue_type'] == 'GLN' for res in r['last_residues']))
             last_none = sum(1 for r in self.results if not r['last_identifier'])
             
             # Count by residue type - LONGEST
             longest_asn = sum(1 for r in self.results if r['longest_residues'] and any(res['residue_type'] == 'ASN' for res in r['longest_residues']))
             longest_asp = sum(1 for r in self.results if r['longest_residues'] and any(res['residue_type'] == 'ASP' for res in r['longest_residues']))
             longest_glu = sum(1 for r in self.results if r['longest_residues'] and any(res['residue_type'] == 'GLU' for res in r['longest_residues']))
+            longest_gln = sum(1 for r in self.results if r['longest_residues'] and any(res['residue_type'] == 'GLN' for res in r['longest_residues']))
             longest_none = sum(1 for r in self.results if not r['longest_identifier'])
             
             summary = {
@@ -534,12 +539,14 @@ class LastAndLongestDurationAnalysis:
                     'asn_count': last_asn,
                     'asp_count': last_asp,
                     'glu_count': last_glu,
+                    'gln_count': last_gln,
                     'none_count': last_none
                 },
                 'longest_residue_stats': {
                     'asn_count': longest_asn,
                     'asp_count': longest_asp,
                     'glu_count': longest_glu,
+                    'gln_count': longest_gln,
                     'none_count': longest_none
                 }
             }
@@ -579,16 +586,20 @@ class LastAndLongestDurationAnalysis:
             print(f"\n--- LAST (most recent) subunit ---")
             for subunit, count in sorted(summary['last_subunit_counts'].items()):
                 print(f"  Subunit {subunit}: {count} events")
+            print(f"  None: {summary['last_none_count']} events")
             
             print(f"\n--- LONGEST duration subunit ---")
             for subunit, count in sorted(summary['longest_subunit_counts'].items()):
                 print(f"  Subunit {subunit}: {count} events")
+            print(f"  None: {summary['longest_none_count']} events")
         else:
             print(f"\n--- LAST residue (most recent before permeation) ---")
             print(f"  ASN: {summary['last_residue_stats']['asn_count']} events")
             if summary['last_residue_stats']['asp_count'] > 0:
                 print(f"  ASP: {summary['last_residue_stats']['asp_count']} events")
             print(f"  GLU: {summary['last_residue_stats']['glu_count']} events")
+            if summary['last_residue_stats']['gln_count'] > 0:
+                print(f"  GLN: {summary['last_residue_stats']['gln_count']} events")
             print(f"  None: {summary['last_residue_stats']['none_count']} events")
             
             print(f"\n--- LONGEST residue (longest duration) ---")
@@ -596,6 +607,8 @@ class LastAndLongestDurationAnalysis:
             if summary['longest_residue_stats']['asp_count'] > 0:
                 print(f"  ASP: {summary['longest_residue_stats']['asp_count']} events")
             print(f"  GLU: {summary['longest_residue_stats']['glu_count']} events")
+            if summary['longest_residue_stats']['gln_count'] > 0:
+                print(f"  GLN: {summary['longest_residue_stats']['gln_count']} events")
             print(f"  None: {summary['longest_residue_stats']['none_count']} events")
         
         if last_durations:
@@ -612,6 +625,239 @@ class LastAndLongestDurationAnalysis:
         print("="*80)
         
         return summary
+
+
+    # ------------------------------------------------------------------
+    # Plots
+    # ------------------------------------------------------------------
+
+    # Same palette as closest_residue_analysis.py / aggregate_closest_residue.py
+    COLOR_MAP = ClosestResidueAnalysis.COLOR_MAP
+    TYPE_ORDER = ClosestResidueAnalysis.TYPE_ORDER
+    SUBUNIT_COLOR = '#8E9AAF'     # neutral: subunits are not residue types
+    NO_CONTACT_COLOR = '#D9D9D9'
+
+    def _winner_counts(self, which):
+        """
+        Count, per residue (or subunit), how often it was the LAST / LONGEST
+        contact. Returns ([(label, type, count, mean_duration)], n_no_contact).
+        """
+        is_subunit_mode = self.subunit_groups is not None
+        per_id = {}
+        n_no_contact = 0
+        for r in self.results:
+            ident = r[f'{which}_identifier']
+            residues = r[f'{which}_residues'] or []
+            if not ident or not residues:
+                n_no_contact += 1
+                continue
+            if is_subunit_mode:
+                label, rtype = str(ident), None
+            else:
+                label, rtype = residues[0]['residue_pdb'], residues[0].get('residue_type') or 'Unknown'
+            d = per_id.setdefault(label, {'type': rtype, 'durations': []})
+            d['durations'].append(r[f'{which}_duration'])
+
+        items = sorted(((k, v['type'], len(v['durations']), float(np.mean(v['durations'])))
+                        for k, v in per_id.items()), key=lambda x: x[2], reverse=True)
+        return items, n_no_contact
+
+    def create_bar_plot(self, which, title, output_file):
+        """
+        Bar plot of how often each residue (or subunit) was the LAST / LONGEST
+        contact before end_2, plus a "No contact" bar for events where the ion
+        never stayed within the threshold for min_duration frames.
+        Each bar: count (% of ALL events) and mean contact duration.
+        """
+        items, n_no_contact = self._winner_counts(which)
+        n_events = len(self.results)
+        if n_events == 0:
+            print(f"No data for {title}")
+            return
+        is_subunit_mode = self.subunit_groups is not None
+
+        labels, colors, counts, mean_durs = [], [], [], []
+        for label, rtype, count, mean_dur in items:
+            if is_subunit_mode:
+                labels.append(f"Subunit {label}")
+                colors.append(self.SUBUNIT_COLOR)
+            else:
+                labels.append(f"{ONE_LETTER.get(rtype, '')}{label}")
+                colors.append(self.COLOR_MAP.get(rtype, self.COLOR_MAP['Unknown']))
+            counts.append(count)
+            mean_durs.append(mean_dur)
+        # "No contact" always shown last, even when it is 0, so runs compare
+        labels.append('No contact')
+        colors.append(self.NO_CONTACT_COLOR)
+        counts.append(n_no_contact)
+        mean_durs.append(None)
+
+        plt.rcParams['font.family'] = 'DejaVu Sans'
+        fig, ax = plt.subplots(figsize=(max(8, 1.4 * len(labels) + 3), 6.2))
+        x = np.arange(len(labels))
+        bars = ax.bar(x, counts, color=colors, alpha=0.85, edgecolor='black',
+                      linewidth=1.2, width=0.65, zorder=3)
+        bars[-1].set_hatch('//')
+
+        max_count = max(max(counts), 1)
+        ax.set_ylim(0, max_count * 1.35)
+        for bar, count, mean_dur in zip(bars, counts, mean_durs):
+            text = f'{count} ({100.0 * count / n_events:.1f}%)'
+            if mean_dur is not None:
+                text += f'\n{mean_dur:.1f} fr'
+            ax.text(bar.get_x() + bar.get_width() / 2., count + max_count * 0.03, text,
+                    ha='center', va='bottom', fontsize=14, fontweight='bold', zorder=4)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, fontsize=17, fontweight='bold', rotation=40, ha='right')
+        ax.set_ylabel('Number of Events', fontsize=19, fontweight='bold', labelpad=10)
+        ax.set_xlabel('Subunit' if is_subunit_mode else 'Residue', fontsize=19, fontweight='bold', labelpad=10)
+        ax.set_title(f"{title}\n(n = {n_events} events, < {self.threshold} Å for ≥ {self.min_duration} frames)",
+                     fontsize=19, fontweight='bold', pad=22)
+        ax.tick_params(axis='both', labelsize=15)
+        ax.grid(True, alpha=0.25, axis='y', zorder=0)
+        ax.set_axisbelow(True)
+        for spine in ['top', 'right']:
+            ax.spines[spine].set_visible(False)
+        for spine in ['left', 'bottom']:
+            ax.spines[spine].set_linewidth(1.1)
+
+        legend_elements = []
+        if not is_subunit_mode:
+            present = {rtype for _, rtype, _, _ in items}
+            legend_elements = [Patch(facecolor=self.COLOR_MAP.get(t, self.COLOR_MAP['Unknown']),
+                                     edgecolor='black', label=t)
+                               for t in self.TYPE_ORDER if t in present]
+        legend_elements.append(Patch(facecolor=self.NO_CONTACT_COLOR, edgecolor='black', hatch='//',
+                                     label='No contact'))
+        # Outside the axes: the "No contact" bar is last and would sit under it
+        ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.01, 1.0),
+                  fontsize=13, frameon=True, framealpha=0.9)
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+
+        plt.tight_layout()
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"✓ Plot saved: {output_file}")
+
+    def create_duration_plot(self, output_file):
+        """
+        Three histograms (frames):
+          - duration of the LAST contact
+          - duration of the LONGEST contact
+          - gap between the end of the LAST contact and end_2
+            (0 = ion was still in contact when it left the cavity)
+        Events with no contact are left out; their number is in the title.
+        """
+        last = [r for r in self.results if r['last_identifier']]
+        longest = [r for r in self.results if r['longest_identifier']]
+        n_no_contact = len(self.results) - len(last)
+        panels = [
+            ('Last contact duration', [r['last_duration'] for r in last]),
+            ('Longest contact duration', [r['longest_duration'] for r in longest]),
+            ('Last contact end → end_2', [r['end_2_frame'] - r['last_end_frame'] for r in last]),
+        ]
+
+        plt.rcParams['font.family'] = 'DejaVu Sans'
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
+        for ax, (name, values) in zip(axes, panels):
+            ax.set_title(name, fontsize=16, fontweight='bold', pad=12)
+            ax.set_xlabel('Frames', fontsize=14, fontweight='bold')
+            ax.set_ylabel('Number of events', fontsize=14, fontweight='bold')
+            for spine in ['top', 'right']:
+                ax.spines[spine].set_visible(False)
+            ax.grid(True, alpha=0.25, axis='y', zorder=0)
+            ax.set_axisbelow(True)
+            if not values:
+                ax.text(0.5, 0.5, 'no contacts', transform=ax.transAxes, ha='center', va='center', fontsize=14)
+                continue
+            values = np.asarray(values)
+            bins = np.histogram_bin_edges(values, bins=min(30, max(5, int(values.max() - values.min()) + 1)))
+            ax.hist(values, bins=bins, color=self.SUBUNIT_COLOR, edgecolor='black',
+                    linewidth=0.8, alpha=0.9, zorder=3)
+            ax.axvline(np.median(values), color='black', linestyle='--', linewidth=1.2,
+                       label=f'median = {np.median(values):g}')
+            ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+            ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+            ax.set_ylim(0, ax.get_ylim()[1] * 1.2)
+            ax.legend(fontsize=12, frameon=True, framealpha=0.9, loc='upper right')
+
+        fig.suptitle(f"{self.channel_type}: contacts before leaving the cavity "
+                     f"(< {self.threshold} Å, ≥ {self.min_duration} frames; "
+                     f"{n_no_contact}/{len(self.results)} events with no contact)",
+                     fontsize=17, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"✓ Plot saved: {output_file}")
+
+    def create_plots(self, output_dir=None):
+        """Create all per-run plots under results_dir/plots/."""
+        if not self.results:
+            print("No results to plot.")
+            return
+        output_dir = Path(output_dir) if output_dir else self.results_dir / "plots"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        mode_str = "subunit" if self.subunit_groups else "residue"
+        unit = "Subunit" if self.subunit_groups else "Residue"
+        tag = f"t{self.threshold}_d{self.min_duration}"
+        print("\nCreating duration plots...")
+
+        self.create_bar_plot('last', f"{self.channel_type}: LAST {unit} Before Leaving Cavity",
+                             output_dir / f"last_{mode_str}_frequency_{tag}.png")
+        self.create_bar_plot('longest', f"{self.channel_type}: LONGEST {unit} Contact Before Leaving Cavity",
+                             output_dir / f"longest_{mode_str}_frequency_{tag}.png")
+        self.create_duration_plot(output_dir / f"contact_durations_{mode_str}_{tag}.png")
+
+
+def plot_duration_results(json_file, output_dir=None, channel_type=None, topology=None):
+    """
+    Re-create the per-run plots from an existing duration_analysis_complete_*.json
+    without touching the trajectory.
+
+    If `topology` is given, residue names are re-read from it and written back
+    into the JSON (and into last_/longest_duration_*.json next to it). Use this
+    for JSONs made before names came from the topology.
+    """
+    json_file = Path(json_file)
+    with open(json_file) as f:
+        data = json.load(f)
+
+    if topology is not None:
+        u = mda.Universe(str(topology))
+        names = residue_names_from_topology(u, data['asn_residues'] + data['glu_residues'])
+
+        def relabel(results):
+            for r in results:
+                for key in ('last_residues', 'longest_residues', 'residues'):
+                    for res in r.get(key) or []:
+                        res['residue_type'] = names.get(res['residue_id'], 'Unknown')
+                for d in r.get('all_durations') or []:
+                    for res in d.get('residues') or []:
+                        res['residue_type'] = names.get(res['residue_id'], 'Unknown')
+
+        relabel(data['results'])
+        with open(json_file, 'w') as f:
+            json.dump(data, f, indent=2)
+        for side in ('last', 'longest'):
+            side_file = json_file.parent / f"{side}_duration_{data['mode']}.json"
+            if side_file.exists():
+                with open(side_file) as f:
+                    side_data = json.load(f)
+                relabel(side_data['results'])
+                with open(side_file, 'w') as f:
+                    json.dump(side_data, f, indent=2)
+        print(f"✓ Residue names updated from {topology}: {names}")
+
+    analyzer = LastAndLongestDurationAnalysis.__new__(LastAndLongestDurationAnalysis)
+    analyzer.results = data['results']
+    analyzer.threshold = data['threshold']
+    analyzer.min_duration = data['min_duration']
+    analyzer.subunit_groups = data.get('subunit_groups')
+    analyzer.channel_type = channel_type or data.get('channel_type', '')
+    analyzer.results_dir = json_file.parent
+    analyzer.create_plots(output_dir)
+    return analyzer
 
 
 def run_last_duration_analysis(universe, permeation_events, asn_residues, 
@@ -659,5 +905,18 @@ def run_last_duration_analysis(universe, permeation_events, asn_residues,
     analyzer.run_analysis()
     analyzer.save_results()
     analyzer.create_summary()
+    analyzer.create_plots()
     
     return analyzer
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Re-plot duration_analysis_complete_*.json for one run")
+    parser.add_argument("json_file", help="Path to duration_analysis_complete_residue.json (or _subunit)")
+    parser.add_argument("--output_dir", default=None, help="Default: <json dir>/plots")
+    parser.add_argument("--channel_type", default=None, help="Label for plot titles (e.g. G12)")
+    parser.add_argument("--topology", default=None,
+                        help="Topology file to re-read residue names from (fixes old JSONs)")
+    args = parser.parse_args()
+    plot_duration_results(args.json_file, args.output_dir, args.channel_type, args.topology)
