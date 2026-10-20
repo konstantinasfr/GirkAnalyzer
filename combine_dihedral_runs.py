@@ -601,7 +601,7 @@ Examples:
     parser.add_argument('base_dir')
     parser.add_argument('--runs', nargs='+', type=int)
     parser.add_argument('-c', '--channel', default='G12',
-                        choices=['G2', 'G12', 'G12_GAT', 'G12_ML'])
+                        choices=['G2', 'G12', 'G12_GAT', 'G12_ML','G12_E141Q','G12_D173N'])
     parser.add_argument('-o', '--output', default='combined_dihedral_analysis')
     parser.add_argument('--peak-tolerance', type=float, default=15.0)
 
@@ -654,7 +654,11 @@ Examples:
 if __name__ == "__main__":
     exit(main())
 
-# python3 combine_dihedral_runs.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ -o /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/dihedral_analysis -c G12
-# python3 combine_dihedral_runs.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ -o /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/dihedral_analysis -c G2
-# python3 combine_dihedral_runs.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_GAT/ -o /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_GAT/dihedral_analysis -c G12_GAT
-# python3 combine_dihedral_runs.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_ML/ -o /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_ML/dihedral_analysis -c G12_ML
+'''
+python3 combine_dihedral_runs.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ -o /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/dihedral_analysis -c G12
+python3 combine_dihedral_runs.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ -o /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/dihedral_analysis -c G2
+python3 combine_dihedral_runs.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_GAT/ -o /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_GAT/dihedral_analysis -c G12_GAT
+python3 combine_dihedral_runs.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_ML/ -o /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_ML/dihedral_analysis -c G12_ML
+python3 combine_dihedral_runs.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/ -o /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/dihedral_analysis -c G12_D173N
+python3 combine_dihedral_runs.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/ -o /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/dihedral_analysis -c G12_E141Q
+'''

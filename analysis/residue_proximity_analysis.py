@@ -234,7 +234,7 @@ class ResidueProximityAnalysis:
             
             # Use PDB numbering and correct residue type
             pdb_label = self.convert_to_pdb(resid, self.channel_type)
-            res_type = "ASP" if (self.channel_type == "G12" and resid == 1105) else "GLU"
+            res_type = "ASP" if (self.channel_type == "G12" and resid == 131) else "GLU"
             ax.set_ylabel(f'{res_type} {pdb_label}', fontsize=10)
             ax.set_ylim(-0.1, 1.1)
             ax.grid(True, alpha=0.3)
@@ -304,7 +304,7 @@ class ResidueProximityAnalysis:
             
             # Use PDB numbering and correct residue type
             pdb_label = self.convert_to_pdb(resid, self.channel_type)
-            res_type = "ASP" if (self.channel_type == "G12" and resid == 1105) else "GLU"
+            res_type = "ASP" if (self.channel_type == "G12" and resid == 131) else "GLU"
             ax.set_ylabel(f'{res_type} {pdb_label}', fontsize=9)
             ax.set_ylim(-0.1, 1.1)
             ax.grid(True, alpha=0.3)
@@ -347,7 +347,7 @@ class ResidueProximityAnalysis:
         
         if is_glu_group:
             # Check if it's ASP (special case for G12)
-            if self.channel_type == "G12" and resid == 1105:
+            if self.channel_type == "G12" and resid == 131:
                 return f"ASP {pdb_num}"
             else:
                 return f"GLU {pdb_num}"

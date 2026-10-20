@@ -263,7 +263,7 @@ def main():
     #     results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
     #     results_dir.mkdir(parents=True, exist_ok=True)
 
-    elif args.channel_type == "G12":
+    elif args.channel_type == "G12" and int(run_number)<21:
         upper1 = [106, 431, 755, 1080]
         lower1 = [101, 426, 750, 1075]  #sf_residues
   
@@ -437,7 +437,7 @@ def main():
         glu_residues_pairs = [(98,1073), (422,747)]
 
         asn_residues = [130,454,779,1105 ]
-        glu_residues_pairs = [(130,1105), (454,779)]
+        asn_residues_pairs = [(130,1105), (454,779)]
 
         pip_resids = [1301, 1302, 1303, 1304]
 
@@ -471,6 +471,230 @@ def main():
         traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_GAT1508/RUN{run_number}/protein.nc")
         results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
         results_dir.mkdir(parents=True, exist_ok=True)
+
+    elif args.channel_type == "G12" and int(run_number)>20:
+        # upper1 = [107, 431, 757, 1082]
+        upper1 = [105, 429, 755, 1080]
+        lower1 = [100, 424, 749, 1075]  #sf_residues
+  
+        upper2 = [100, 424, 749, 1075]  #sf_residues
+        lower2 = [130,454,779,1105 ]  #asn_residues
+
+        upper3 = [130,454,779,1105 ]
+        lower3 = [138,462,787,1113]
+
+        upper4 = [138,462,787,1113]  #hbc_residues
+        lower4 = [265, 589, 914 ,1240]
+
+        # upper5 = [265, 589, 914 ,1240]
+        # lower5 = [259, 583, 908, 1234]
+
+        # mapping_json = "/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/find_pip_residue_mapping/G12_GAT/A_B_C/pip_residue_mapping.json"
+
+        hbc_residues = [138,462,787,1113]
+        hbc_diagonal_pairs = [(138, 1113 ), (462, 787)]
+
+        upper_gl_residues = [265, 589, 914, 1240 ]
+        upper_gl_diagonal_pairs = [(265, 1240 ), (589, 914)]
+
+        lower_gl_residues = [259, 583, 908, 1234 ]
+        lower_gl_diagonal_pairs = [(259, 1234 ), (583, 908)]
+
+        sf_low_res_residues = [101, 425, 750, 1076] 
+        sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
+
+        glu_residues = [98,422,747,1073]
+        glu_residues_pairs = [(98,1073), (422,747)]
+
+        asn_residues = [130,454,779,1105 ]
+        asn_residues_pairs = [(130,1105), (454,779)]
+
+        pip_resids = [1301, 1302, 1303, 1304]
+
+        gly_residues = [126, 450, 775, 1101]
+
+        frame_duration = 0.075
+
+        subunit_groups = {
+            'A': [422, 454],  # GLU and ASN/ASP of subunit A
+            'B': [98, 130],
+            'C': [747, 779],
+            'D': [1073, 1105]
+        }
+        sf_residues = [100, 424, 749, 1075]  
+
+        start_frame = 0
+        # start_frame = 2500
+        # end_frame = 1000
+        # end_frame = 1250
+        end_frame = 6799
+        # end_frame = 4300
+
+        pip_mapping = {
+            1301: "G1",
+            1302: "2c",
+            1303: "2a",
+            1304: "2b"
+        }
+
+        top_file =    Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_WT/RUN{run_number}/com_4fs.prmtop")
+        traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_WT/RUN{run_number}/protein.nc")
+        results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+
+
+    elif args.channel_type == "G12_D173N":
+        # upper1 = [107, 431, 757, 1082]
+        upper1 = [105, 429, 755, 1080]
+        lower1 = [100, 424, 749, 1075]  #sf_residues
+  
+        upper2 = [100, 424, 749, 1075]  #sf_residues
+        lower2 = [130,454,779,1105 ]  #asn_residues
+
+        upper3 = [130,454,779,1105 ]
+        lower3 = [138,462,787,1113]
+
+        upper4 = [138,462,787,1113]  #hbc_residues
+        lower4 = [265, 589, 914 ,1240]
+
+        pip_mapping = {
+            1301: "G1",
+            1302: "2c",
+            1303: "2a",
+            1304: "2b"
+        }
+
+        # mapping_json = "/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/find_pip_residue_mapping/G12_GAT/A_B_C/pip_residue_mapping.json"
+
+        hbc_residues = [138,462,787,1113]
+        hbc_diagonal_pairs = [(138, 1113 ), (462, 787)]
+
+        upper_gl_residues = [265, 589, 914, 1240 ]
+        upper_gl_diagonal_pairs = [(265, 1240 ), (589, 914)]
+
+        lower_gl_residues = [259, 583, 908, 1234 ]
+        lower_gl_diagonal_pairs = [(259, 1234 ), (583, 908)]
+
+        sf_low_res_residues = [101, 425, 750, 1076] 
+        sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
+
+        glu_residues = [98,422,747,1073]
+        glu_residues_pairs = [(98,1073), (422,747)]
+
+        asn_residues = [130,454,779,1105 ]
+        asn_residues_pairs = [(130,1105), (454,779)]
+
+        pip_resids = [1301, 1302, 1303, 1304]
+
+        gly_residues = [126, 450, 775, 1101]
+
+        frame_duration = 0.075
+
+        subunit_groups = {
+            'A': [422, 454],  # GLU and ASN/ASP of subunit A
+            'B': [98, 130],
+            'C': [747, 779],
+            'D': [1073, 1105]
+        }
+        sf_residues = [100, 424, 749, 1075]  
+
+        start_frame = 0
+        # start_frame = 2500
+        # end_frame = 1000
+        # end_frame = 1250
+        end_frame = 6799
+        # end_frame = 4300
+
+        # pip_mapping = {
+        #     1301: "G1",
+        #     1302: "2c",
+        #     1303: "2a",
+        #     1304: "2b"
+        # }
+
+        top_file =    Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_D173N/RUN{run_number}/com.prmtop")
+        traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_D173N/RUN{run_number}/protein.nc")
+        results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+
+    elif args.channel_type == "G12_E141Q":
+        # upper1 = [107, 431, 757, 1082]
+        upper1 = [105, 429, 755, 1080]
+        lower1 = [100, 424, 749, 1075]  #sf_residues
+  
+        upper2 = [100, 424, 749, 1075]  #sf_residues
+        lower2 = [130,454,779,1105 ]  #asn_residues
+
+        upper3 = [130,454,779,1105 ]
+        lower3 = [138,462,787,1113]
+
+        upper4 = [138,462,787,1113]  #hbc_residues
+        lower4 = [265, 589, 914 ,1240]
+
+        pip_mapping = {
+            1301: "G1",
+            1302: "2c",
+            1303: "2a",
+            1304: "2b"
+        }
+
+        print("HELLO")
+        # mapping_json = "/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/find_pip_residue_mapping/G12_GAT/A_B_C/pip_residue_mapping.json"
+
+        hbc_residues = [138,462,787,1113]
+        hbc_diagonal_pairs = [(138, 1113 ), (462, 787)]
+
+        upper_gl_residues = [265, 589, 914, 1240 ]
+        upper_gl_diagonal_pairs = [(265, 1240 ), (589, 914)]
+
+        lower_gl_residues = [259, 583, 908, 1234 ]
+        lower_gl_diagonal_pairs = [(259, 1234 ), (583, 908)]
+
+        sf_low_res_residues = [101, 425, 750, 1076] 
+        sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
+
+        glu_residues = [98,422,747,1073]
+        glu_residues_pairs = [(98,1073), (422,747)]
+
+        asn_residues = [130,454,779,1105 ]
+        asn_residues_pairs = [(130,1105), (454,779)]
+
+        pip_resids = [1301, 1302, 1303, 1304]
+
+        gly_residues = [126, 450, 775, 1101]
+
+        frame_duration = 0.075
+
+        subunit_groups = {
+            'A': [422, 454],  # GLU and ASN/ASP of subunit A
+            'B': [98, 130],
+            'C': [747, 779],
+            'D': [1073, 1105]
+        }
+        sf_residues = [100, 424, 749, 1075]  
+
+        start_frame = 0
+        # start_frame = 2500
+        # end_frame = 1000
+        # end_frame = 1250
+        end_frame = 6799
+        # end_frame = 4300
+
+        # pip_mapping = {
+        #     1301: "G1",
+        #     1302: "2c",
+        #     1303: "2a",
+        #     1304: "2b"
+        # }
+
+        top_file =    Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_E141Q/RUN{run_number}/com.prmtop")
+        traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_E141Q/RUN{run_number}/protein.nc")
+        results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+
 #########################################################################################
 
 
@@ -546,6 +770,142 @@ def main():
     end2_all = get_end2_all_frames(results_dir, analyzer.permeation_events)
     end3_all = get_end3_all_frames(results_dir, analyzer.permeation_events)
 
+    from analysis.pip_binding_quality import run_pip_binding_quality
+
+    run_pip_binding_quality(
+        u            = u,
+        results_dir  = results_dir,
+        channel_type = args.channel_type,
+        pip_resids   = pip_resids,
+        pip_mapping  = pip_mapping,
+        start_frame  = start_frame,
+        end_frame    = end_frame,
+        cutoff       = 4.0,
+        sb_cutoff    = 4.0,
+        min_event    = 5,
+        force_rerun  = False,
+    )
+
+    from analysis.end2_contact_force import run_end2_contact_force
+
+    for ev in ("end_2", "end_3"):
+        run_end2_contact_force(universe=u, permeation_events=analyzer.permeation_events,
+                        results_dir=results_dir, channel_type=channel_type,
+                        frame_duration=frame_duration, run=run_number, event=ev,
+                        force_rerun=True)
+
+    from analysis.cavity_mobility import run_cavity_mobility
+
+    run_cavity_mobility(
+        universe          = u,
+        permeation_events = analyzer.permeation_events,
+        results_dir       = results_dir,
+        channel_type      = channel_type,
+        frame_duration    = frame_duration,
+        start_frame       = start_frame,
+        end_frame         = end_frame,
+        run               = run_number,
+        glu_residues      = glu_residues,
+        asn_residues      = asn_residues,
+        hbc_residues      = hbc_residues,
+        force_rerun       = False,
+    )
+
+    from analysis.cavity_water_regions import run_cavity_water_regions
+
+    run_cavity_water_regions(
+        universe          = u,
+        permeation_events = analyzer.permeation_events,
+        results_dir       = results_dir,
+        channel_type      = channel_type,
+        frame_duration    = frame_duration,
+        start_frame       = start_frame,
+        end_frame         = end_frame,
+        radius            = 12.0,
+        run               = run_number,
+        glu_residues      = glu_residues,
+        asn_residues      = asn_residues,
+        hbc_residues      = hbc_residues,
+        force_rerun       = False,
+    )
+
+    from analysis.ion_hydration_regions import run_ion_hydration_regions
+
+    run_ion_hydration_regions(
+        universe          = u,
+        permeation_events = analyzer.permeation_events,
+        results_dir       = results_dir,
+        channel_type      = channel_type,
+        frame_duration    = frame_duration,
+        start_frame       = start_frame,
+        end_frame         = end_frame,
+        shell             = 3.5,
+        run               = run_number,
+        glu_residues      = glu_residues,
+        asn_residues      = asn_residues,
+        hbc_residues      = hbc_residues,
+        force_rerun       = False,
+    )
+
+    from analysis.permeation_ion_table import run_permeation_ion_table
+
+    run_permeation_ion_table(
+        universe          = u,
+        permeation_events = analyzer.permeation_events,
+        glu_residues      = glu_residues,
+        asn_residues      = asn_residues,
+        results_dir       = results_dir,
+        channel_type      = channel_type,
+        frame_duration    = frame_duration,
+        start_frame       = start_frame,
+        end_frame         = end_frame,
+        cutoff            = 3.5,
+        run               = run_number,
+        force_rerun       = False,
+    )
+
+    from analysis.permeation_ion_stats import run_permeation_ion_stats
+
+    run_permeation_ion_stats(
+        results_dir    = results_dir,
+        channel_type   = channel_type,
+        frame_duration = frame_duration,
+        run            = run_number,
+        force_rerun    = False,
+    )
+
+    from analysis.permeation_correlation import run_permeation_correlation
+
+    run_permeation_correlation(
+        results_dir    = results_dir,
+        channel_type   = channel_type,
+        frame_duration = frame_duration,
+        run            = run_number,
+        force_rerun    = False,
+    )
+
+    from analysis.permeation_ion_combinations import run_permeation_combinations
+
+    run_permeation_combinations(
+        results_dir  = results_dir,
+        channel_type = channel_type,
+        run          = run_number,
+        unit         = "frames",
+        force_rerun  = False,
+    )
+
+    from analysis.glu_asn_cavity_split_analysis import run_cavity_split_analysis
+
+    run_cavity_split_analysis(
+        u                 = u,
+        results_dir       = results_dir,
+        channel_type      = args.channel_type,
+        permeation_events = analyzer.permeation_events,
+        frame_duration    = frame_duration,
+        glu_resids      = glu_residues,
+        asn_resids      = asn_residues,
+        force_rerun       = True,
+    )
 
     # from analysis.pip_199_64_permeation_corr import build_hbc_permeation_percentage_table
 
@@ -586,16 +946,16 @@ def main():
     #     frame_duration      = frame_duration,
     # )
 
-    # from analysis.cavity_refilling_analysis import run_cavity_refilling_analysis
+    from analysis.cavity_refilling_analysis import run_cavity_refilling_analysis
 
-    # run_cavity_refilling_analysis(
-    #     permeation_events = analyzer.permeation_events,
-    #     results_dir       = results_dir,
-    #     channel_type      = args.channel_type,
-    #     frame_duration    = frame_duration,
-    #     end_frame         = end_frame,   # ← add this
-    #     force_rerun       = True,
-    # )
+    run_cavity_refilling_analysis(
+        permeation_events = analyzer.permeation_events,
+        results_dir       = results_dir,
+        channel_type      = args.channel_type,
+        frame_duration    = frame_duration,
+        end_frame         = end_frame,   # ← add this
+        force_rerun       = True,
+    )
 
     # # only these channel types have a bound ligand
     # # only these channel types have a bound ligand — each may use a different resname
@@ -689,35 +1049,35 @@ def main():
     #     frame_duration = frame_duration,
     #     force_rerun    = True,
     # )
-    from analysis.cavity_environment_analysis import run_cavity_environment_analysis
-    do_cavity_environment = True
-    force_rerun_cavity_env = True
+    # from analysis.cavity_environment_analysis import run_cavity_environment_analysis
+    # do_cavity_environment = True
+    # force_rerun_cavity_env = True
 
-    if do_cavity_environment:
-        run_cavity_environment_analysis(
-            u                     = u,
-            results_dir           = results_dir,
-            gate_definitions      = {
-                "glu": {"residues": glu_residues,
-                        "diagonal_pairs": glu_residues_pairs},
-                "asn": {"residues": asn_residues,
-                        "diagonal_pairs": asn_residues_pairs},
-                "hbc": {"residues": hbc_residues,
-                        "diagonal_pairs": hbc_diagonal_pairs},
-                "sf":  {"residues": sf_low_res_residues,
-                        "diagonal_pairs": sf_low_res_diagonal_pairs},
-            },
-            cavity_upper_residues = sf_residues,
-            cavity_lower_residues = hbc_residues,
-            permeation_events     = analyzer.permeation_events,
-            permeation_stage      = "end_3",
-            start_frame           = start_frame,
-            end_frame             = end_frame,
-            frame_duration        = frame_duration,
-            channel_type          = args.channel_type,
-            run_number            = run_number,
-            force_rerun           = force_rerun_cavity_env,
-        )
+    # if do_cavity_environment:
+    #     run_cavity_environment_analysis(
+    #         u                     = u,
+    #         results_dir           = results_dir,
+    #         gate_definitions      = {
+    #             "glu": {"residues": glu_residues,
+    #                     "diagonal_pairs": glu_residues_pairs},
+    #             "asn": {"residues": asn_residues,
+    #                     "diagonal_pairs": asn_residues_pairs},
+    #             "hbc": {"residues": hbc_residues,
+    #                     "diagonal_pairs": hbc_diagonal_pairs},
+    #             "sf":  {"residues": sf_low_res_residues,
+    #                     "diagonal_pairs": sf_low_res_diagonal_pairs},
+    #         },
+    #         cavity_upper_residues = sf_residues,
+    #         cavity_lower_residues = hbc_residues,
+    #         permeation_events     = analyzer.permeation_events,
+    #         permeation_stage      = "end_3",
+    #         start_frame           = start_frame,
+    #         end_frame             = end_frame,
+    #         frame_duration        = frame_duration,
+    #         channel_type          = args.channel_type,
+    #         run_number            = run_number,
+    #         force_rerun           = force_rerun_cavity_env,
+    #     )
     #=============== PIP ANALYSIS =============================================
 
     # from analysis.pip_pose_analysis import run_pip_pose_analysis
@@ -996,17 +1356,17 @@ def main():
     #     smoothing_window = 100,
     # )
 
-    # ==================== Protein Rmsd ===========================
-    # from analysis.protein_rmsd_analysis import run_protein_rmsd_analysis
+#  #  # ==================== Protein Rmsd ===========================
+#     from analysis.protein_rmsd_analysis import run_protein_rmsd_analysis
 
-    # run_protein_rmsd_analysis(
-    #     u                = u,
-    #     results_dir      = results_dir,
-    #     channel_type     = args.channel_type,
-    #     start_frame      = start_frame,
-    #     end_frame        = end_frame,
-    #     smoothing_window = 100,
-    # )
+#     run_protein_rmsd_analysis(
+#         u                = u,
+#         results_dir      = results_dir,
+#         channel_type     = args.channel_type,
+#         start_frame      = start_frame,
+#         end_frame        = end_frame,
+#         smoothing_window = 100,
+#     )
 
     # ==================== Hbond detection ============================
 
@@ -1089,13 +1449,13 @@ def main():
     #     channel1=ch1, sf_residues=sf_residues,
     # )
 
-    # from analysis.permeation_stage_times import run_permeation_stage_times_analysis
-    # run_permeation_stage_times_analysis(
-    #     permeation_events=analyzer.permeation_events,
-    #     results_dir=results_dir,
-    #     channel_type=args.channel_type,
-    #     frame_duration=frame_duration,
-    # )
+    # # from analysis.permeation_stage_times import run_permeation_stage_times_analysis
+    # # run_permeation_stage_times_analysis(
+    # #     permeation_events=analyzer.permeation_events,
+    # #     results_dir=results_dir,
+    # #     channel_type=args.channel_type,
+    # #     frame_duration=frame_duration,
+    # # )
 
     # from analysis.ion_residue_force_analysis import run_ion_residue_force_analysis
 
@@ -1124,7 +1484,8 @@ def main():
     #     channel_type               = args.channel_type,
     #     hbc_oscillation_threshold  = 10.0,   # change this to adjust the filter
     # )
-    # # from analysis.cavity_water_count import run_cavity_water_count
+
+    # from analysis.cavity_water_count import run_cavity_water_count
 
     # run_cavity_water_count(
     #     u=u,

@@ -449,4 +449,13 @@ python3 aggregate_ion_residue_force.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c3
 python3 aggregate_ion_residue_force.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_GAT/ \
 --output /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_GAT/ion_residue_force \
 --label G12_GAT 
+
+    python3 aggregate_ion_residue_force.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/ \
+--output /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/ion_residue_force \
+--label G12_D173N 
+
+
+    python3 aggregate_ion_residue_force.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/ \
+--output /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/ion_residue_force \
+--label G12_E141Q 
 """

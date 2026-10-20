@@ -50,10 +50,13 @@ class ClosestResidueAnalysis:
         
         # Special handling for ASP in G12
         if channel_type == "G12":
-            self.asp_residue = 1105
+            self.asp_residue = 131
         elif channel_type == "G12_ML":
             # self.asp_residue = 131
             self.asp_residue = 1106
+        elif channel_type == "G12_GAT":
+            # self.asp_residue = 131
+            self.asp_residue = 1105
         else:
             self.asp_residue = None
         

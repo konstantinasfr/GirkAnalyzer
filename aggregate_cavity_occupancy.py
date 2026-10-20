@@ -34,7 +34,7 @@ class CavityOccupancyAggregator:
         threshold : float
             Threshold value used in the analysis
         channel_type : str
-            Channel type ('G2', 'G12', 'G12_GAT', 'G12_ML')
+            Channel type ('G2', 'G12', 'G12_GAT', 'G12_ML','G12_D173N')
         stage : str
             "end_1" (SF), "end_2" (GLU/ASN cavity) or "end_3" (ASN->HBC region)
         """
@@ -830,7 +830,7 @@ def main():
         "-c", "--channel",
         type=str,
         default="G12",
-        choices=['G2', 'G12', 'G12_GAT', 'G12_ML'],
+        choices=['G2', 'G12', 'G12_GAT', 'G12_ML', 'G12_D173N', 'G12_E141Q'],
         help="Channel type (default: G12). Use G2 to keep D labels, G12/G12_GAT/G12_ML to convert D to G1"
     )
     parser.add_argument(
@@ -890,6 +890,12 @@ if __name__ == "__main__":
 
    python3 aggregate_cavity_occupancy.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2 --threshold 3.0 \
  --output_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/cavity_occupancy --channel G2
+
+    python3 aggregate_cavity_occupancy.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N --threshold 3.0 \
+ --output_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/cavity_occupancy --channel G12_D173N
+
+    python3 aggregate_cavity_occupancy.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q --threshold 3.0 \
+ --output_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/cavity_occupancy --channel G12_E141Q
 
  
 

@@ -152,7 +152,7 @@ def to_pdb(resid: int, channel_type: str) -> str:
         elif resid <= END3: return f"{resid - END2 + 1 + o}.2a"
         elif resid <= END4: return f"{resid - END3 + 1 + o}.2b"
 
-    elif ct in ("G12_GAT", "GAT"):
+    elif ct in ("G12_GAT", "GAT", "G12_D173N", "G12_E141Q"):
         END1, END2, END3, END4 = 324, 649, 974, 1300
         o1, o = 42, 54
         if   resid <= END1: return f"{resid + o}.2b"

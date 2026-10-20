@@ -18,3 +18,5 @@ python3 main.py --channel_type G12 --run_number 17
 python3 main.py --channel_type G12 --run_number 18
 python3 main.py --channel_type G12 --run_number 19
 python3 main.py --channel_type G12 --run_number 20
+# python3 main.py --channel_type G12 --run_number 21
+# python3 main.py --channel_type G12 --run_number 22

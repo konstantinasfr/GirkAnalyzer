@@ -420,4 +420,12 @@ python3 aggregate_ion_cavity_analysis.py /media/ziyue/328bfc27-c1a6-4fce-9199-95
 python3 aggregate_ion_cavity_analysis.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ \
 --output /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ion_cavity_analysis \
 --label G2 
+
+python3 aggregate_ion_cavity_analysis.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/ \
+--output /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/ion_cavity_analysis \
+--label G12_D173N 
+
+python3 aggregate_ion_cavity_analysis.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/ \
+--output /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/ion_cavity_analysis \
+--label G12_E141Q
 """
