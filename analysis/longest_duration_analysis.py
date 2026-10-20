@@ -6,7 +6,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
-from analysis.converter import convert_to_pdb_numbering
+from analysis.converter import convert_to_pdb_numbering, subunit_label
 from matplotlib.ticker import MaxNLocator
 from analysis.closest_residue_analysis import ClosestResidueAnalysis, residue_names_from_topology, ONE_LETTER
 
@@ -72,6 +72,18 @@ class LastAndLongestDurationAnalysis:
         # correctly (e.g. Q141 in E141Q, N173 in D173N) without hard-coding.
         self.resnames = residue_names_from_topology(self.u, asn_residues + glu_residues)
         
+        # Name each subunit group after its chain (G2.a, G2.b, G2.c, G1, ...)
+        # instead of the A-D letters, which mean different chains per channel.
+        # A group whose residues sit on different chains keeps its letter.
+        if self.subunit_groups:
+            renamed = {}
+            for name, residue_list in self.subunit_groups.items():
+                chains = {subunit_label(convert_to_pdb_numbering(r, channel_type)) for r in residue_list}
+                renamed[chains.pop() if len(chains) == 1 else name] = residue_list
+            if len(renamed) == len(self.subunit_groups):
+                print(f"Subunit names: {dict(zip(self.subunit_groups, renamed))}")
+                self.subunit_groups = renamed
+
         # Build reverse mapping if in subunit mode (residue_id -> subunit_name)
         self.residue_to_subunit = {}
         if self.subunit_groups:
@@ -652,7 +664,8 @@ class LastAndLongestDurationAnalysis:
                 n_no_contact += 1
                 continue
             if is_subunit_mode:
-                label, rtype = str(ident), None
+                # Chain name from the residues, so old JSONs (A-D) get it too
+                label, rtype = subunit_label(residues[0]['residue_pdb']), None
             else:
                 label, rtype = residues[0]['residue_pdb'], residues[0].get('residue_type') or 'Unknown'
             d = per_id.setdefault(label, {'type': rtype, 'durations': []})
@@ -679,7 +692,7 @@ class LastAndLongestDurationAnalysis:
         labels, colors, counts, mean_durs = [], [], [], []
         for label, rtype, count, mean_dur in items:
             if is_subunit_mode:
-                labels.append(f"Subunit {label}")
+                labels.append(label)
                 colors.append(self.SUBUNIT_COLOR)
             else:
                 labels.append(f"{ONE_LETTER.get(rtype, '')}{label}")
