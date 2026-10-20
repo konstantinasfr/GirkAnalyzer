@@ -6,7 +6,7 @@ ALL channels into ONE Excel file, for comparing channels:
 
     last     LAST residue/subunit contacted before leaving the GLU/ASN cavity
     longest  LONGEST contact before leaving the cavity
-    first    FIRST residue/subunit contacted after entering the cavity
+    first    FIRST residue/subunit contacted after leaving the SF
 
 each in residue and subunit mode, for every run group:
 
@@ -249,7 +249,7 @@ def main():
         args.threshold, args.min_duration, ', '.join(channels),
         'LAST residue/subunit the ion contacted before leaving the GLU/ASN cavity (searched end_2 -> end_1)',
         'LONGEST contact before leaving the cavity (end_1 -> end_2)',
-        'FIRST residue/subunit contacted after entering the cavity (start_2 -> end_2)',
+        'FIRST residue/subunit contacted after leaving the SF (end_1 -> end_2, same window as last)',
         'residue = single residues; subunit = chain (its GLU/GLN + ASN/ASP together)',
         'ALL runs; HIGH/TYPICAL/LOW = permeation categories; ligand D/E = G12_ML ligand categories',
         'residue position (e.g. 173.G1) or subunit (G2.a, G1); compare positions, not names, across mutants',
@@ -258,14 +258,14 @@ def main():
         'number of runs in which this label occurred at least once',
         'all events of the group pooled (runs with more events weigh more)',
         'contact length in frames (consecutive frames closest and within the threshold)',
-        'last/longest: frames from the end of the contact to end_2; first: frames from start_2 to the contact',
+        'last/longest: frames from the end of the contact to end_2; first: frames from end_1 to the contact',
         'upper ring = 152/141 (GLU/GLN), lower ring = 184/173 (ASN/ASP)',
         'the ion never stayed within the threshold for min_duration frames',
         'in frames; convert with each channel\'s time per frame before comparing channels in ns',
     ]})
 
     events_out = events[['channel', 'run', 'category', 'ligand', 'contact', 'mode', 'ion_id',
-                         'start_2_frame', 'end_2_frame', 'label', 'type', 'ring', 'duration',
+                         'end_1_frame', 'end_2_frame', 'label', 'type', 'ring', 'duration',
                          'start_frame', 'end_frame', 'gap']]
     with pd.ExcelWriter(output) as xl:
         readme.to_excel(xl, sheet_name='README', index=False)

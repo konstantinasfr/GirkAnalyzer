@@ -1699,7 +1699,7 @@ def main():
 #         results_dir=f"{results_dir}/duration_subunit/{threshold}_{min_duration}"
 #     )
 
-    # FIRST contact after entering the cavity (start_2 -> end_2), same rule
+    # FIRST contact after leaving the SF (end_1 -> end_2, same window as the last contact)
     from analysis.longest_duration_analysis import run_first_duration_analysis
     threshold = 3.5
     min_duration = 5

@@ -9,7 +9,7 @@ all runs of one channel:
                               before the ion left the GLU/ASN cavity (end_2)
   --analysis first            run_first_duration_analysis: which residue /
                               subunit was the FIRST contact after the ion
-                              entered the cavity (start_2)
+                              left the SF (end_1)
 
 The runs are aggregated four times, each into its own folder inside the
 output directory:
@@ -124,10 +124,10 @@ ANALYSES = {
         'dir': 'duration_first_{mode}',           # RUN*/duration_first_residue/<t>_<d>/
         'sides': ['first'],                       # first_duration_residue.json
         'out': 'aggregated_first_duration',
-        'titles': {'first': 'FIRST {unit} After Entering Cavity'},
-        'gap_name': 'start_2_to_contact',         # frames from start_2 to the start of the contact
-        'gap_title': 'start_2 → first contact',
-        'desc': 'first contact after entering the cavity',
+        'titles': {'first': 'FIRST {unit} After Leaving the SF'},
+        'gap_name': 'end_1_to_contact',           # frames from end_1 to the start of the contact
+        'gap_title': 'end_1 → first contact',
+        'desc': 'first contact after leaving the SF',
     },
 }
 
@@ -203,8 +203,8 @@ class DurationResultsAggregator:
                 self.res_types[pdb] = rtype
             duration = ev.get('duration')
             if self.analysis == 'first':
-                gap = (ev['start_frame'] - ev['start_2_frame']
-                       if ev.get('start_frame') is not None and ev.get('start_2_frame') is not None else None)
+                gap = (ev['start_frame'] - ev['end_1_frame']
+                       if ev.get('start_frame') is not None and ev.get('end_1_frame') is not None else None)
             else:
                 gap = (ev['end_2_frame'] - ev['end_frame']
                        if ev.get('end_frame') is not None and ev.get('end_2_frame') is not None else None)
@@ -214,7 +214,7 @@ class DurationResultsAggregator:
         return {
             'run': run,
             'ion_id': ev.get('ion_id'),
-            'start_2_frame': ev.get('start_2_frame'),
+            'end_1_frame': ev.get('end_1_frame'),
             'end_2_frame': ev.get('end_2_frame'),
             'label': label,
             'type': rtype,
@@ -407,7 +407,7 @@ class DurationResultsAggregator:
 
     def duration_plot(self, frames, group, output_file):
         """Pooled histograms: contact duration of each side, plus the gap
-        (last: contact end -> end_2; first: start_2 -> contact start)."""
+        (last: contact end -> end_2; first: end_1 -> contact start)."""
         hits = {side: frames[side][frames[side]['label'] != NO_CONTACT] for side in self.sides}
         panels = [(f"{side.capitalize()} contact duration", hits[side]['duration'].dropna().values)
                   for side in self.sides]
@@ -538,7 +538,7 @@ class DurationResultsAggregator:
                          .reset_index(drop=True) for side in self.sides[1:]]
                 ev = pd.concat([ev.reset_index(drop=True)] + extra, axis=1)
                 if self.analysis != 'first':
-                    ev = ev.drop(columns='start_2_frame')
+                    ev = ev.drop(columns='end_1_frame')
                 for i, (col, values) in enumerate(run_info.items()):
                     ev.insert(1 + i, col.lower(), [values.get(r, '') for r in ev['run']])
                 ev['_run_order'] = ev['run'].map(lambda r: run_sort_key(r)[0])
@@ -597,7 +597,7 @@ def main():
                         help="Minimum duration value used in the analysis (e.g., 5)")
     parser.add_argument("--analysis", choices=sorted(ANALYSES), default="last",
                         help="last: last/longest contact before end_2 (run_last_duration_analysis); "
-                             "first: first contact after start_2 (run_first_duration_analysis)")
+                             "first: first contact after end_1 (run_first_duration_analysis or derive_first_contact.py)")
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Output directory (default: base_directory/aggregated_duration/t*_d*, or "
                              "aggregated_first_duration/t*_d* with --analysis first). "

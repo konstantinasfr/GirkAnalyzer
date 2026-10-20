@@ -1,6 +1,8 @@
 import MDAnalysis as mda
 import numpy as np
+import io
 import json
+import contextlib
 from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
@@ -809,12 +811,37 @@ class LastAndLongestDurationAnalysis:
         self.create_duration_plot(output_dir / f"contact_durations_{mode_str}_{tag}.png")
 
 
+def first_contact_result(ion_id, end_1_frame, end_2_frame, mode, durations, start_2_frame=None):
+    """Result dict of one event: the earliest of its qualifying contacts."""
+    first = min(durations, key=lambda d: d['start_frame']) if durations else None
+    return {
+        'ion_id': int(ion_id),
+        'end_1_frame': int(end_1_frame) if end_1_frame is not None else None,
+        'start_2_frame': int(start_2_frame) if start_2_frame is not None else None,
+        'end_2_frame': int(end_2_frame),
+        'mode': mode,
+        'first_identifier': first['identifier'] if first else None,
+        'first_residues': first['residues'] if first else None,
+        'first_duration': first['duration'] if first else 0,
+        'first_start_frame': first['start_frame'] if first else None,
+        'first_end_frame': first['end_frame'] if first else None,
+        'n_durations_found': len(durations),
+        'all_durations': durations
+    }
+
+
 class FirstContactAnalysis(LastAndLongestDurationAnalysis):
     """
-    The FIRST residue/subunit the ion contacts after it enters the GLU/ASN
-    cavity: same contact rule as LastAndLongestDurationAnalysis (closest
-    residue within `threshold` for >= `min_duration` consecutive frames),
-    but searched forwards from start_2 (first frame in the cavity) to end_2.
+    The FIRST residue/subunit the ion contacts after it leaves the SF: same
+    contact rule AND same window as LastAndLongestDurationAnalysis (closest
+    residue within `threshold` for >= `min_duration` consecutive frames,
+    between end_1 and end_2). Of the contacts in that window, the "last"
+    analysis keeps the latest and this one the earliest.
+
+    The window starts at end_1, not start_2: start_2 is overwritten every
+    time the ion comes back into region 2 (e.g. after a dip into region 3),
+    so it is the start of the LAST stay in region 2, often only a few frames
+    before end_2, not the moment the ion entered the cavity.
 
     Results are saved next to the "last" ones but under their own names
     (duration_first_complete_*.json, first_duration_*.json), so the two
@@ -822,30 +849,17 @@ class FirstContactAnalysis(LastAndLongestDurationAnalysis):
     """
 
     def analyze_event(self, event):
-        """Analyze a single permeation event: first contact in start_2..end_2."""
+        """Analyze a single permeation event: first contact in end_1..end_2."""
         ion_id = event['ion_id']
-        start_2_frame = event['start_2']   # first frame in the GLU/ASN cavity
+        # Last frame in the SF; stored as 'R1_end' in older runs
+        end_1_frame = event.get('end_1', event.get('R1_end', event.get('start_2')))
         end_2_frame = event['end_2']
 
-        # Same contact segmentation as the "last" analysis, over this window;
+        # Same window and contact segmentation as the "last" analysis;
         # the first contact is the qualifying contact that starts earliest.
-        result = self.find_last_and_longest_duration(ion_id, end_2_frame, start_2_frame)
-        durations = result['all_durations']
-        first = min(durations, key=lambda d: d['start_frame']) if durations else None
-
-        return {
-            'ion_id': int(ion_id),
-            'start_2_frame': int(start_2_frame),
-            'end_2_frame': int(end_2_frame),
-            'mode': result['mode'],
-            'first_identifier': first['identifier'] if first else None,
-            'first_residues': first['residues'] if first else None,
-            'first_duration': first['duration'] if first else 0,
-            'first_start_frame': first['start_frame'] if first else None,
-            'first_end_frame': first['end_frame'] if first else None,
-            'n_durations_found': len(durations),
-            'all_durations': durations
-        }
+        result = self.find_last_and_longest_duration(ion_id, end_2_frame, end_1_frame)
+        return first_contact_result(ion_id, end_1_frame, end_2_frame, result['mode'],
+                                    result['all_durations'], event.get('start_2'))
 
     def run_analysis(self):
         """Run first-contact analysis for all permeation events."""
@@ -864,7 +878,7 @@ class FirstContactAnalysis(LastAndLongestDurationAnalysis):
             result = self.analyze_event(event)
             self.results.append(result)
 
-            print(f"\nIon {result['ion_id']} (start_2 {result['start_2_frame']} → end_2 {result['end_2_frame']}):")
+            print(f"\nIon {result['ion_id']} (end_1 {result['end_1_frame']} → end_2 {result['end_2_frame']}):")
             if result['first_identifier']:
                 res_str = ', '.join(f"{r['residue_type']} {r['residue_id']} ({r['residue_pdb']})"
                                     for r in result['first_residues'])
@@ -900,7 +914,8 @@ class FirstContactAnalysis(LastAndLongestDurationAnalysis):
             json.dump({'threshold': self.threshold, 'min_duration': self.min_duration, 'mode': mode_str,
                        'results': [{
                            'ion_id': r['ion_id'],
-                           'start_2_frame': r['start_2_frame'],
+                           'end_1_frame': r.get('end_1_frame'),
+                           'start_2_frame': r.get('start_2_frame'),
                            'end_2_frame': r['end_2_frame'],
                            'identifier': r['first_identifier'],
                            'residues': r['first_residues'],
@@ -923,7 +938,7 @@ class FirstContactAnalysis(LastAndLongestDurationAnalysis):
             key = str(r['first_identifier']) if self.subunit_groups else r['first_residues'][0]['residue_type']
             counts[key] = counts.get(key, 0) + 1
         durations = [r['first_duration'] for r in hits]
-        delays = [r['first_start_frame'] - r['start_2_frame'] for r in hits]
+        delays = [r['first_start_frame'] - r['end_1_frame'] for r in hits if r.get('end_1_frame') is not None]
 
         def stats(v):
             return {'avg': float(np.mean(v)) if v else None, 'std': float(np.std(v)) if v else None,
@@ -937,7 +952,7 @@ class FirstContactAnalysis(LastAndLongestDurationAnalysis):
             'first_counts': counts,
             'none_count': len(self.results) - len(hits),
             'first_duration_stats': stats(durations),
-            'start_2_to_first_contact_stats': stats(delays)
+            'end_1_to_first_contact_stats': stats(delays)
         }
         output_file = self.results_dir / f"duration_first_summary_{mode_str}.json"
         with open(output_file, 'w') as f:
@@ -954,8 +969,9 @@ class FirstContactAnalysis(LastAndLongestDurationAnalysis):
         if durations:
             s = summary['first_duration_stats']
             print(f"\nFIRST contact duration: {s['avg']:.1f} ± {s['std']:.1f} frames ({s['min']} - {s['max']})")
-            s = summary['start_2_to_first_contact_stats']
-            print(f"start_2 → first contact: {s['avg']:.1f} ± {s['std']:.1f} frames ({s['min']} - {s['max']})")
+        if delays:
+            s = summary['end_1_to_first_contact_stats']
+            print(f"end_1 → first contact: {s['avg']:.1f} ± {s['std']:.1f} frames ({s['min']} - {s['max']})")
         print(f"\n✓ Summary saved to: {output_file}")
         print("="*80)
         return summary
@@ -964,13 +980,13 @@ class FirstContactAnalysis(LastAndLongestDurationAnalysis):
         """
         Two histograms (frames):
           - duration of the FIRST contact
-          - delay from start_2 (entering the cavity) to the start of the first
-            contact (0 = in contact from the first cavity frame)
+          - delay from end_1 (last SF frame) to the start of the first contact
         """
         hits = [r for r in self.results if r['first_identifier']]
         panels = [
             ('First contact duration', [r['first_duration'] for r in hits]),
-            ('start_2 → first contact', [r['first_start_frame'] - r['start_2_frame'] for r in hits]),
+            ('end_1 → first contact', [r['first_start_frame'] - r['end_1_frame'] for r in hits
+                                        if r.get('end_1_frame') is not None]),
         ]
 
         plt.rcParams['font.family'] = 'DejaVu Sans'
@@ -997,7 +1013,7 @@ class FirstContactAnalysis(LastAndLongestDurationAnalysis):
             ax.set_ylim(0, ax.get_ylim()[1] * 1.2)
             ax.legend(fontsize=12, frameon=True, framealpha=0.9, loc='upper right')
 
-        fig.suptitle(f"{self.channel_type}: first contact after entering the cavity "
+        fig.suptitle(f"{self.channel_type}: first contact after leaving the SF "
                      f"(< {self.threshold} Å, ≥ {self.min_duration} frames; "
                      f"{len(self.results) - len(hits)}/{len(self.results)} events with no contact)",
                      fontsize=16, fontweight='bold')
@@ -1018,7 +1034,7 @@ class FirstContactAnalysis(LastAndLongestDurationAnalysis):
         tag = f"t{self.threshold}_d{self.min_duration}"
         print("\nCreating first-contact plots...")
 
-        self.create_bar_plot('first', f"{self.channel_type}: FIRST {unit} After Entering Cavity",
+        self.create_bar_plot('first', f"{self.channel_type}: FIRST {unit} After Leaving the SF",
                              output_dir / f"first_{mode_str}_frequency_{tag}.png")
         self.create_duration_plot(output_dir / f"first_contact_durations_{mode_str}_{tag}.png")
 
@@ -1124,13 +1140,51 @@ def run_last_duration_analysis(universe, permeation_events, asn_residues,
     return analyzer
 
 
+def first_contact_from_last(complete_json, results_dir=None, make_plots=True):
+    """
+    First-contact results from an existing duration_analysis_complete_*.json
+    of the LAST-contact analysis, without the trajectory: that file already
+    lists every qualifying contact of each event between end_1 and end_2
+    (all_durations), so the first contact is the earliest of them. Gives the
+    same result as running FirstContactAnalysis on the trajectory.
+
+    Written to the matching duration_first_<mode>/<t>_<d>/ folder
+    (e.g. RUN1/duration_residue/3.5_5 -> RUN1/duration_first_residue/3.5_5).
+    """
+    complete_json = Path(complete_json)
+    with open(complete_json) as f:
+        data = json.load(f)
+    mode = data['mode']
+    if results_dir is None:
+        results_dir = complete_json.parent.parent.parent / f"duration_first_{mode}" / complete_json.parent.name
+
+    analyzer = FirstContactAnalysis.__new__(FirstContactAnalysis)
+    analyzer.results = [first_contact_result(r['ion_id'], r.get('end_1_frame'), r['end_2_frame'],
+                                             r.get('mode', mode), r.get('all_durations') or [])
+                        for r in data['results']]
+    analyzer.threshold = data['threshold']
+    analyzer.min_duration = data['min_duration']
+    analyzer.subunit_groups = data.get('subunit_groups')
+    analyzer.channel_type = data.get('channel_type', '')
+    analyzer.asn_residues = data.get('asn_residues')
+    analyzer.glu_residues = data.get('glu_residues')
+    analyzer.residue_types = data.get('residue_types')
+    analyzer.results_dir = Path(results_dir)
+    with contextlib.redirect_stdout(io.StringIO()):
+        analyzer.save_results()
+        analyzer.create_summary()
+        if make_plots:
+            analyzer.create_plots()
+    return analyzer
+
+
 def run_first_duration_analysis(universe, permeation_events, asn_residues,
                                 glu_residues, channel_type="G12", threshold=3.0,
                                 min_duration=10, analysis_start_frame=0,
                                 residue_types=['ASN', 'GLU'], subunit_groups=None,
                                 results_dir="."):
     """
-    Convenience function to run the FIRST-contact analysis (start_2 -> end_2).
+    Convenience function to run the FIRST-contact analysis (end_1 -> end_2).
     Same parameters as run_last_duration_analysis.
 
     Returns:
