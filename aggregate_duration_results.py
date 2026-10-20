@@ -616,3 +616,21 @@ if __name__ == "__main__":
 # python3 aggregate_duration_results.py /path/to/G12 --threshold 2.5 --min_duration 3 \
 #     --categories /path/to/G12/permeation_summary/run_categories_full_permeations_total.csv \
 #     --output_dir /path/to/output
+
+'''
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ \
+--threshold 3.5 --min_duration 5
+
+
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ \
+--threshold 3.5 --min_duration 5
+
+
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/ \
+--threshold 3.5 --min_duration 5
+
+
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/ \
+--threshold 3.5 --min_duration 5
+
+'''
