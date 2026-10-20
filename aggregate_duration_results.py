@@ -41,6 +41,10 @@ class DurationResultsAggregator:
         self.longest_residue_counts = defaultdict(int)
         self.last_subunit_counts = defaultdict(int)
         self.longest_subunit_counts = defaultdict(int)
+
+        # {residue_pdb: residue name} from the JSONs (read from the topology by
+        # longest_duration_analysis.py), so mutants are labelled correctly
+        self.res_types = {}
         
     def load_all_runs(self):
         """Load duration analysis results from all subdirectories."""
@@ -95,12 +99,19 @@ class DurationResultsAggregator:
                             # Get the PDB numbering from the residue list
                             res_pdb = event['residues'][0]['residue_pdb']
                             self.last_residue_counts[res_pdb] += 1
+                            if event['residues'][0].get('residue_type'):
+                                self.res_types[res_pdb] = event['residues'][0]['residue_type']
+                        else:
+                            # Ion never stayed within the threshold for min_duration
+                            self.last_residue_counts[self.NO_CONTACT] += 1
                     
                     # Aggregate LONGEST residue data
                     for event in longest_residue_data['results']:
                         if event['identifier'] and event['residues']:
                             res_pdb = event['residues'][0]['residue_pdb']
                             self.longest_residue_counts[res_pdb] += 1
+                        else:
+                            self.longest_residue_counts[self.NO_CONTACT] += 1
                     
                     loaded_residue += 1
                     print(f"  ✓ {run_name}: Loaded residue-level ({len(residue_data['results'])} events)")
@@ -132,12 +143,16 @@ class DurationResultsAggregator:
                         if event['identifier']:
                             subunit = event['identifier']
                             self.last_subunit_counts[subunit] += 1
+                        else:
+                            self.last_subunit_counts[self.NO_CONTACT] += 1
                     
                     # Aggregate LONGEST subunit data
                     for event in longest_subunit_data['results']:
                         if event['identifier']:
                             subunit = event['identifier']
                             self.longest_subunit_counts[subunit] += 1
+                        else:
+                            self.longest_subunit_counts[self.NO_CONTACT] += 1
                     
                     loaded_subunit += 1
                     print(f"  ✓ {run_name}: Loaded subunit-level ({len(subunit_data['results'])} events)")
@@ -151,63 +166,82 @@ class DurationResultsAggregator:
         
         return loaded_residue > 0 or loaded_subunit > 0
     
+    NO_CONTACT = 'No contact'
+    ONE_LETTER = {'GLU': 'E', 'GLN': 'Q', 'ASP': 'D', 'ASN': 'N'}
+    TYPE_COLORS = {'GLU': 'salmon', 'GLN': 'sandybrown', 'ASN': 'lightblue', 'ASP': 'lightgreen'}
+
+    def res_type(self, res):
+        """Residue name from the JSON; falls back to the WT numbering guess."""
+        if res in self.res_types:
+            return self.res_types[res]
+        if '152' in res or '141' in res:
+            return 'GLU'
+        elif '184' in res:
+            return 'ASN'
+        elif '173' in res:
+            return 'ASP'
+        return 'Unknown'
+
     def create_bar_plot(self, counts_dict, title, ylabel, output_file, is_subunit=False):
         """Create a simple bar plot for frequency counts."""
         if not counts_dict:
             print(f"No data for: {title}")
             return
         
-        # Sort by count (descending)
-        sorted_items = sorted(counts_dict.items(), key=lambda x: x[1], reverse=True)
+        # Sort by count (descending); "No contact" always last
+        sorted_items = sorted(((k, v) for k, v in counts_dict.items() if k != self.NO_CONTACT),
+                              key=lambda x: x[1], reverse=True)
+        sorted_items.append((self.NO_CONTACT, counts_dict.get(self.NO_CONTACT, 0)))
         labels = [item[0] for item in sorted_items]
         counts = [item[1] for item in sorted_items]
+        total = sum(counts)
         
         # Create figure
         fig, ax = plt.subplots(figsize=(12, 6))
         
         # Color code
         if is_subunit:
-            colors = ['steelblue', 'coral', 'lightgreen', 'plum'][:len(labels)]
+            colors = ['steelblue', 'coral', 'lightgreen', 'plum'][:len(labels) - 1]
         else:
-            colors = []
-            for label in labels:
-                if '152' in label or '141' in label:  # GLU
-                    colors.append('salmon')
-                elif '184' in label:  # ASN
-                    colors.append('lightblue')
-                elif '173' in label:  # ASP
-                    colors.append('lightgreen')
-                else:
-                    colors.append('gray')
+            colors = [self.TYPE_COLORS.get(self.res_type(label), 'gray') for label in labels[:-1]]
+        colors.append('lightgray')
         
         bars = ax.bar(range(len(labels)), counts, color=colors, alpha=0.7, 
                      edgecolor='black', linewidth=1.5)
+        bars[-1].set_hatch('//')
         
-        # Add count labels on top of bars
+        # Add count (+ % of all events) labels on top of bars
         for i, (bar, count) in enumerate(zip(bars, counts)):
             height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
-                   f'{count}',
+            ax.text(bar.get_x() + bar.get_width()/2., height + max(counts) * 0.03,
+                   f'{count} ({100.0 * count / total:.1f}%)' if total else f'{count}',
                    ha='center', va='bottom', fontsize=12, fontweight='bold')
         
         # Formatting
+        if not is_subunit:
+            tick_labels = [f"{self.ONE_LETTER.get(self.res_type(l), '')}{l}" for l in labels[:-1]]
+        else:
+            tick_labels = labels[:-1]
+        tick_labels.append(self.NO_CONTACT)
         ax.set_xticks(range(len(labels)))
-        ax.set_xticklabels(labels, fontsize=12, fontweight='bold', rotation=45, ha='right')
+        ax.set_xticklabels(tick_labels, fontsize=12, fontweight='bold', rotation=45, ha='right')
         ax.set_ylabel(ylabel, fontsize=14, fontweight='bold')
         ax.set_xlabel('Subunit' if is_subunit else 'Residue (PDB)', fontsize=14, fontweight='bold')
-        ax.set_title(f'{title}\n(Threshold={self.threshold}Å, Min Duration={self.min_duration} frames)', 
+        ax.set_title(f'{title}\n(n = {total} events, Threshold={self.threshold}Å, Min Duration={self.min_duration} frames)', 
                     fontsize=16, fontweight='bold', pad=20)
         ax.grid(True, alpha=0.3, axis='y')
+        ax.set_ylim(0, max(max(counts), 1) * 1.2)   # headroom for the bar labels
+        ax.yaxis.get_major_locator().set_params(integer=True)
         
-        # Add legend for residue mode
+        # Legend: residue types (residue mode only) + "No contact"
+        from matplotlib.patches import Patch
+        legend_elements = []
         if not is_subunit:
-            from matplotlib.patches import Patch
-            legend_elements = [
-                Patch(facecolor='salmon', edgecolor='black', label='GLU'),
-                Patch(facecolor='lightblue', edgecolor='black', label='ASN'),
-                Patch(facecolor='lightgreen', edgecolor='black', label='ASP')
-            ]
-            ax.legend(handles=legend_elements, loc='upper right', fontsize=11)
+            present = {self.res_type(l) for l in labels[:-1]}
+            legend_elements = [Patch(facecolor=c, edgecolor='black', label=t)
+                               for t, c in self.TYPE_COLORS.items() if t in present]
+        legend_elements.append(Patch(facecolor='lightgray', edgecolor='black', hatch='//', label=self.NO_CONTACT))
+        ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.01, 1.0), fontsize=11)
         
         plt.tight_layout()
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
@@ -280,16 +314,9 @@ class DurationResultsAggregator:
             all_residues = set(self.last_residue_counts.keys()) | set(self.longest_residue_counts.keys())
             
             residue_table = []
-            for residue in sorted(all_residues):
-                # Determine type
-                if '152' in residue or '141' in residue:
-                    res_type = 'GLU'
-                elif '184' in residue:
-                    res_type = 'ASN'
-                elif '173' in residue:
-                    res_type = 'ASP'
-                else:
-                    res_type = 'Unknown'
+            # "No contact" kept as the last row
+            for residue in sorted(all_residues - {self.NO_CONTACT}) + [self.NO_CONTACT]:
+                res_type = '' if residue == self.NO_CONTACT else self.res_type(residue)
                 
                 residue_table.append({
                     'Residue_PDB': residue,
@@ -308,7 +335,7 @@ class DurationResultsAggregator:
             all_subunits = set(self.last_subunit_counts.keys()) | set(self.longest_subunit_counts.keys())
             
             subunit_table = []
-            for subunit in sorted(all_subunits):
+            for subunit in sorted(all_subunits - {self.NO_CONTACT}) + [self.NO_CONTACT]:
                 subunit_table.append({
                     'Subunit': subunit,
                     'Last_Count': self.last_subunit_counts.get(subunit, 0),
