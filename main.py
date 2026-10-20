@@ -1699,6 +1699,23 @@ def main():
 #         results_dir=f"{results_dir}/duration_subunit/{threshold}_{min_duration}"
 #     )
 
+#     # FIRST contact after entering the cavity (start_2 -> end_2), same rule
+#     from analysis.longest_duration_analysis import run_first_duration_analysis
+#     for groups, mode in ((None, "residue"), (subunit_groups, "subunit")):
+#         run_first_duration_analysis(
+#             universe=u,
+#             permeation_events=analyzer.permeation_events,
+#             asn_residues=asn_residues,
+#             glu_residues=glu_residues,
+#             channel_type=channel_type,
+#             threshold=threshold,
+#             min_duration=min_duration,
+#             analysis_start_frame=start_frame,
+#             residue_types=['ASN', 'GLU'],
+#             subunit_groups=groups,
+#             results_dir=f"{results_dir}/duration_first_{mode}/{threshold}_{min_duration}"
+#         )
+
 
 #     #  NEW: Add proximity analysis
 #     print("\n" + "="*70)

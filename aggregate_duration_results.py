@@ -1,9 +1,15 @@
 """
 aggregate_duration_results.py
 =============================
-Aggregates run_last_duration_analysis (analysis/longest_duration_analysis.py)
-over all runs of one channel: which residue / subunit was the LAST and the
-LONGEST contact before the ion left the GLU/ASN cavity (end_2).
+Aggregates the contact analyses of analysis/longest_duration_analysis.py over
+all runs of one channel:
+
+  --analysis last  (default)  run_last_duration_analysis: which residue /
+                              subunit was the LAST and the LONGEST contact
+                              before the ion left the GLU/ASN cavity (end_2)
+  --analysis first            run_first_duration_analysis: which residue /
+                              subunit was the FIRST contact after the ion
+                              entered the cavity (start_2)
 
 The runs are aggregated four times, each into its own folder inside the
 output directory:
@@ -26,7 +32,12 @@ Two ways of combining runs are reported in every folder:
 Events where the ion never stayed within the threshold for min_duration
 frames are counted as "No contact" everywhere (bars, tables, fractions).
 
-Outputs (per folder, t = threshold, d = min_duration):
+Default output folders (t = threshold, d = min_duration):
+    --analysis last   <base>/aggregated_duration/t*_d*/{ALL,HIGH,TYPICAL,LOW}/
+    --analysis first  <base>/aggregated_first_duration/t*_d*/{ALL,HIGH,TYPICAL,LOW}/
+
+Outputs (per folder; with --analysis first the "last"/"longest" files are a
+single "first" set):
     last_residue_frequency_t*_d*.png          pooled bar plots
     longest_residue_frequency_t*_d*.png
     last_subunit_frequency_t*_d*.png
@@ -44,6 +55,7 @@ Outputs (per folder, t = threshold, d = min_duration):
 USAGE
 -----
     python3 aggregate_duration_results.py /path/to/G12 --threshold 2.5 --min_duration 3
+    python3 aggregate_duration_results.py /path/to/G12 --threshold 2.5 --min_duration 3 --analysis first
 
 The categories CSV is found automatically at
 <base>/permeation_summary/run_categories_full_permeations_total.csv;
@@ -82,7 +94,29 @@ TYPE_ORDER = ['GLU', 'GLN', 'ASN', 'ASP', 'Unknown']
 SUBUNIT_COLOR = '#8E9AAF'
 NO_CONTACT_COLOR = '#D9D9D9'
 MODES = ['residue', 'subunit']
-SIDES = ['last', 'longest']
+
+# What each analysis reads and how it is labelled
+ANALYSES = {
+    'last': {
+        'dir': 'duration_{mode}',                 # RUN*/duration_residue/<t>_<d>/
+        'sides': ['last', 'longest'],             # last_duration_residue.json, longest_...
+        'out': 'aggregated_duration',
+        'titles': {'last': 'LAST {unit} Before Leaving Cavity',
+                   'longest': 'LONGEST {unit} Contact Before Leaving Cavity'},
+        'gap_name': 'gap_to_end_2',               # frames from the end of the contact to end_2
+        'gap_title': 'Last contact end → end_2',
+        'desc': 'contacts before leaving the cavity',
+    },
+    'first': {
+        'dir': 'duration_first_{mode}',           # RUN*/duration_first_residue/<t>_<d>/
+        'sides': ['first'],                       # first_duration_residue.json
+        'out': 'aggregated_first_duration',
+        'titles': {'first': 'FIRST {unit} After Entering Cavity'},
+        'gap_name': 'start_2_to_contact',         # frames from start_2 to the start of the contact
+        'gap_title': 'start_2 → first contact',
+        'desc': 'first contact after entering the cavity',
+    },
+}
 
 
 def run_sort_key(name):
@@ -108,8 +142,11 @@ class DurationResultsAggregator:
     and tables for any subset of runs (ALL / HIGH / TYPICAL / LOW).
     """
 
-    def __init__(self, base_directory, threshold, min_duration, channel_type=None):
+    def __init__(self, base_directory, threshold, min_duration, channel_type=None, analysis='last'):
         self.base_dir = Path(base_directory)
+        self.analysis = analysis
+        self.cfg = ANALYSES[analysis]
+        self.sides = self.cfg['sides']
         self.threshold = threshold
         self.min_duration = min_duration
         self.channel_type = channel_type or self.base_dir.name
@@ -122,7 +159,7 @@ class DurationResultsAggregator:
         self.tag = f"t{self.threshold_str}_d{self.min_duration}"
 
         # events[mode][side] = list of dicts, one per permeation event
-        self.events = {m: {s: [] for s in SIDES} for m in MODES}
+        self.events = {m: {s: [] for s in self.sides} for m in MODES}
         self.runs_loaded = {m: [] for m in MODES}
         # {residue_pdb: residue name}, from the JSONs (read from the topology)
         self.res_types = {}
@@ -134,7 +171,7 @@ class DurationResultsAggregator:
     def _find_file(self, run_dir, mode, side):
         for variant in (f"{self.threshold_str}_{self.min_duration}",
                         f"{self.threshold}_{self.min_duration}"):
-            f = run_dir / f"duration_{mode}" / variant / f"{side}_duration_{mode}.json"
+            f = run_dir / self.cfg['dir'].format(mode=mode) / variant / f"{side}_duration_{mode}.json"
             if f.exists():
                 return f
         return None
@@ -152,21 +189,26 @@ class DurationResultsAggregator:
                 rtype = residues[0].get('residue_type') or guess_type(pdb)
                 self.res_types[pdb] = rtype
             duration = ev.get('duration')
-            gap = (ev['end_2_frame'] - ev['end_frame']
-                   if ev.get('end_frame') is not None and ev.get('end_2_frame') is not None else None)
+            if self.analysis == 'first':
+                gap = (ev['start_frame'] - ev['start_2_frame']
+                       if ev.get('start_frame') is not None and ev.get('start_2_frame') is not None else None)
+            else:
+                gap = (ev['end_2_frame'] - ev['end_frame']
+                       if ev.get('end_frame') is not None and ev.get('end_2_frame') is not None else None)
         else:
             # Ion never stayed within the threshold for min_duration frames
             label, rtype, duration, gap = NO_CONTACT, None, None, None
         return {
             'run': run,
             'ion_id': ev.get('ion_id'),
+            'start_2_frame': ev.get('start_2_frame'),
             'end_2_frame': ev.get('end_2_frame'),
             'label': label,
             'type': rtype,
             'duration': duration,
             'start_frame': ev.get('start_frame'),
             'end_frame': ev.get('end_frame'),
-            'gap_to_end_2': gap,
+            'gap': gap,
         }
 
     def load_all_runs(self):
@@ -183,7 +225,7 @@ class DurationResultsAggregator:
 
         for run_dir in run_dirs:
             for mode in MODES:
-                files = {side: self._find_file(run_dir, mode, side) for side in SIDES}
+                files = {side: self._find_file(run_dir, mode, side) for side in self.sides}
                 if not all(files.values()):
                     continue
                 try:
@@ -194,10 +236,10 @@ class DurationResultsAggregator:
                 except Exception as e:
                     print(f"  ✗ {run_dir.name}: error loading {mode}-level: {e}")
                     continue
-                for side in SIDES:
+                for side in self.sides:
                     self.events[mode][side] += [self._event_row(run_dir.name, mode, ev) for ev in loaded[side]]
                 self.runs_loaded[mode].append(run_dir.name)
-                print(f"  ✓ {run_dir.name}: {mode}-level ({len(loaded['last'])} events)")
+                print(f"  ✓ {run_dir.name}: {mode}-level ({len(loaded[self.sides[0]])} events)")
 
         for mode in MODES:
             print(f"  {mode}-level: {len(self.runs_loaded[mode])} runs")
@@ -350,18 +392,16 @@ class DurationResultsAggregator:
         plt.close(fig)
         print(f"✓ Plot saved: {output_file}")
 
-    def duration_plot(self, last_df, longest_df, group, output_file):
-        """Pooled histograms: last / longest contact duration, gap from last contact to end_2."""
-        last = last_df[last_df['label'] != NO_CONTACT]
-        longest = longest_df[longest_df['label'] != NO_CONTACT]
-        panels = [
-            ('Last contact duration', last['duration'].dropna().values),
-            ('Longest contact duration', longest['duration'].dropna().values),
-            ('Last contact end → end_2', last['gap_to_end_2'].dropna().values),
-        ]
+    def duration_plot(self, frames, group, output_file):
+        """Pooled histograms: contact duration of each side, plus the gap
+        (last: contact end -> end_2; first: start_2 -> contact start)."""
+        hits = {side: frames[side][frames[side]['label'] != NO_CONTACT] for side in self.sides}
+        panels = [(f"{side.capitalize()} contact duration", hits[side]['duration'].dropna().values)
+                  for side in self.sides]
+        panels.append((self.cfg['gap_title'], hits[self.sides[0]]['gap'].dropna().values))
 
         plt.rcParams['font.family'] = 'DejaVu Sans'
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
+        fig, axes = plt.subplots(1, len(panels), figsize=(6 * len(panels), 5.5))
         for ax, (name, values) in zip(axes, panels):
             ax.set_title(name, fontsize=16, fontweight='bold', pad=12)
             ax.set_xlabel('Frames', fontsize=14, fontweight='bold')
@@ -380,10 +420,11 @@ class DurationResultsAggregator:
             ax.set_ylim(0, ax.get_ylim()[1] * 1.2)
             ax.legend(fontsize=12, frameon=True, framealpha=0.9, loc='upper right')
 
-        n_no = int((last_df['label'] == NO_CONTACT).sum())
-        fig.suptitle(f"{self.channel_type} {group}: contacts before leaving the cavity "
+        main = frames[self.sides[0]]
+        n_no = int((main['label'] == NO_CONTACT).sum())
+        fig.suptitle(f"{self.channel_type} {group}: {self.cfg['desc']} "
                      f"(< {self.threshold} Å, ≥ {self.min_duration} frames; pooled over "
-                     f"{last_df['run'].nunique()} runs; {n_no}/{len(last_df)} events with no contact)",
+                     f"{main['run'].nunique()} runs; {n_no}/{len(main)} events with no contact)",
                      fontsize=16, fontweight='bold')
         plt.tight_layout()
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
@@ -397,7 +438,7 @@ class DurationResultsAggregator:
     def summary_table(self, mode, frames):
         """Pooled counts, % of all events and contact durations, last and longest side by side."""
         labels = []
-        for side in SIDES:
+        for side in self.sides:
             labels += [l for l in self._label_order(frames[side]) if l not in labels and l != NO_CONTACT]
         labels = sorted(labels) + [NO_CONTACT]
 
@@ -406,7 +447,7 @@ class DurationResultsAggregator:
             row = {'Subunit' if mode == 'subunit' else 'Residue_PDB': l}
             if mode == 'residue':
                 row['Type'] = '' if l == NO_CONTACT else self._rtype(l)
-            for side in SIDES:
+            for side in self.sides:
                 df = frames[side]
                 sel = df[df['label'] == l]
                 cap = side.capitalize()
@@ -448,14 +489,13 @@ class DurationResultsAggregator:
              pd.ExcelWriter(output_dir / f"events_{self.tag}.xlsx") as events_xl:
             for mode in MODES:
                 frames = {side: pd.DataFrame([e for e in self.events[mode][side] if e['run'] in runs])
-                          for side in SIDES}
-                if frames['last'].empty:
+                          for side in self.sides}
+                if frames[self.sides[0]].empty:
                     continue
                 unit = 'Subunit' if mode == 'subunit' else 'Residue'
 
-                for side in SIDES:
-                    what = 'LAST' if side == 'last' else 'LONGEST'
-                    title = f"{self.channel_type} {group}: {what} {unit} Before Leaving Cavity"
+                for side in self.sides:
+                    title = f"{self.channel_type} {group}: " + self.cfg['titles'][side].format(unit=unit)
                     self.pooled_bar_plot(frames[side], mode, side, title,
                                          output_dir / f"{side}_{mode}_frequency_{self.tag}.png")
                     self.per_run_plot(frames[side], mode, side, title,
@@ -468,19 +508,25 @@ class DurationResultsAggregator:
                 print(f"\n{unit.upper()}-LEVEL SUMMARY ({group}, pooled)")
                 print(summary.to_string(index=False, float_format=lambda v: f"{v:.2f}"))
 
-                # One row per event, last and longest side by side
-                ev = frames['last'].rename(columns={c: f"last_{c}" for c in
-                                                    ['label', 'type', 'duration', 'start_frame', 'end_frame']})
-                lg = frames['longest'][['label', 'duration', 'start_frame', 'end_frame']].add_prefix('longest_')
-                ev = pd.concat([ev.reset_index(drop=True), lg.reset_index(drop=True)], axis=1)
+                # One row per event, all sides next to each other
+                main = self.sides[0]
+                ev = frames[main].rename(columns={c: f"{main}_{c}" for c in
+                                                  ['label', 'type', 'duration', 'start_frame', 'end_frame']})
+                ev = ev.rename(columns={'gap': self.cfg['gap_name']})
+                extra = [frames[side][['label', 'duration', 'start_frame', 'end_frame']].add_prefix(f'{side}_')
+                         .reset_index(drop=True) for side in self.sides[1:]]
+                ev = pd.concat([ev.reset_index(drop=True)] + extra, axis=1)
+                if self.analysis != 'first':
+                    ev = ev.drop(columns='start_2_frame')
                 ev.insert(1, 'category', [categories.get(r, '') for r in ev['run']])
                 ev['_run_order'] = ev['run'].map(lambda r: run_sort_key(r)[0])
                 ev = ev.sort_values(['_run_order', 'end_2_frame']).drop(columns='_run_order')
                 ev.to_excel(events_xl, sheet_name=mode, index=False)
 
                 if mode == 'residue':
-                    self.duration_plot(frames['last'], frames['longest'], group,
-                                       output_dir / f"contact_durations_residue_{self.tag}.png")
+                    prefix = 'first_' if self.analysis == 'first' else ''
+                    self.duration_plot(frames, group,
+                                       output_dir / f"{prefix}contact_durations_residue_{self.tag}.png")
 
         print(f"✓ Tables saved in {output_dir}")
 
@@ -502,8 +548,12 @@ def main():
                         help="Threshold value used in the analysis (e.g., 3.0)")
     parser.add_argument("--min_duration", type=int, required=True,
                         help="Minimum duration value used in the analysis (e.g., 5)")
+    parser.add_argument("--analysis", choices=sorted(ANALYSES), default="last",
+                        help="last: last/longest contact before end_2 (run_last_duration_analysis); "
+                             "first: first contact after start_2 (run_first_duration_analysis)")
     parser.add_argument("--output_dir", type=str, default=None,
-                        help="Output directory (default: base_directory/aggregated_duration_t*_d*). "
+                        help="Output directory (default: base_directory/aggregated_duration/t*_d*, or "
+                             "aggregated_first_duration/t*_d* with --analysis first). "
                              "ALL/, HIGH/, TYPICAL/ and LOW/ are created inside it.")
     parser.add_argument("--categories", type=str, default=None,
                         help="run_categories CSV from analyze_permeation_summary.py (default: "
@@ -515,13 +565,13 @@ def main():
     args = parser.parse_args()
 
     aggregator = DurationResultsAggregator(args.base_directory, args.threshold, args.min_duration,
-                                           args.channel_type)
+                                           args.channel_type, args.analysis)
     if not aggregator.load_all_runs():
         print("No data found. Exiting.")
         return
 
     output_dir = Path(args.output_dir) if args.output_dir else \
-        aggregator.base_dir / f"aggregated_duration_{aggregator.tag}"
+        aggregator.base_dir / aggregator.cfg['out'] / aggregator.tag
 
     all_runs = set(aggregator.runs_loaded['residue']) | set(aggregator.runs_loaded['subunit'])
 
@@ -560,6 +610,7 @@ if __name__ == "__main__":
 
 # USAGE EXAMPLE:
 # python3 aggregate_duration_results.py /path/to/G12 --threshold 2.5 --min_duration 3
+# python3 aggregate_duration_results.py /path/to/G12 --threshold 2.5 --min_duration 3 --analysis first
 #
 # Custom categories file / output directory:
 # python3 aggregate_duration_results.py /path/to/G12 --threshold 2.5 --min_duration 3 \
