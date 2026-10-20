@@ -5,6 +5,7 @@ import pandas as pd
 from pathlib import Path
 import argparse
 from collections import defaultdict
+from analysis.converter import subunit_label
 
 
 class DurationResultsAggregator:
@@ -141,7 +142,9 @@ class DurationResultsAggregator:
                     # Count the IDENTIFIER for each event (which subunit won)
                     for event in subunit_data['results']:
                         if event['identifier']:
-                            subunit = event['identifier']
+                            # Chain name (G2.a, G1, ...) from the residues; old JSONs store A-D
+                            subunit = (subunit_label(event['residues'][0]['residue_pdb'])
+                                       if event.get('residues') else event['identifier'])
                             self.last_subunit_counts[subunit] += 1
                         else:
                             self.last_subunit_counts[self.NO_CONTACT] += 1
@@ -149,7 +152,9 @@ class DurationResultsAggregator:
                     # Aggregate LONGEST subunit data
                     for event in longest_subunit_data['results']:
                         if event['identifier']:
-                            subunit = event['identifier']
+                            # Chain name (G2.a, G1, ...) from the residues; old JSONs store A-D
+                            subunit = (subunit_label(event['residues'][0]['residue_pdb'])
+                                       if event.get('residues') else event['identifier'])
                             self.longest_subunit_counts[subunit] += 1
                         else:
                             self.longest_subunit_counts[self.NO_CONTACT] += 1

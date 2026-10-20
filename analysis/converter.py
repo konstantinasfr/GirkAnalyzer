@@ -163,6 +163,17 @@ def to_pdb(resid: int, channel_type: str) -> str:
     return str(resid)
 
 
+def subunit_label(pdb_label: str) -> str:
+    """
+    Subunit (chain) name from a PDB-style label: '152.2a' -> 'G2.a',
+    '173.G1' -> 'G1'. Returns the suffix unchanged for anything else.
+    """
+    suffix = str(pdb_label).split('.')[-1]
+    if len(suffix) == 2 and suffix[0] == '2':
+        return f"G2.{suffix[1]}"
+    return suffix
+
+
 # Backwards-compatibility shim — existing code calling this still works unchanged
 def convert_to_pdb_numbering(residue_id: int, channel_type: str) -> str:
     """Deprecated — use to_pdb() instead."""
