@@ -809,10 +809,224 @@ class LastAndLongestDurationAnalysis:
         self.create_duration_plot(output_dir / f"contact_durations_{mode_str}_{tag}.png")
 
 
+class FirstContactAnalysis(LastAndLongestDurationAnalysis):
+    """
+    The FIRST residue/subunit the ion contacts after it enters the GLU/ASN
+    cavity: same contact rule as LastAndLongestDurationAnalysis (closest
+    residue within `threshold` for >= `min_duration` consecutive frames),
+    but searched forwards from start_2 (first frame in the cavity) to end_2.
+
+    Results are saved next to the "last" ones but under their own names
+    (duration_first_complete_*.json, first_duration_*.json), so the two
+    analyses can share a results folder without overwriting each other.
+    """
+
+    def analyze_event(self, event):
+        """Analyze a single permeation event: first contact in start_2..end_2."""
+        ion_id = event['ion_id']
+        start_2_frame = event['start_2']   # first frame in the GLU/ASN cavity
+        end_2_frame = event['end_2']
+
+        # Same contact segmentation as the "last" analysis, over this window;
+        # the first contact is the qualifying contact that starts earliest.
+        result = self.find_last_and_longest_duration(ion_id, end_2_frame, start_2_frame)
+        durations = result['all_durations']
+        first = min(durations, key=lambda d: d['start_frame']) if durations else None
+
+        return {
+            'ion_id': int(ion_id),
+            'start_2_frame': int(start_2_frame),
+            'end_2_frame': int(end_2_frame),
+            'mode': result['mode'],
+            'first_identifier': first['identifier'] if first else None,
+            'first_residues': first['residues'] if first else None,
+            'first_duration': first['duration'] if first else 0,
+            'first_start_frame': first['start_frame'] if first else None,
+            'first_end_frame': first['end_frame'] if first else None,
+            'n_durations_found': len(durations),
+            'all_durations': durations
+        }
+
+    def run_analysis(self):
+        """Run first-contact analysis for all permeation events."""
+        mode_str = "SUBUNIT" if self.subunit_groups else "RESIDUE"
+        print("\n" + "="*80)
+        print(f"FIRST CONTACT AFTER ENTERING THE CAVITY - {mode_str} MODE")
+        print("="*80)
+        print(f"Distance threshold: {self.threshold} Å")
+        print(f"Minimum duration: {self.min_duration} frames")
+        print(f"Analyzing residue types: {', '.join(self.residue_types)}")
+        if self.subunit_groups:
+            print(f"Subunit groups: {list(self.subunit_groups.keys())}")
+        print(f"Analyzing {len(self.permeation_events)} permeation events...")
+
+        for event in self.permeation_events:
+            result = self.analyze_event(event)
+            self.results.append(result)
+
+            print(f"\nIon {result['ion_id']} (start_2 {result['start_2_frame']} → end_2 {result['end_2_frame']}):")
+            if result['first_identifier']:
+                res_str = ', '.join(f"{r['residue_type']} {r['residue_id']} ({r['residue_pdb']})"
+                                    for r in result['first_residues'])
+                print(f"  FIRST ({result['mode']} mode): {result['first_identifier']}  [{res_str}]")
+                print(f"  Duration: {result['first_duration']} frames "
+                      f"(frames {result['first_start_frame']} to {result['first_end_frame']})")
+            else:
+                print("  FIRST: None found")
+
+    def save_results(self):
+        """Save first-contact results (complete + first_duration_*.json)."""
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+        mode_str = "subunit" if self.subunit_groups else "residue"
+
+        complete_file = self.results_dir / f"duration_first_complete_{mode_str}.json"
+        with open(complete_file, 'w') as f:
+            json.dump({
+                'analysis': 'first',
+                'threshold': self.threshold,
+                'min_duration': self.min_duration,
+                'mode': mode_str,
+                'channel_type': self.channel_type,
+                'subunit_groups': self.subunit_groups,
+                'asn_residues': self.asn_residues,
+                'glu_residues': self.glu_residues,
+                'residue_types': self.residue_types,
+                'results': self.results
+            }, f, indent=2)
+        print(f"\n✓ Complete results saved to: {complete_file}")
+
+        first_file = self.results_dir / f"first_duration_{mode_str}.json"
+        with open(first_file, 'w') as f:
+            json.dump({'threshold': self.threshold, 'min_duration': self.min_duration, 'mode': mode_str,
+                       'results': [{
+                           'ion_id': r['ion_id'],
+                           'start_2_frame': r['start_2_frame'],
+                           'end_2_frame': r['end_2_frame'],
+                           'identifier': r['first_identifier'],
+                           'residues': r['first_residues'],
+                           'duration': r['first_duration'],
+                           'start_frame': r['first_start_frame'],
+                           'end_frame': r['first_end_frame']
+                       } for r in self.results]}, f, indent=2)
+        print(f"✓ FIRST results saved to: {first_file}")
+
+    def create_summary(self):
+        """Counts per residue type (or subunit), no-contact count, duration stats."""
+        if not self.results:
+            print("No results to summarize.")
+            return
+        mode_str = "subunit" if self.subunit_groups else "residue"
+        hits = [r for r in self.results if r['first_identifier']]
+
+        counts = {}
+        for r in hits:
+            key = str(r['first_identifier']) if self.subunit_groups else r['first_residues'][0]['residue_type']
+            counts[key] = counts.get(key, 0) + 1
+        durations = [r['first_duration'] for r in hits]
+        delays = [r['first_start_frame'] - r['start_2_frame'] for r in hits]
+
+        def stats(v):
+            return {'avg': float(np.mean(v)) if v else None, 'std': float(np.std(v)) if v else None,
+                    'min': int(np.min(v)) if v else None, 'max': int(np.max(v)) if v else None}
+
+        summary = {
+            'total_events': len(self.results),
+            'threshold': self.threshold,
+            'min_duration': self.min_duration,
+            'mode': mode_str,
+            'first_counts': counts,
+            'none_count': len(self.results) - len(hits),
+            'first_duration_stats': stats(durations),
+            'start_2_to_first_contact_stats': stats(delays)
+        }
+        output_file = self.results_dir / f"duration_first_summary_{mode_str}.json"
+        with open(output_file, 'w') as f:
+            json.dump(summary, f, indent=2)
+
+        print("\n" + "="*80)
+        print(f"FIRST CONTACT SUMMARY - {mode_str.upper()} MODE")
+        print("="*80)
+        print(f"Total events: {summary['total_events']}")
+        print(f"Threshold: {self.threshold} Å, Min duration: {self.min_duration} frames")
+        for k, v in sorted(counts.items()):
+            print(f"  {'Subunit ' if self.subunit_groups else ''}{k}: {v} events")
+        print(f"  None: {summary['none_count']} events")
+        if durations:
+            s = summary['first_duration_stats']
+            print(f"\nFIRST contact duration: {s['avg']:.1f} ± {s['std']:.1f} frames ({s['min']} - {s['max']})")
+            s = summary['start_2_to_first_contact_stats']
+            print(f"start_2 → first contact: {s['avg']:.1f} ± {s['std']:.1f} frames ({s['min']} - {s['max']})")
+        print(f"\n✓ Summary saved to: {output_file}")
+        print("="*80)
+        return summary
+
+    def create_duration_plot(self, output_file):
+        """
+        Two histograms (frames):
+          - duration of the FIRST contact
+          - delay from start_2 (entering the cavity) to the start of the first
+            contact (0 = in contact from the first cavity frame)
+        """
+        hits = [r for r in self.results if r['first_identifier']]
+        panels = [
+            ('First contact duration', [r['first_duration'] for r in hits]),
+            ('start_2 → first contact', [r['first_start_frame'] - r['start_2_frame'] for r in hits]),
+        ]
+
+        plt.rcParams['font.family'] = 'DejaVu Sans'
+        fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+        for ax, (name, values) in zip(axes, panels):
+            ax.set_title(name, fontsize=16, fontweight='bold', pad=12)
+            ax.set_xlabel('Frames', fontsize=14, fontweight='bold')
+            ax.set_ylabel('Number of events', fontsize=14, fontweight='bold')
+            for spine in ['top', 'right']:
+                ax.spines[spine].set_visible(False)
+            ax.grid(True, alpha=0.25, axis='y', zorder=0)
+            ax.set_axisbelow(True)
+            if not values:
+                ax.text(0.5, 0.5, 'no contacts', transform=ax.transAxes, ha='center', va='center', fontsize=14)
+                continue
+            values = np.asarray(values)
+            bins = np.histogram_bin_edges(values, bins=min(30, max(5, int(values.max() - values.min()) + 1)))
+            ax.hist(values, bins=bins, color=self.SUBUNIT_COLOR, edgecolor='black',
+                    linewidth=0.8, alpha=0.9, zorder=3)
+            ax.axvline(np.median(values), color='black', linestyle='--', linewidth=1.2,
+                       label=f'median = {np.median(values):g}')
+            ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+            ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+            ax.set_ylim(0, ax.get_ylim()[1] * 1.2)
+            ax.legend(fontsize=12, frameon=True, framealpha=0.9, loc='upper right')
+
+        fig.suptitle(f"{self.channel_type}: first contact after entering the cavity "
+                     f"(< {self.threshold} Å, ≥ {self.min_duration} frames; "
+                     f"{len(self.results) - len(hits)}/{len(self.results)} events with no contact)",
+                     fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"✓ Plot saved: {output_file}")
+
+    def create_plots(self, output_dir=None):
+        """Create the first-contact plots under results_dir/plots/."""
+        if not self.results:
+            print("No results to plot.")
+            return
+        output_dir = Path(output_dir) if output_dir else self.results_dir / "plots"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        mode_str = "subunit" if self.subunit_groups else "residue"
+        unit = "Subunit" if self.subunit_groups else "Residue"
+        tag = f"t{self.threshold}_d{self.min_duration}"
+        print("\nCreating first-contact plots...")
+
+        self.create_bar_plot('first', f"{self.channel_type}: FIRST {unit} After Entering Cavity",
+                             output_dir / f"first_{mode_str}_frequency_{tag}.png")
+        self.create_duration_plot(output_dir / f"first_contact_durations_{mode_str}_{tag}.png")
+
+
 def plot_duration_results(json_file, output_dir=None, channel_type=None, topology=None):
     """
     Re-create the per-run plots from an existing duration_analysis_complete_*.json
-    without touching the trajectory.
+    (or duration_first_complete_*.json) without touching the trajectory.
 
     If `topology` is given, residue names are re-read from it and written back
     into the JSON (and into last_/longest_duration_*.json next to it). Use this
@@ -828,7 +1042,7 @@ def plot_duration_results(json_file, output_dir=None, channel_type=None, topolog
 
         def relabel(results):
             for r in results:
-                for key in ('last_residues', 'longest_residues', 'residues'):
+                for key in ('last_residues', 'longest_residues', 'first_residues', 'residues'):
                     for res in r.get(key) or []:
                         res['residue_type'] = names.get(res['residue_id'], 'Unknown')
                 for d in r.get('all_durations') or []:
@@ -838,7 +1052,7 @@ def plot_duration_results(json_file, output_dir=None, channel_type=None, topolog
         relabel(data['results'])
         with open(json_file, 'w') as f:
             json.dump(data, f, indent=2)
-        for side in ('last', 'longest'):
+        for side in (('first',) if data.get('analysis') == 'first' else ('last', 'longest')):
             side_file = json_file.parent / f"{side}_duration_{data['mode']}.json"
             if side_file.exists():
                 with open(side_file) as f:
@@ -848,7 +1062,8 @@ def plot_duration_results(json_file, output_dir=None, channel_type=None, topolog
                     json.dump(side_data, f, indent=2)
         print(f"✓ Residue names updated from {topology}: {names}")
 
-    analyzer = LastAndLongestDurationAnalysis.__new__(LastAndLongestDurationAnalysis)
+    cls = FirstContactAnalysis if data.get('analysis') == 'first' else LastAndLongestDurationAnalysis
+    analyzer = cls.__new__(cls)
     analyzer.results = data['results']
     analyzer.threshold = data['threshold']
     analyzer.min_duration = data['min_duration']
@@ -909,10 +1124,36 @@ def run_last_duration_analysis(universe, permeation_events, asn_residues,
     return analyzer
 
 
+def run_first_duration_analysis(universe, permeation_events, asn_residues,
+                                glu_residues, channel_type="G12", threshold=3.0,
+                                min_duration=10, analysis_start_frame=0,
+                                residue_types=['ASN', 'GLU'], subunit_groups=None,
+                                results_dir="."):
+    """
+    Convenience function to run the FIRST-contact analysis (start_2 -> end_2).
+    Same parameters as run_last_duration_analysis.
+
+    Returns:
+    --------
+    FirstContactAnalysis : The analysis object with results
+    """
+    analyzer = FirstContactAnalysis(universe, permeation_events, asn_residues,
+                                    glu_residues, channel_type, threshold,
+                                    min_duration, analysis_start_frame,
+                                    residue_types, subunit_groups, results_dir)
+    analyzer.run_analysis()
+    analyzer.save_results()
+    analyzer.create_summary()
+    analyzer.create_plots()
+
+    return analyzer
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Re-plot duration_analysis_complete_*.json for one run")
-    parser.add_argument("json_file", help="Path to duration_analysis_complete_residue.json (or _subunit)")
+    parser.add_argument("json_file", help="Path to duration_analysis_complete_residue.json "
+                                          "or duration_first_complete_residue.json (or _subunit)")
     parser.add_argument("--output_dir", default=None, help="Default: <json dir>/plots")
     parser.add_argument("--channel_type", default=None, help="Label for plot titles (e.g. G12)")
     parser.add_argument("--topology", default=None,
