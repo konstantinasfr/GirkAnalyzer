@@ -26,6 +26,48 @@ def residue_names_from_topology(universe, resids):
     return names
 
 
+class ResidueDistanceCalculator:
+    """
+    Minimum ion-residue distances over a block of frames, computed fast:
+    the atom selections are built once (not every frame), frames are read
+    in order as one block, and all residues are done in one NumPy call.
+
+    Residues are kept in the order given; ties go to the earlier one, the
+    same as the old per-residue loops with a strict '<'.
+    """
+
+    def __init__(self, universe, resids):
+        self.u = universe
+        groups = [(int(r), universe.select_atoms(f"resid {r}")) for r in resids]
+        groups = [(r, g) for r, g in groups if len(g) > 0]   # old loops skipped empty ones
+        self.resids = [r for r, _ in groups]
+        if groups:
+            self.atoms = universe.atoms[np.concatenate([g.indices for _, g in groups])]
+            self.starts = np.cumsum([0] + [len(g) for _, g in groups[:-1]])
+        self._ions = {}
+
+    def _ion(self, ion_id):
+        if ion_id not in self._ions:
+            self._ions[ion_id] = self.u.select_atoms(f"resid {ion_id}")
+        return self._ions[ion_id]
+
+    def min_distances(self, ion_id, start, stop):
+        """
+        Frames start..stop (inclusive). Returns (frames, D) with D[i, j] the
+        minimum distance from the ion to residue self.resids[j] at frames[i],
+        or (frames, None) when the ion or the residues are missing.
+        """
+        frames = np.arange(start, stop + 1)
+        ion = self._ion(ion_id)
+        if len(ion) == 0 or not self.resids or len(frames) == 0:
+            return frames, None
+        D = np.empty((len(frames), len(self.resids)), dtype=np.float32)
+        for i, _ in enumerate(self.u.trajectory[start:stop + 1]):
+            d = np.linalg.norm(self.atoms.positions - ion.positions[0], axis=1)
+            D[i] = np.minimum.reduceat(d, self.starts)
+        return frames, D
+
+
 class ClosestResidueAnalysis:
     """
     Finds the closest residue (ASN or GLU) to permeating ions at key frames.
@@ -72,6 +114,11 @@ class ClosestResidueAnalysis:
         # Residue names come from the topology, so mutants are labelled
         # correctly (e.g. Q141 in E141Q, N173 in D173N) without hard-coding.
         self.resnames = residue_names_from_topology(self.u, asn_residues + glu_residues)
+
+        # Lower ring first, then upper ring: same order (and tie-breaking) as before
+        competing = (list(asn_residues) if 'ASN' in residue_types else []) + \
+                    (list(glu_residues) if 'GLU' in residue_types else [])
+        self.distances = ResidueDistanceCalculator(self.u, competing)
         
     # def convert_to_pdb_numbering(self, residue_id):
     #     """
@@ -154,52 +201,20 @@ class ClosestResidueAnalysis:
             'frame': int
         }
         """
-        # Go to frame
-        self.u.trajectory[frame]
-        
-        # Get ion position
-        ion = self.u.select_atoms(f"resid {ion_id}")
-        if len(ion) == 0:
+        frames, D = self.distances.min_distances(ion_id, frame, frame)
+        if D is None:
             return None
-        ion_pos = ion.positions[0]
-        
-        # Check all ASN and GLU residues (based on residue_types filter)
-        min_distance = float('inf')
-        closest_resid = None
-        closest_type = None
-        
-        # Check the lower ring (asn_residues: ASN/ASP) - only if 'ASN' is in residue_types
-        if 'ASN' in self.residue_types:
-            for resid in self.asn_residues:
-                res_atoms = self.u.select_atoms(f"resid {resid}")
-                if len(res_atoms) > 0:
-                    # Calculate minimum distance to any atom in this residue
-                    distances = np.linalg.norm(res_atoms.positions - ion_pos, axis=1)
-                    min_dist_to_res = np.min(distances)
-                    
-                    if min_dist_to_res < min_distance:
-                        min_distance = min_dist_to_res
-                        closest_resid = resid
-                        closest_type = self.resnames.get(resid, 'Unknown')
-        
-        # Check the upper ring (glu_residues: GLU/GLN) - only if 'GLU' is in residue_types
-        if 'GLU' in self.residue_types:
-            for resid in self.glu_residues:
-                res_atoms = self.u.select_atoms(f"resid {resid}")
-                if len(res_atoms) > 0:
-                    distances = np.linalg.norm(res_atoms.positions - ion_pos, axis=1)
-                    min_dist_to_res = np.min(distances)
-                    
-                    if min_dist_to_res < min_distance:
-                        min_distance = min_dist_to_res
-                        closest_resid = resid
-                        closest_type = self.resnames.get(resid, 'Unknown')
-        
+        return self._closest_result(D[0], frame)
+
+    def _closest_result(self, row, frame):
+        """Result dict for one frame, from its row of residue distances."""
+        j = int(np.argmin(row))
+        resid = self.distances.resids[j]
         return {
-            'closest_residue_id': int(closest_resid) if closest_resid else None,
-            'closest_residue_pdb': convert_to_pdb_numbering(closest_resid,self.channel_type) if closest_resid else None,
-            'residue_type': closest_type,
-            'distance': float(min_distance),
+            'closest_residue_id': int(resid),
+            'closest_residue_pdb': convert_to_pdb_numbering(resid, self.channel_type),
+            'residue_type': self.resnames.get(resid, 'Unknown'),
+            'distance': float(row[j]),
             'frame': int(frame)
         }
     
@@ -222,22 +237,32 @@ class ClosestResidueAnalysis:
         """
         best_result = None
         min_distance_found = float('inf')
-        
-        for frame in range(end_frame, start_frame - 1, -1):
-            result = self.find_closest_residue_at_frame(ion_id, frame)
-            
-            if result:
+
+        # Read backwards in blocks (each block read forwards, which is fast).
+        # Blocks start small, since the threshold is often met within a few
+        # frames, and grow so a long walk back does not cost a read per frame.
+        block = 50
+        block_end = end_frame
+        while block_end >= start_frame:
+            block_start = max(start_frame, block_end - block + 1)
+            frames, D = self.distances.min_distances(ion_id, block_start, block_end)
+            if D is None:
+                return None
+            row_min = D.min(axis=1)
+            for i in range(len(frames) - 1, -1, -1):
                 # Track the overall minimum distance
-                if result['distance'] < min_distance_found:
-                    min_distance_found = result['distance']
-                    best_result = result
-                
+                if row_min[i] < min_distance_found:
+                    min_distance_found = row_min[i]
+                    best_result = (D[i], frames[i])
+
                 # If threshold is met, return immediately
-                if result['distance'] < self.threshold:
-                    return result
-        
+                if row_min[i] < self.threshold:
+                    return self._closest_result(D[i], frames[i])
+            block_end = block_start - 1
+            block = min(block * 2, 2000)
+
         # If no frame meets threshold, return the best (minimum distance) we found
-        return best_result
+        return self._closest_result(*best_result) if best_result else None
     
     def analyze_event(self, event):
         """
