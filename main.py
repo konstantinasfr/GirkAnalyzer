@@ -946,16 +946,16 @@ def main():
     #     frame_duration      = frame_duration,
     # )
 
-    from analysis.cavity_refilling_analysis import run_cavity_refilling_analysis
+    # from analysis.cavity_refilling_analysis import run_cavity_refilling_analysis
 
-    run_cavity_refilling_analysis(
-        permeation_events = analyzer.permeation_events,
-        results_dir       = results_dir,
-        channel_type      = args.channel_type,
-        frame_duration    = frame_duration,
-        end_frame         = end_frame,   # ← add this
-        force_rerun       = True,
-    )
+    # run_cavity_refilling_analysis(
+    #     permeation_events = analyzer.permeation_events,
+    #     results_dir       = results_dir,
+    #     channel_type      = args.channel_type,
+    #     frame_duration    = frame_duration,
+    #     end_frame         = end_frame,   # ← add this
+    #     force_rerun       = True,
+    # )
 
     # # only these channel types have a bound ligand
     # # only these channel types have a bound ligand — each may use a different resname
