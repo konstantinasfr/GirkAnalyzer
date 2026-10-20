@@ -495,9 +495,16 @@ class DurationResultsAggregator:
     def write_group(self, group, runs, output_dir, run_info):
         """All plots and tables for one set of runs, in output_dir."""
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
         print(f"\n--- {group}: {len(runs)} runs -> {output_dir}")
         print(f"    {', '.join(sorted(runs, key=run_sort_key))}")
+
+        # Runs can have results but 0 permeation events; a group made only of
+        # such runs has nothing to plot or tabulate (and Excel cannot be empty)
+        n_events = sum(1 for mode in MODES for e in self.events[mode][self.sides[0]] if e['run'] in runs)
+        if n_events == 0:
+            print("    no permeation events in these runs, folder skipped")
+            return
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         with pd.ExcelWriter(output_dir / f"per_run_{self.tag}.xlsx") as per_run_xl, \
              pd.ExcelWriter(output_dir / f"events_{self.tag}.xlsx") as events_xl:
@@ -625,7 +632,7 @@ def main():
         if cat_file.exists():
             categories = load_categories(cat_file)
             print(f"\nCategories from: {cat_file}")
-            report_coverage('categories', categories, all_runs)
+            report_coverage('permeation', categories, all_runs)
         else:
             print(f"\n⚠ Categories file not found: {cat_file}\n  No HIGH/TYPICAL/LOW folders "
                   f"(run analyze_permeation_summary.py first, or pass --categories).")

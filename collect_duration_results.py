@@ -115,6 +115,13 @@ def load_channel(channel_dir, threshold, min_duration):
             coverage.append({'channel': channel, 'what': 'runs left out of D/E', 'n': len(ligand_left_out),
                              'runs': ', '.join(f"{r} ({c or 'no category'})" for r, c in ligand_left_out.items())})
 
+    # Runs with results but no permeation events drop out of the per-run averages
+    with_events = set(events['run']) if not events.empty else set()
+    no_events = [r for r in all_runs if r not in with_events]
+    if no_events:
+        coverage.append({'channel': channel, 'what': 'runs with 0 permeation events (not in per-run averages)',
+                         'n': len(no_events), 'runs': ', '.join(no_events)})
+
     if not events.empty:
         events.insert(1, 'category', events['run'].map(lambda r: categories.get(r, '')))
         events.insert(2, 'ligand', events['run'].map(lambda r: ligand.get(r, '')))
