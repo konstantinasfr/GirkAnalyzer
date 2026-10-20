@@ -688,6 +688,8 @@ python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c38
 python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ \
 --threshold 3.5 --min_duration 5
 
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_ML/ \
+--threshold 3.5 --min_duration 5
 
 python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/ \
 --threshold 3.5 --min_duration 5
