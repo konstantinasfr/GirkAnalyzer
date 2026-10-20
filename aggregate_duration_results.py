@@ -21,6 +21,15 @@ output directory:
 
 so runs with many permeations can be compared with runs with few.
 
+For G12_ML only, two more folders split the runs by which acidic residue
+the ligand sits on (category column of ligand_inter_class/ligand_categories.csv,
+written by g12ml_ligand_category_classification.py):
+
+    D/         runs in ligand category D
+    E/         runs in ligand category E
+
+('E+D', 'Neither' and errored runs are left out of D/ and E/, as in that script.)
+
 Two ways of combining runs are reported in every folder:
 
   POOLED   every event of every run counted once, as if all runs were one
@@ -60,6 +69,8 @@ USAGE
 The categories CSV is found automatically at
 <base>/permeation_summary/run_categories_full_permeations_total.csv;
 pass --categories to use another file, or --no_categories for ALL only.
+For G12_ML the ligand file is found at <base>/ligand_inter_class/ligand_categories.csv
+(--ligand_categories to use another file).
 """
 
 import json
@@ -80,6 +91,8 @@ from analysis.converter import subunit_label
 
 NO_CONTACT = 'No contact'
 CATEGORIES = ['HIGH', 'TYPICAL', 'LOW']
+LIGAND_CATEGORIES = ['D', 'E']      # G12_ML only
+LIGAND_CHANNELS = {'G12_ML'}
 ONE_LETTER = {'GLU': 'E', 'GLN': 'Q', 'ASP': 'D', 'ASN': 'N'}
 
 # Same palette as the per-run plots (closest_residue_analysis.py)
@@ -458,13 +471,14 @@ class DurationResultsAggregator:
             rows.append(row)
         return pd.DataFrame(rows)
 
-    def per_run_table(self, mode, side, df, categories):
-        """One row per run: n events, count and fraction for every label."""
+    def per_run_table(self, mode, side, df, run_info):
+        """One row per run: its categories, n events, count and fraction for every label."""
         # Fixed column order (sorted, "No contact" last) so sheets line up across groups
         labels = sorted(l for l in self._label_order(df) if l != NO_CONTACT) + [NO_CONTACT]
         frac, counts = self._per_run_fractions(df, labels)
         out = pd.DataFrame(index=counts.index)
-        out.insert(0, 'Category', [categories.get(r, '') for r in out.index])
+        for i, (col, values) in enumerate(run_info.items()):
+            out.insert(i, col, [values.get(r, '') for r in out.index])
         out['N_Events'] = counts.sum(axis=1)
         for l in labels:
             out[f'{l}_Count'] = counts[l]
@@ -478,7 +492,7 @@ class DurationResultsAggregator:
     # One folder
     # ------------------------------------------------------------------
 
-    def write_group(self, group, runs, output_dir, categories):
+    def write_group(self, group, runs, output_dir, run_info):
         """All plots and tables for one set of runs, in output_dir."""
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -500,7 +514,7 @@ class DurationResultsAggregator:
                                          output_dir / f"{side}_{mode}_frequency_{self.tag}.png")
                     self.per_run_plot(frames[side], mode, side, title,
                                       output_dir / f"{side}_{mode}_per_run_{self.tag}.png")
-                    self.per_run_table(mode, side, frames[side], categories).to_excel(
+                    self.per_run_table(mode, side, frames[side], run_info).to_excel(
                         per_run_xl, sheet_name=f"{side}_{mode}", index=False)
 
                 summary = self.summary_table(mode, frames)
@@ -518,7 +532,8 @@ class DurationResultsAggregator:
                 ev = pd.concat([ev.reset_index(drop=True)] + extra, axis=1)
                 if self.analysis != 'first':
                     ev = ev.drop(columns='start_2_frame')
-                ev.insert(1, 'category', [categories.get(r, '') for r in ev['run']])
+                for i, (col, values) in enumerate(run_info.items()):
+                    ev.insert(1 + i, col.lower(), [values.get(r, '') for r in ev['run']])
                 ev['_run_order'] = ev['run'].map(lambda r: run_sort_key(r)[0])
                 ev = ev.sort_values(['_run_order', 'end_2_frame']).drop(columns='_run_order')
                 ev.to_excel(events_xl, sheet_name=mode, index=False)
@@ -538,9 +553,34 @@ def load_categories(path):
             if pd.notna(c)}
 
 
+def load_ligand_categories(path):
+    """
+    {run: 'D' or 'E'} from g12ml_ligand_category_classification.py's
+    ligand_categories.csv, plus {run: category} of the runs left out
+    ('E+D', 'Neither', or no category because of an error).
+    """
+    df = pd.read_csv(path)
+    kept, left_out = {}, {}
+    for r, c in zip(df['run'], df['category']):
+        c = str(c).strip().upper() if pd.notna(c) else ''
+        (kept if c in LIGAND_CATEGORIES else left_out)[str(r).strip()] = c
+    return kept, left_out
+
+
+def report_coverage(name, mapping, all_runs):
+    """Warn about runs in a categories file without results, and the reverse."""
+    missing = sorted(set(mapping) - all_runs, key=run_sort_key)
+    unlisted = sorted(all_runs - set(mapping), key=run_sort_key)
+    if missing:
+        print(f"  ⚠ In the {name} file but no duration results: {', '.join(missing)}")
+    if unlisted:
+        print(f"  ⚠ Have duration results but no {name} category (not in those folders): "
+              f"{', '.join(unlisted)}")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Aggregate duration analysis results from multiple runs (ALL, HIGH, TYPICAL, LOW)"
+        description="Aggregate duration analysis results from multiple runs (ALL, HIGH, TYPICAL, LOW; plus D and E for G12_ML)"
     )
     parser.add_argument("base_directory", type=str,
                         help="Base directory containing RUN subdirectories")
@@ -559,7 +599,10 @@ def main():
                         help="run_categories CSV from analyze_permeation_summary.py (default: "
                              "base_directory/permeation_summary/run_categories_full_permeations_total.csv)")
     parser.add_argument("--no_categories", action="store_true",
-                        help="Only aggregate all runs (no HIGH/TYPICAL/LOW folders)")
+                        help="Only aggregate all runs (no HIGH/TYPICAL/LOW or D/E folders)")
+    parser.add_argument("--ligand_categories", type=str, default=None,
+                        help="G12_ML only: ligand_categories.csv from g12ml_ligand_category_classification.py "
+                             "(default: base_directory/ligand_inter_class/ligand_categories.csv)")
     parser.add_argument("--channel_type", type=str, default=None,
                         help="Label for plot titles (default: base_directory folder name)")
     args = parser.parse_args()
@@ -582,24 +625,44 @@ def main():
         if cat_file.exists():
             categories = load_categories(cat_file)
             print(f"\nCategories from: {cat_file}")
-            missing = sorted(set(categories) - all_runs, key=run_sort_key)
-            unlisted = sorted(all_runs - set(categories), key=run_sort_key)
-            if missing:
-                print(f"  ⚠ In the categories file but no duration results: {', '.join(missing)}")
-            if unlisted:
-                print(f"  ⚠ Have duration results but no category (only in ALL): {', '.join(unlisted)}")
+            report_coverage('categories', categories, all_runs)
         else:
-            print(f"\n⚠ Categories file not found: {cat_file}\n  Only ALL will be written "
+            print(f"\n⚠ Categories file not found: {cat_file}\n  No HIGH/TYPICAL/LOW folders "
                   f"(run analyze_permeation_summary.py first, or pass --categories).")
 
+    # G12_ML only: split by the residue the ligand sits on (D or E)
+    ligand = {}
+    if not args.no_categories and aggregator.channel_type.upper() in LIGAND_CHANNELS:
+        lig_file = Path(args.ligand_categories) if args.ligand_categories else \
+            aggregator.base_dir / "ligand_inter_class" / "ligand_categories.csv"
+        if lig_file.exists():
+            ligand, left_out = load_ligand_categories(lig_file)
+            print(f"\nLigand categories from: {lig_file}")
+            if left_out:
+                print("  Left out of D/ and E/: " + ", ".join(
+                    f"{r} ({c or 'no category'})"
+                    for r, c in sorted(left_out.items(), key=lambda x: run_sort_key(x[0]))))
+            report_coverage('ligand', ligand, all_runs)
+        else:
+            print(f"\n⚠ Ligand categories file not found: {lig_file}\n  No D/E folders "
+                  f"(run g12ml_ligand_category_classification.py first, or pass --ligand_categories).")
+
+    # Category columns for the per-run and per-event tables
+    run_info = {}
+    if categories:
+        run_info['Category'] = categories
+    if ligand:
+        run_info['Ligand'] = ligand
+
     print("\nGenerating outputs...")
-    aggregator.write_group('ALL', all_runs, output_dir / 'ALL', categories)
-    for cat in CATEGORIES:
-        runs = {r for r, c in categories.items() if c == cat and r in all_runs}
-        if runs:
-            aggregator.write_group(cat, runs, output_dir / cat, categories)
-        elif categories:
-            print(f"\n--- {cat}: no runs with duration results, folder skipped")
+    aggregator.write_group('ALL', all_runs, output_dir / 'ALL', run_info)
+    for mapping, cats, label in ((categories, CATEGORIES, '{}'), (ligand, LIGAND_CATEGORIES, 'ligand {}')):
+        for cat in cats:
+            runs = {r for r, c in mapping.items() if c == cat and r in all_runs}
+            if runs:
+                aggregator.write_group(label.format(cat), runs, output_dir / cat, run_info)
+            elif mapping:
+                print(f"\n--- {cat}: no runs with duration results, folder skipped")
 
     print(f"\n✓ Aggregation complete! Results saved to: {output_dir}")
 
