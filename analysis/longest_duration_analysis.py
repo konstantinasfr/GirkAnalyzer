@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from analysis.converter import convert_to_pdb_numbering, subunit_label
 from matplotlib.ticker import MaxNLocator
-from analysis.closest_residue_analysis import ClosestResidueAnalysis, residue_names_from_topology, ONE_LETTER
+from analysis.closest_residue_analysis import (ClosestResidueAnalysis, ResidueDistanceCalculator,
+                                               residue_names_from_topology, ONE_LETTER)
 
 class LastAndLongestDurationAnalysis:
     """
@@ -71,6 +72,11 @@ class LastAndLongestDurationAnalysis:
         # Residue names come from the topology, so mutants are labelled
         # correctly (e.g. Q141 in E141Q, N173 in D173N) without hard-coding.
         self.resnames = residue_names_from_topology(self.u, asn_residues + glu_residues)
+
+        # ASN list first, then GLU list: same order (and tie-breaking) as before
+        competing = (list(asn_residues) if 'ASN' in residue_types else []) + \
+                    (list(glu_residues) if 'GLU' in residue_types else [])
+        self.distances = ResidueDistanceCalculator(self.u, competing)
         
         # Name each subunit group after its chain (G2.a, G2.b, G2.c, G1, ...)
         # instead of the A-D letters, which mean different chains per channel.
@@ -93,54 +99,27 @@ class LastAndLongestDurationAnalysis:
     
     def find_closest_residue_at_frame(self, ion_id, frame):
         """Find the closest residue to an ion at a specific frame."""
-        self.u.trajectory[frame]
-        
-        ion = self.u.select_atoms(f"resid {ion_id}")
-        if len(ion) == 0:
+        frames, D = self.distances.min_distances(ion_id, frame, frame)
+        if D is None:
             return None, float('inf')
-        ion_pos = ion.positions[0]
-        
-        min_distance = float('inf')
-        closest_resid = None
-        closest_type = None
-        
-        # Check ASN residues
-        if 'ASN' in self.residue_types:
-            for resid in self.asn_residues:
-                res_atoms = self.u.select_atoms(f"resid {resid}")
-                if len(res_atoms) > 0:
-                    distances = np.linalg.norm(res_atoms.positions - ion_pos, axis=1)
-                    min_dist_to_res = np.min(distances)
-                    
-                    if min_dist_to_res < min_distance:
-                        min_distance = min_dist_to_res
-                        closest_resid = resid
-                        closest_type = self.resnames.get(resid, 'Unknown')
-        
-        # Check GLU residues
-        if 'GLU' in self.residue_types:
-            for resid in self.glu_residues:
-                res_atoms = self.u.select_atoms(f"resid {resid}")
-                if len(res_atoms) > 0:
-                    distances = np.linalg.norm(res_atoms.positions - ion_pos, axis=1)
-                    min_dist_to_res = np.min(distances)
-                    
-                    if min_dist_to_res < min_distance:
-                        min_distance = min_dist_to_res
-                        closest_resid = resid
-                        closest_type = self.resnames.get(resid, 'Unknown')
-        
-        if closest_resid and min_distance < self.threshold:
+        return self._closest_from_row(D[0])
+
+    def _closest_from_row(self, row):
+        """(info, distance) for one frame from its row of residue distances;
+        info is None when the closest residue is not within the threshold."""
+        j = int(np.argmin(row))
+        resid = self.distances.resids[j]
+        min_distance = float(row[j])
+        if min_distance < self.threshold:
             return {
-                'residue_id': int(closest_resid),
-                'residue_pdb': convert_to_pdb_numbering(closest_resid,self.channel_type),
-                'residue_type': closest_type,
-                'distance': float(min_distance),
-                'subunit': self.residue_to_subunit.get(closest_resid) if self.subunit_groups else None
+                'residue_id': int(resid),
+                'residue_pdb': convert_to_pdb_numbering(resid, self.channel_type),
+                'residue_type': self.resnames.get(resid, 'Unknown'),
+                'distance': min_distance,
+                'subunit': self.residue_to_subunit.get(resid) if self.subunit_groups else None
             }, min_distance
-        
         return None, min_distance
-    
+
     def find_last_and_longest_duration(self, ion_id, end_frame, ion_start_frame):
         """
         Find both last and longest duration.
@@ -178,8 +157,15 @@ class LastAndLongestDurationAnalysis:
         longest_end_frame = None
         longest_residues_list = None
         
+        # All frames of this event in one forward read, then walked backwards
+        frames, D = self.distances.min_distances(ion_id, ion_start_frame, end_frame)
+        rows = {} if D is None else dict(zip(frames.tolist(), D))
+
         for frame in range(end_frame, ion_start_frame - 1, -1):
-            residue_info, distance = self.find_closest_residue_at_frame(ion_id, frame)
+            if frame in rows:
+                residue_info, distance = self._closest_from_row(rows[frame])
+            else:
+                residue_info, distance = None, float('inf')
             
             if residue_info:
                 # Determine identifier based on mode
