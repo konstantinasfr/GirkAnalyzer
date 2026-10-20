@@ -10,6 +10,22 @@ from matplotlib.ticker import MaxNLocator
 from analysis.converter import convert_to_pdb_numbering
 
 
+# Protonated / alternate force-field names folded onto the standard residue name
+RESNAME_ALIASES = {'ASH': 'ASP', 'ASPP': 'ASP', 'GLH': 'GLU', 'GLUP': 'GLU'}
+ONE_LETTER = {'GLU': 'E', 'GLN': 'Q', 'ASP': 'D', 'ASN': 'N'}
+
+
+def residue_names_from_topology(universe, resids):
+    """{resid: residue name} read from the topology, e.g. {1105: 'ASP'}."""
+    names = {}
+    for resid in resids:
+        res_atoms = universe.select_atoms(f"resid {resid}")
+        if len(res_atoms) > 0:
+            name = str(res_atoms.resnames[0]).upper()
+            names[int(resid)] = RESNAME_ALIASES.get(name, name)
+    return names
+
+
 class ClosestResidueAnalysis:
     """
     Finds the closest residue (ASN or GLU) to permeating ions at key frames.
@@ -53,17 +69,9 @@ class ClosestResidueAnalysis:
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.results = []
         
-        # Special handling for ASP in G12
-        if channel_type == "G12":
-            self.asp_residue = 131
-        elif channel_type == "G12_ML":
-            # self.asp_residue = 131
-            self.asp_residue = 1106
-        elif channel_type == "G12_GAT":
-            # self.asp_residue = 131
-            self.asp_residue = 1105
-        else:
-            self.asp_residue = None
+        # Residue names come from the topology, so mutants are labelled
+        # correctly (e.g. Q141 in E141Q, N173 in D173N) without hard-coding.
+        self.resnames = residue_names_from_topology(self.u, asn_residues + glu_residues)
         
     # def convert_to_pdb_numbering(self, residue_id):
     #     """
@@ -141,7 +149,7 @@ class ClosestResidueAnalysis:
         dict : {
             'closest_residue_id': int,
             'closest_residue_pdb': str (PDB numbering),
-            'residue_type': 'ASN', 'ASP', or 'GLU',
+            'residue_type': residue name from the topology (e.g. 'ASN', 'ASP', 'GLU', 'GLN'),
             'distance': float,
             'frame': int
         }
@@ -160,7 +168,7 @@ class ClosestResidueAnalysis:
         closest_resid = None
         closest_type = None
         
-        # Check ASN residues (includes ASP for G12) - only if ASN is in residue_types
+        # Check the lower ring (asn_residues: ASN/ASP) - only if 'ASN' is in residue_types
         if 'ASN' in self.residue_types:
             for resid in self.asn_residues:
                 res_atoms = self.u.select_atoms(f"resid {resid}")
@@ -172,13 +180,9 @@ class ClosestResidueAnalysis:
                     if min_dist_to_res < min_distance:
                         min_distance = min_dist_to_res
                         closest_resid = resid
-                        # Check if this is the ASP residue (1105 for G12)
-                        if self.asp_residue is not None and resid == self.asp_residue:
-                            closest_type = 'ASP'
-                        else:
-                            closest_type = 'ASN'
+                        closest_type = self.resnames.get(resid, 'Unknown')
         
-        # Check GLU residues - only if GLU is in residue_types
+        # Check the upper ring (glu_residues: GLU/GLN) - only if 'GLU' is in residue_types
         if 'GLU' in self.residue_types:
             for resid in self.glu_residues:
                 res_atoms = self.u.select_atoms(f"resid {resid}")
@@ -189,7 +193,7 @@ class ClosestResidueAnalysis:
                     if min_dist_to_res < min_distance:
                         min_distance = min_dist_to_res
                         closest_resid = resid
-                        closest_type = 'GLU'
+                        closest_type = self.resnames.get(resid, 'Unknown')
         
         return {
             'closest_residue_id': int(closest_resid) if closest_resid else None,
@@ -382,24 +386,28 @@ class ClosestResidueAnalysis:
         case1_asn = sum(1 for r in self.results if r['case_1_end_2_closest'] and r['case_1_end_2_closest']['residue_type'] == 'ASN')
         case1_asp = sum(1 for r in self.results if r['case_1_end_2_closest'] and r['case_1_end_2_closest']['residue_type'] == 'ASP')
         case1_glu = sum(1 for r in self.results if r['case_1_end_2_closest'] and r['case_1_end_2_closest']['residue_type'] == 'GLU')
+        case1_gln = sum(1 for r in self.results if r['case_1_end_2_closest'] and r['case_1_end_2_closest']['residue_type'] == 'GLN')
         case1_distances = [r['case_1_end_2_closest']['distance'] for r in self.results if r['case_1_end_2_closest']]
         
         # Case 2: Threshold crossing from end_2
         case2_asn = sum(1 for r in self.results if r['case_2_end_2_threshold'] and r['case_2_end_2_threshold']['residue_type'] == 'ASN')
         case2_asp = sum(1 for r in self.results if r['case_2_end_2_threshold'] and r['case_2_end_2_threshold']['residue_type'] == 'ASP')
         case2_glu = sum(1 for r in self.results if r['case_2_end_2_threshold'] and r['case_2_end_2_threshold']['residue_type'] == 'GLU')
+        case2_gln = sum(1 for r in self.results if r['case_2_end_2_threshold'] and r['case_2_end_2_threshold']['residue_type'] == 'GLN')
         case2_distances = [r['case_2_end_2_threshold']['distance'] for r in self.results if r['case_2_end_2_threshold']]
         
         # Case 3: Closest at end_3 (no threshold)
         case3_asn = sum(1 for r in self.results if r['case_3_end_3_closest'] and r['case_3_end_3_closest']['residue_type'] == 'ASN')
         case3_asp = sum(1 for r in self.results if r['case_3_end_3_closest'] and r['case_3_end_3_closest']['residue_type'] == 'ASP')
         case3_glu = sum(1 for r in self.results if r['case_3_end_3_closest'] and r['case_3_end_3_closest']['residue_type'] == 'GLU')
+        case3_gln = sum(1 for r in self.results if r['case_3_end_3_closest'] and r['case_3_end_3_closest']['residue_type'] == 'GLN')
         case3_distances = [r['case_3_end_3_closest']['distance'] for r in self.results if r['case_3_end_3_closest']]
         
         # Case 4: Threshold crossing from end_3
         case4_asn = sum(1 for r in self.results if r['case_4_end_3_threshold'] and r['case_4_end_3_threshold']['residue_type'] == 'ASN')
         case4_asp = sum(1 for r in self.results if r['case_4_end_3_threshold'] and r['case_4_end_3_threshold']['residue_type'] == 'ASP')
         case4_glu = sum(1 for r in self.results if r['case_4_end_3_threshold'] and r['case_4_end_3_threshold']['residue_type'] == 'GLU')
+        case4_gln = sum(1 for r in self.results if r['case_4_end_3_threshold'] and r['case_4_end_3_threshold']['residue_type'] == 'GLN')
         case4_distances = [r['case_4_end_3_threshold']['distance'] for r in self.results if r['case_4_end_3_threshold']]
         
         summary = {
@@ -409,6 +417,7 @@ class ClosestResidueAnalysis:
                 'asn_count': case1_asn,
                 'asp_count': case1_asp,
                 'glu_count': case1_glu,
+                'gln_count': case1_gln,
                 'avg_distance': float(np.mean(case1_distances)) if case1_distances else None,
                 'std_distance': float(np.std(case1_distances)) if case1_distances else None
             },
@@ -416,6 +425,7 @@ class ClosestResidueAnalysis:
                 'asn_count': case2_asn,
                 'asp_count': case2_asp,
                 'glu_count': case2_glu,
+                'gln_count': case2_gln,
                 'avg_distance': float(np.mean(case2_distances)) if case2_distances else None,
                 'std_distance': float(np.std(case2_distances)) if case2_distances else None
             },
@@ -423,6 +433,7 @@ class ClosestResidueAnalysis:
                 'asn_count': case3_asn,
                 'asp_count': case3_asp,
                 'glu_count': case3_glu,
+                'gln_count': case3_gln,
                 'avg_distance': float(np.mean(case3_distances)) if case3_distances else None,
                 'std_distance': float(np.std(case3_distances)) if case3_distances else None
             },
@@ -430,6 +441,7 @@ class ClosestResidueAnalysis:
                 'asn_count': case4_asn,
                 'asp_count': case4_asp,
                 'glu_count': case4_glu,
+                'gln_count': case4_gln,
                 'avg_distance': float(np.mean(case4_distances)) if case4_distances else None,
                 'std_distance': float(np.std(case4_distances)) if case4_distances else None
             }
@@ -452,6 +464,8 @@ class ClosestResidueAnalysis:
         if case1_asp > 0:
             print(f"  ASP closest: {case1_asp} events")
         print(f"  GLU closest: {case1_glu} events")
+        if case1_gln > 0:
+            print(f"  GLN closest: {case1_gln} events")
         if summary['case_1_end_2_closest']['avg_distance']:
             print(f"  Avg distance: {summary['case_1_end_2_closest']['avg_distance']:.2f} ± {summary['case_1_end_2_closest']['std_distance']:.2f} Å")
         
@@ -460,6 +474,8 @@ class ClosestResidueAnalysis:
         if case2_asp > 0:
             print(f"  ASP closest: {case2_asp} events")
         print(f"  GLU closest: {case2_glu} events")
+        if case2_gln > 0:
+            print(f"  GLN closest: {case2_gln} events")
         if summary['case_2_end_2_threshold']['avg_distance']:
             print(f"  Avg distance: {summary['case_2_end_2_threshold']['avg_distance']:.2f} ± {summary['case_2_end_2_threshold']['std_distance']:.2f} Å")
         
@@ -468,6 +484,8 @@ class ClosestResidueAnalysis:
         if case3_asp > 0:
             print(f"  ASP closest: {case3_asp} events")
         print(f"  GLU closest: {case3_glu} events")
+        if case3_gln > 0:
+            print(f"  GLN closest: {case3_gln} events")
         if summary['case_3_end_3_closest']['avg_distance']:
             print(f"  Avg distance: {summary['case_3_end_3_closest']['avg_distance']:.2f} ± {summary['case_3_end_3_closest']['std_distance']:.2f} Å")
         
@@ -476,6 +494,8 @@ class ClosestResidueAnalysis:
         if case4_asp > 0:
             print(f"  ASP closest: {case4_asp} events")
         print(f"  GLU closest: {case4_glu} events")
+        if case4_gln > 0:
+            print(f"  GLN closest: {case4_gln} events")
         if summary['case_4_end_3_threshold']['avg_distance']:
             print(f"  Avg distance: {summary['case_4_end_3_threshold']['avg_distance']:.2f} ± {summary['case_4_end_3_threshold']['std_distance']:.2f} Å")
         
@@ -493,11 +513,12 @@ class ClosestResidueAnalysis:
     # all-runs figures read the same way.
     COLOR_MAP = {
         'GLU': '#E8746B',   # muted coral
+        'GLN': '#E8A85B',   # muted amber (E141Q)
         'ASN': '#5AA9C9',   # muted blue
         'ASP': '#6FBF73',   # muted green
         'Unknown': '#B0B0B0',
     }
-    TYPE_ORDER = ['GLU', 'ASN', 'ASP', 'Unknown']
+    TYPE_ORDER = ['GLU', 'GLN', 'ASN', 'ASP', 'Unknown']
 
     # (result key, stage label, file stem, uses threshold, end-frame key)
     PLOT_CASES = [
@@ -565,8 +586,10 @@ class ClosestResidueAnalysis:
                     f'{total} ({pct:.1f}%)\n{avg_dist:.2f} Å',
                     ha='center', va='bottom', fontsize=14, fontweight='bold', zorder=4)
 
+        # Tick labels carry the one-letter code from the topology, e.g. D173.G1
+        tick_labels = [f"{ONE_LETTER.get(v['type'], '')}{k}" for k, v in sorted_res]
         ax.set_xticks(x)
-        ax.set_xticklabels(residues, fontsize=17, fontweight='bold', rotation=40, ha='right')
+        ax.set_xticklabels(tick_labels, fontsize=17, fontweight='bold', rotation=40, ha='right')
         ax.set_ylabel('Number of Times Closest', fontsize=19, fontweight='bold', labelpad=10)
         ax.set_xlabel('Residue', fontsize=19, fontweight='bold', labelpad=10)
         ax.set_title(f"{case_title}\n(n = {n_events} events)", fontsize=20, fontweight='bold', pad=22)
@@ -677,14 +700,32 @@ class ClosestResidueAnalysis:
         self.create_lag_plot(output_dir / f"last_contact_lag_threshold{self.threshold}.png")
 
 
-def plot_closest_residue_results(json_file, output_dir=None, channel_type=None):
+def plot_closest_residue_results(json_file, output_dir=None, channel_type=None, topology=None):
     """
     Re-create the per-run plots from an existing closest_residue_analysis.json
     without touching the trajectory.
+
+    If `topology` is given (e.g. the run's .prmtop/.psf/.pdb), residue names are
+    re-read from it and written back into the JSON. Use this for JSONs made
+    before names came from the topology, where mutants (E141Q, D173N) and
+    some ASP residues were mislabelled.
     """
     json_file = Path(json_file)
     with open(json_file) as f:
         data = json.load(f)
+
+    if topology is not None:
+        u = mda.Universe(str(topology))
+        resids = {c['closest_residue_id'] for r in data['results'] for k, c in r.items()
+                  if k.startswith('case_') and c and c.get('closest_residue_id') is not None}
+        names = residue_names_from_topology(u, sorted(resids))
+        for r in data['results']:
+            for k, c in r.items():
+                if k.startswith('case_') and c and c.get('closest_residue_id') is not None:
+                    c['residue_type'] = names.get(c['closest_residue_id'], 'Unknown')
+        with open(json_file, 'w') as f:
+            json.dump(data, f, indent=2)
+        print(f"\u2713 Residue names updated from {topology}: {names}")
 
     analyzer = ClosestResidueAnalysis.__new__(ClosestResidueAnalysis)
     analyzer.results = data['results']
@@ -744,5 +785,7 @@ if __name__ == "__main__":
     parser.add_argument("json_file", help="Path to closest_residue_analysis.json")
     parser.add_argument("--output_dir", default=None, help="Default: <json dir>/plots")
     parser.add_argument("--channel_type", default=None, help="Label for plot titles (e.g. G12)")
+    parser.add_argument("--topology", default=None,
+                        help="Topology file to re-read residue names from (fixes old JSONs)")
     args = parser.parse_args()
-    plot_closest_residue_results(args.json_file, args.output_dir, args.channel_type)
+    plot_closest_residue_results(args.json_file, args.output_dir, args.channel_type, args.topology)

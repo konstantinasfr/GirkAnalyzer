@@ -36,6 +36,10 @@ class ClosestResidueAggregator:
         self.case_3_data = defaultdict(lambda: {'count': 0, 'distances': []})
         self.case_4_data = defaultdict(lambda: {'count': 0, 'distances': []})
 
+        # {residue_pdb: residue name} taken from the JSONs (read from the topology
+        # by closest_residue_analysis.py), so mutants are labelled correctly
+        self.res_types = {}
+
     def load_all_runs(self):
         """
         Load closest residue analysis results from all subdirectories.
@@ -83,6 +87,8 @@ class ClosestResidueAggregator:
                     if event['case_1_end_2_closest']:
                         c1 = event['case_1_end_2_closest']
                         res_pdb = c1['closest_residue_pdb']
+                        if c1.get('residue_type'):
+                            self.res_types[res_pdb] = c1['residue_type']
                         self.case_1_data[res_pdb]['count'] += 1
                         self.case_1_data[res_pdb]['distances'].append(c1['distance'])
 
@@ -90,6 +96,8 @@ class ClosestResidueAggregator:
                     if event['case_2_end_2_threshold']:
                         c2 = event['case_2_end_2_threshold']
                         res_pdb = c2['closest_residue_pdb']
+                        if c2.get('residue_type'):
+                            self.res_types[res_pdb] = c2['residue_type']
                         self.case_2_data[res_pdb]['count'] += 1
                         self.case_2_data[res_pdb]['distances'].append(c2['distance'])
 
@@ -97,6 +105,8 @@ class ClosestResidueAggregator:
                     if event['case_3_end_3_closest']:
                         c3 = event['case_3_end_3_closest']
                         res_pdb = c3['closest_residue_pdb']
+                        if c3.get('residue_type'):
+                            self.res_types[res_pdb] = c3['residue_type']
                         self.case_3_data[res_pdb]['count'] += 1
                         self.case_3_data[res_pdb]['distances'].append(c3['distance'])
 
@@ -104,6 +114,8 @@ class ClosestResidueAggregator:
                     if event['case_4_end_3_threshold']:
                         c4 = event['case_4_end_3_threshold']
                         res_pdb = c4['closest_residue_pdb']
+                        if c4.get('residue_type'):
+                            self.res_types[res_pdb] = c4['residue_type']
                         self.case_4_data[res_pdb]['count'] += 1
                         self.case_4_data[res_pdb]['distances'].append(c4['distance'])
 
@@ -111,6 +123,20 @@ class ClosestResidueAggregator:
                 print(f"  \u2717 Error loading {run_name}: {e}")
 
         return len(self.runs_data) > 0
+
+    ONE_LETTER = {'GLU': 'E', 'GLN': 'Q', 'ASP': 'D', 'ASN': 'N'}
+
+    def res_type(self, res):
+        """Residue name from the JSON; falls back to the WT numbering guess."""
+        if res in self.res_types:
+            return self.res_types[res]
+        if '152' in res or '141' in res:
+            return 'GLU'
+        elif '184' in res:
+            return 'ASN'
+        elif '173' in res:
+            return 'ASP'
+        return 'Unknown'
 
     def create_bar_plot(self, case_data, case_title, output_file):
         """
@@ -143,19 +169,13 @@ class ClosestResidueAggregator:
         # Color code by residue type (softer, more modern palette)
         color_map = {
             'GLU': '#E8746B',   # muted coral
+            'GLN': '#E8A85B',   # muted amber (E141Q)
             'ASN': '#5AA9C9',   # muted blue
             'ASP': '#6FBF73',   # muted green
             'Unknown': '#B0B0B0',
         }
-
-        def res_type(res):
-            if '152' in res or '141' in res:
-                return 'GLU'
-            elif '184' in res:
-                return 'ASN'
-            elif '173' in res:
-                return 'ASP'
-            return 'Unknown'
+        type_order = ['GLU', 'GLN', 'ASN', 'ASP', 'Unknown']
+        res_type = lambda r: self.res_type(r) if self.res_type(r) in color_map else 'Unknown'
 
         colors = [color_map[res_type(r)] for r in residues]
 
@@ -184,7 +204,7 @@ class ClosestResidueAggregator:
 
         # Formatting
         ax.set_xticks(range(len(residues)))
-        ax.set_xticklabels(residues, fontsize=17, fontweight='bold', rotation=40, ha='right')
+        ax.set_xticklabels([f"{self.ONE_LETTER.get(res_type(r), '')}{r}" for r in residues], fontsize=17, fontweight='bold', rotation=40, ha='right')
         ax.set_ylabel('Number of Times Closest', fontsize=19, fontweight='bold', labelpad=10)
         ax.set_xlabel('Residue', fontsize=19, fontweight='bold', labelpad=10)
         ax.set_title(case_title, fontsize=20, fontweight='bold', pad=22)
@@ -200,7 +220,7 @@ class ClosestResidueAggregator:
 
         # Legend (only for residue types actually present)
         from matplotlib.patches import Patch
-        present_types = sorted(set(res_type(r) for r in residues), key=lambda t: ['GLU', 'ASN', 'ASP', 'Unknown'].index(t))
+        present_types = sorted(set(res_type(r) for r in residues), key=lambda t: type_order.index(t))
         legend_elements = [Patch(facecolor=color_map[t], edgecolor='black', label=t) for t in present_types]
         ax.legend(handles=legend_elements, loc='upper right', fontsize=13, frameon=True, framealpha=0.9)
 
@@ -274,14 +294,7 @@ class ClosestResidueAggregator:
 
         table_data = []
         for residue in sorted_residues:
-            if '152' in residue or '141' in residue:
-                res_type = 'GLU'
-            elif '184' in residue:
-                res_type = 'ASN'
-            elif '173' in residue:
-                res_type = 'ASP'
-            else:
-                res_type = 'Unknown'
+            res_type = self.res_type(residue)
 
             c1 = self.case_1_data[residue]['count'] if residue in self.case_1_data else 0
             c2 = self.case_2_data[residue]['count'] if residue in self.case_2_data else 0
