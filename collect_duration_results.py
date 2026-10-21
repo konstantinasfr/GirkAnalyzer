@@ -6,7 +6,9 @@ ALL channels into ONE Excel file, for comparing channels:
 
     last     LAST residue/subunit contacted before leaving the GLU/ASN cavity
     longest  LONGEST contact before leaving the cavity
-    first    FIRST residue/subunit contacted after entering the cavity
+    first    FIRST residue/subunit contacted after leaving the SF
+    touch    FIRST residue/subunit within the threshold in the first --window
+             frames after leaving the SF (run_first_touch_analysis)
 
 each in residue and subunit mode, for every run group:
 
@@ -52,7 +54,7 @@ from aggregate_duration_results import (DurationResultsAggregator, load_categori
 
 
 # Contact kinds: (analysis passed to the aggregator, side inside it)
-CONTACTS = [('last', 'last'), ('last', 'longest'), ('first', 'first')]
+CONTACTS = [('last', 'last'), ('last', 'longest'), ('first', 'first'), ('touch', 'touch')]
 MODES = ['residue', 'subunit']
 RINGS = {'152': 'upper ring (152/141)', '141': 'upper ring (152/141)',
          '184': 'lower ring (184/173)', '173': 'lower ring (184/173)'}
@@ -70,14 +72,14 @@ def find_channels(root):
                   if d.is_dir() and any(c.is_dir() and c.name.startswith('RUN') for c in d.iterdir()))
 
 
-def load_channel(channel_dir, threshold, min_duration):
+def load_channel(channel_dir, threshold, min_duration, window=10):
     """Events of one channel (DataFrame) + run categories + coverage notes."""
     channel = channel_dir.name
     rows, coverage = [], []
     runs_found = {}
 
     for analysis, side in CONTACTS:
-        agg = DurationResultsAggregator(channel_dir, threshold, min_duration, channel, analysis)
+        agg = DurationResultsAggregator(channel_dir, threshold, min_duration, channel, analysis, window)
         with contextlib.redirect_stdout(io.StringIO()):
             agg.load_all_runs()
         for mode in MODES:
@@ -180,6 +182,8 @@ def main():
     parser.add_argument("results_root", help="Folder containing one folder per channel (G12, G12_ML, ...)")
     parser.add_argument("--threshold", type=float, required=True, help="Threshold used (e.g. 3.5)")
     parser.add_argument("--min_duration", type=int, required=True, help="min_duration used (e.g. 5)")
+    parser.add_argument("--window", type=int, default=10,
+                        help="Window of the first-touch analysis (frames after end_1, default 10)")
     parser.add_argument("--channels", nargs='+', default=None,
                         help="Channels to include (default: every sub-folder with RUN* folders)")
     parser.add_argument("--output", default=None,
@@ -194,14 +198,15 @@ def main():
 
     all_events, coverage = [], []
     for ch in channels:
-        ev, cov = load_channel(root / ch, args.threshold, args.min_duration)
+        ev, cov = load_channel(root / ch, args.threshold, args.min_duration, args.window)
         coverage += cov
         if ev.empty:
             print(f"  ✗ {ch}: no contact results for threshold={args.threshold}, min_duration={args.min_duration}")
             continue
         all_events.append(ev)
-        n = {c: ev.loc[ev['contact'] == c, 'run'].nunique() for c in ['last', 'first']}
-        print(f"  ✓ {ch}: last/longest from {n['last']} runs, first from {n['first']} runs")
+        n = {c: ev.loc[ev['contact'] == c, 'run'].nunique() for c in ['last', 'first', 'touch']}
+        print(f"  ✓ {ch}: last/longest from {n['last']} runs, first from {n['first']} runs, "
+              f"touch from {n['touch']} runs")
     if not all_events:
         print("No results found. Exiting.")
         return
@@ -241,15 +246,17 @@ def main():
 
     readme = pd.DataFrame({'item': [
         'threshold (A)', 'min_duration (frames)', 'channels', 'contact = last',
-        'contact = longest', 'contact = first', 'mode', 'group', 'label',
+        'contact = longest', 'contact = first', 'contact = touch', 'mode', 'group', 'label',
         'mean_pct_per_run / sem / median / min / max',
         'n_runs_with_label', 'pooled_count / pooled_pct', 'mean/median_duration_fr',
         'mean_gap_fr', 'ring', 'No contact', 'durations',
     ], 'meaning': [
-        args.threshold, args.min_duration, ', '.join(channels),
+        args.threshold, f"{args.min_duration} (touch: none, window = {args.window} frames)", ', '.join(channels),
         'LAST residue/subunit the ion contacted before leaving the GLU/ASN cavity (searched end_2 -> end_1)',
         'LONGEST contact before leaving the cavity (end_1 -> end_2)',
-        'FIRST residue/subunit contacted after entering the cavity (start_2 -> end_2)',
+        'FIRST residue/subunit contacted after leaving the SF (end_1 -> end_2, same window as last)',
+        'FIRST residue/subunit within the threshold in the first <window> frames after end_1 '
+        '(any duration; duration = frames in a row in the window)',
         'residue = single residues; subunit = chain (its GLU/GLN + ASN/ASP together)',
         'ALL runs; HIGH/TYPICAL/LOW = permeation categories; ligand D/E = G12_ML ligand categories',
         'residue position (e.g. 173.G1) or subunit (G2.a, G1); compare positions, not names, across mutants',
@@ -258,14 +265,14 @@ def main():
         'number of runs in which this label occurred at least once',
         'all events of the group pooled (runs with more events weigh more)',
         'contact length in frames (consecutive frames closest and within the threshold)',
-        'last/longest: frames from the end of the contact to end_2; first: frames from start_2 to the contact',
+        'last/longest: frames from the end of the contact to end_2; first: frames from end_1 to the contact',
         'upper ring = 152/141 (GLU/GLN), lower ring = 184/173 (ASN/ASP)',
         'the ion never stayed within the threshold for min_duration frames',
         'in frames; convert with each channel\'s time per frame before comparing channels in ns',
     ]})
 
     events_out = events[['channel', 'run', 'category', 'ligand', 'contact', 'mode', 'ion_id',
-                         'start_2_frame', 'end_2_frame', 'label', 'type', 'ring', 'duration',
+                         'end_1_frame', 'end_2_frame', 'label', 'type', 'ring', 'duration',
                          'start_frame', 'end_frame', 'gap']]
     with pd.ExcelWriter(output) as xl:
         readme.to_excel(xl, sheet_name='README', index=False)

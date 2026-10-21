@@ -7,9 +7,12 @@ all runs of one channel:
   --analysis last  (default)  run_last_duration_analysis: which residue /
                               subunit was the LAST and the LONGEST contact
                               before the ion left the GLU/ASN cavity (end_2)
+  --analysis touch            run_first_touch_analysis: the FIRST residue /
+                              subunit within the threshold in the first
+                              --window frames (default 10) after end_1
   --analysis first            run_first_duration_analysis: which residue /
                               subunit was the FIRST contact after the ion
-                              entered the cavity (start_2)
+                              left the SF (end_1)
 
 The runs are aggregated four times, each into its own folder inside the
 output directory:
@@ -44,6 +47,7 @@ frames are counted as "No contact" everywhere (bars, tables, fractions).
 Default output folders (t = threshold, d = min_duration):
     --analysis last   <base>/aggregated_duration/t*_d*/{ALL,HIGH,TYPICAL,LOW}/
     --analysis first  <base>/aggregated_first_duration/t*_d*/{ALL,HIGH,TYPICAL,LOW}/
+    --analysis touch  <base>/aggregated_first_touch/t*_w*/{ALL,HIGH,TYPICAL,LOW}/
 
 Outputs (per folder; with --analysis first the "last"/"longest" files are a
 single "first" set):
@@ -65,6 +69,7 @@ USAGE
 -----
     python3 aggregate_duration_results.py /path/to/G12 --threshold 2.5 --min_duration 3
     python3 aggregate_duration_results.py /path/to/G12 --threshold 2.5 --min_duration 3 --analysis first
+    python3 aggregate_duration_results.py /path/to/G12 --threshold 3.5 --analysis touch --window 10
 
 The categories CSV is found automatically at
 <base>/permeation_summary/run_categories_full_permeations_total.csv;
@@ -124,10 +129,19 @@ ANALYSES = {
         'dir': 'duration_first_{mode}',           # RUN*/duration_first_residue/<t>_<d>/
         'sides': ['first'],                       # first_duration_residue.json
         'out': 'aggregated_first_duration',
-        'titles': {'first': 'FIRST {unit} After Entering Cavity'},
-        'gap_name': 'start_2_to_contact',         # frames from start_2 to the start of the contact
-        'gap_title': 'start_2 → first contact',
-        'desc': 'first contact after entering the cavity',
+        'titles': {'first': 'FIRST {unit} After Leaving the SF'},
+        'gap_name': 'end_1_to_contact',           # frames from end_1 to the start of the contact
+        'gap_title': 'end_1 → first contact',
+        'desc': 'first contact after leaving the SF',
+    },
+    'touch': {
+        'dir': 'duration_touch_{mode}',           # RUN*/duration_touch_residue/<t>_w<window>/
+        'sides': ['touch'],                       # touch_duration_residue.json
+        'out': 'aggregated_first_touch',
+        'titles': {'touch': 'FIRST {unit} Touched After Leaving the SF'},
+        'gap_name': 'end_1_to_touch',             # frames from end_1 to the touch
+        'gap_title': 'end_1 → first touch',
+        'desc': 'first residue touched after leaving the SF',
     },
 }
 
@@ -155,7 +169,7 @@ class DurationResultsAggregator:
     and tables for any subset of runs (ALL / HIGH / TYPICAL / LOW).
     """
 
-    def __init__(self, base_directory, threshold, min_duration, channel_type=None, analysis='last'):
+    def __init__(self, base_directory, threshold, min_duration, channel_type=None, analysis='last', window=None):
         self.base_dir = Path(base_directory)
         self.analysis = analysis
         self.cfg = ANALYSES[analysis]
@@ -169,7 +183,16 @@ class DurationResultsAggregator:
             self.threshold_str = str(int(self.threshold))
         else:
             self.threshold_str = str(self.threshold)
-        self.tag = f"t{self.threshold_str}_d{self.min_duration}"
+        self.window = window
+        if analysis == 'touch':
+            # first touch: no minimum duration, a window of frames after end_1
+            self.variant = f"_w{window}"
+            self.tag = f"t{self.threshold_str}_w{window}"
+            self.rule = f"< {self.threshold} Å within {window} frames after the SF"
+        else:
+            self.variant = f"_{self.min_duration}"
+            self.tag = f"t{self.threshold_str}_d{self.min_duration}"
+            self.rule = f"< {self.threshold} Å for ≥ {self.min_duration} frames"
 
         # events[mode][side] = list of dicts, one per permeation event
         self.events = {m: {s: [] for s in self.sides} for m in MODES}
@@ -182,8 +205,7 @@ class DurationResultsAggregator:
     # ------------------------------------------------------------------
 
     def _find_file(self, run_dir, mode, side):
-        for variant in (f"{self.threshold_str}_{self.min_duration}",
-                        f"{self.threshold}_{self.min_duration}"):
+        for variant in (f"{self.threshold_str}{self.variant}", f"{self.threshold}{self.variant}"):
             f = run_dir / self.cfg['dir'].format(mode=mode) / variant / f"{side}_duration_{mode}.json"
             if f.exists():
                 return f
@@ -202,9 +224,9 @@ class DurationResultsAggregator:
                 rtype = residues[0].get('residue_type') or guess_type(pdb)
                 self.res_types[pdb] = rtype
             duration = ev.get('duration')
-            if self.analysis == 'first':
-                gap = (ev['start_frame'] - ev['start_2_frame']
-                       if ev.get('start_frame') is not None and ev.get('start_2_frame') is not None else None)
+            if self.analysis in ('first', 'touch'):
+                gap = (ev['start_frame'] - ev['end_1_frame']
+                       if ev.get('start_frame') is not None and ev.get('end_1_frame') is not None else None)
             else:
                 gap = (ev['end_2_frame'] - ev['end_frame']
                        if ev.get('end_frame') is not None and ev.get('end_2_frame') is not None else None)
@@ -214,7 +236,7 @@ class DurationResultsAggregator:
         return {
             'run': run,
             'ion_id': ev.get('ion_id'),
-            'start_2_frame': ev.get('start_2_frame'),
+            'end_1_frame': ev.get('end_1_frame'),
             'end_2_frame': ev.get('end_2_frame'),
             'label': label,
             'type': rtype,
@@ -346,8 +368,7 @@ class DurationResultsAggregator:
         ax.yaxis.set_major_locator(MaxNLocator(integer=True))
         ax.tick_params(axis='both', labelsize=14)
         n_runs = df['run'].nunique()
-        ax.set_title(f"{title}\n(pooled: n = {total} events from {n_runs} runs; "
-                     f"< {self.threshold} Å for ≥ {self.min_duration} frames)",
+        ax.set_title(f"{title}\n(pooled: n = {total} events from {n_runs} runs; {self.rule})",
                      fontsize=17, fontweight='bold', pad=20)
         self._style(ax)
         self._legend(ax, mode, labels)
@@ -394,8 +415,7 @@ class DurationResultsAggregator:
         ax.set_ylabel('% of events in a run', fontsize=18, fontweight='bold', labelpad=10)
         ax.set_xlabel('Subunit' if mode == 'subunit' else 'Residue', fontsize=18, fontweight='bold', labelpad=10)
         ax.tick_params(axis='both', labelsize=14)
-        ax.set_title(f"{title}\n(per run: mean ± SEM over {len(pct)} runs, dots = runs; "
-                     f"< {self.threshold} Å for ≥ {self.min_duration} frames)",
+        ax.set_title(f"{title}\n(per run: mean ± SEM over {len(pct)} runs, dots = runs; {self.rule})",
                      fontsize=17, fontweight='bold', pad=20)
         self._style(ax)
         self._legend(ax, mode, labels)
@@ -407,7 +427,7 @@ class DurationResultsAggregator:
 
     def duration_plot(self, frames, group, output_file):
         """Pooled histograms: contact duration of each side, plus the gap
-        (last: contact end -> end_2; first: start_2 -> contact start)."""
+        (last: contact end -> end_2; first: end_1 -> contact start)."""
         hits = {side: frames[side][frames[side]['label'] != NO_CONTACT] for side in self.sides}
         panels = [(f"{side.capitalize()} contact duration", hits[side]['duration'].dropna().values)
                   for side in self.sides]
@@ -436,7 +456,7 @@ class DurationResultsAggregator:
         main = frames[self.sides[0]]
         n_no = int((main['label'] == NO_CONTACT).sum())
         fig.suptitle(f"{self.channel_type} {group}: {self.cfg['desc']} "
-                     f"(< {self.threshold} Å, ≥ {self.min_duration} frames; pooled over "
+                     f"({self.rule}; pooled over "
                      f"{main['run'].nunique()} runs; {n_no}/{len(main)} events with no contact)",
                      fontsize=16, fontweight='bold')
         plt.tight_layout()
@@ -538,7 +558,7 @@ class DurationResultsAggregator:
                          .reset_index(drop=True) for side in self.sides[1:]]
                 ev = pd.concat([ev.reset_index(drop=True)] + extra, axis=1)
                 if self.analysis != 'first':
-                    ev = ev.drop(columns='start_2_frame')
+                    ev = ev.drop(columns='end_1_frame')
                 for i, (col, values) in enumerate(run_info.items()):
                     ev.insert(1 + i, col.lower(), [values.get(r, '') for r in ev['run']])
                 ev['_run_order'] = ev['run'].map(lambda r: run_sort_key(r)[0])
@@ -546,7 +566,7 @@ class DurationResultsAggregator:
                 ev.to_excel(events_xl, sheet_name=mode, index=False)
 
                 if mode == 'residue':
-                    prefix = 'first_' if self.analysis == 'first' else ''
+                    prefix = {'first': 'first_', 'touch': 'touch_'}.get(self.analysis, '')
                     self.duration_plot(frames, group,
                                        output_dir / f"{prefix}contact_durations_residue_{self.tag}.png")
 
@@ -593,11 +613,16 @@ def main():
                         help="Base directory containing RUN subdirectories")
     parser.add_argument("--threshold", type=float, required=True,
                         help="Threshold value used in the analysis (e.g., 3.0)")
-    parser.add_argument("--min_duration", type=int, required=True,
-                        help="Minimum duration value used in the analysis (e.g., 5)")
+    parser.add_argument("--min_duration", type=int, default=None,
+                        help="Minimum duration value used in the analysis (e.g., 5); "
+                             "needed for --analysis last/first")
+    parser.add_argument("--window", type=int, default=10,
+                        help="--analysis touch only: frames after end_1 searched (default: 10)")
     parser.add_argument("--analysis", choices=sorted(ANALYSES), default="last",
                         help="last: last/longest contact before end_2 (run_last_duration_analysis); "
-                             "first: first contact after start_2 (run_first_duration_analysis)")
+                             "first: first contact after end_1 (run_first_duration_analysis or derive_first_contact.py); "
+                             "touch: first residue within the threshold in the first --window frames "
+                             "after end_1 (run_first_touch_analysis)")
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Output directory (default: base_directory/aggregated_duration/t*_d*, or "
                              "aggregated_first_duration/t*_d* with --analysis first). "
@@ -613,9 +638,11 @@ def main():
     parser.add_argument("--channel_type", type=str, default=None,
                         help="Label for plot titles (default: base_directory folder name)")
     args = parser.parse_args()
+    if args.analysis != 'touch' and args.min_duration is None:
+        parser.error("--min_duration is required for --analysis last/first")
 
     aggregator = DurationResultsAggregator(args.base_directory, args.threshold, args.min_duration,
-                                           args.channel_type, args.analysis)
+                                           args.channel_type, args.analysis, args.window)
     if not aggregator.load_all_runs():
         print("No data found. Exiting.")
         return
