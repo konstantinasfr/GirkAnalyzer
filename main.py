@@ -62,6 +62,12 @@ def main():
     # parser.add_argument("--channel_type", default="G12")
     parser.add_argument("--channel_type", default="G12")
     parser.add_argument("--run_number", default=1)
+    parser.add_argument("--salt_bridge_only", action="store_true",
+                        help="run only the pore-loop salt bridge analysis, then exit")
+    parser.add_argument("--salt_bridge_frames", type=int, default=None,
+                        help="scan only the first N frames (quick check)")
+    parser.add_argument("--salt_bridge_diagnostics_only", action="store_true",
+                        help="print the salt bridge diagnostics and stop")
     # parser.add_argument("--channel_type", default="G2_FD")
     args = parser.parse_args()
     generate_electric_field_heatmap =  False
@@ -715,6 +721,28 @@ def main():
     end_frame = len(u.trajectory) - 1
     # end_frame = 3000
     print(f"Using end_frame = {end_frame} (last frame of trajectory)")
+
+    if channel_type in ("G12", "G2"):
+        from analysis.pore_salt_bridge import run_pore_salt_bridge, SaltBridgeCheckError
+
+        try:
+            run_pore_salt_bridge(
+                universe         = u,
+                results_dir      = results_dir,
+                channel_type     = channel_type,
+                frame_duration   = frame_duration,
+                start_frame      = start_frame,
+                end_frame        = end_frame,
+                max_frames       = args.salt_bridge_frames,
+                diagnostics_only = args.salt_bridge_diagnostics_only,
+                force_rerun      = args.salt_bridge_only,
+            )
+        except SaltBridgeCheckError:
+            if args.salt_bridge_only or args.salt_bridge_diagnostics_only:
+                raise SystemExit("Salt bridge diagnostics failed - see the message above.")
+            print("Salt bridge diagnostics failed - salt bridge skipped, continuing.")
+        if args.salt_bridge_only or args.salt_bridge_diagnostics_only:
+            return
     
     ch1 = Channel(u, upper1, lower1, num=1, radius=2.5)
     ch2 = Channel(u, upper2, lower2, num=2, radius=15.0)
