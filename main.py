@@ -1718,6 +1718,25 @@ def main():
             results_dir=f"{results_dir}/duration_first_{mode}/{threshold}_{min_duration}"
         )
 
+    # FIRST TOUCH: first residue within the threshold in the first `window` frames after the SF
+    # (no minimum duration; reads only `window` frames per event, so it is fast)
+    from analysis.longest_duration_analysis import run_first_touch_analysis
+    window = 10
+    for groups, mode in ((None, "residue"), (subunit_groups, "subunit")):
+        run_first_touch_analysis(
+            universe=u,
+            permeation_events=analyzer.permeation_events,
+            asn_residues=asn_residues,
+            glu_residues=glu_residues,
+            channel_type=channel_type,
+            threshold=threshold,
+            window=window,
+            analysis_start_frame=start_frame,
+            residue_types=['ASN', 'GLU'],
+            subunit_groups=groups,
+            results_dir=f"{results_dir}/duration_touch_{mode}/{threshold}_w{window}"
+        )
+
 
 #     #  NEW: Add proximity analysis
 #     print("\n" + "="*70)
