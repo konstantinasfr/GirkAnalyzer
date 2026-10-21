@@ -691,6 +691,11 @@ if __name__ == "__main__":
 python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ \
 --threshold 3.5 --min_duration 5
 
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ \
+--threshold 3.5 --min_duration 5 --analysis first
+
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ \
+--threshold 3.5 --min_duration 10 --analysis first
 
 python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ \
 --threshold 3.5 --min_duration 5

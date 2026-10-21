@@ -1702,7 +1702,7 @@ def main():
     # FIRST contact after entering the cavity (start_2 -> end_2), same rule
     from analysis.longest_duration_analysis import run_first_duration_analysis
     threshold = 3.5
-    min_duration = 5
+    min_duration = 10
     for groups, mode in ((None, "residue"), (subunit_groups, "subunit")):
         run_first_duration_analysis(
             universe=u,
