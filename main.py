@@ -770,6 +770,21 @@ def main():
     end2_all = get_end2_all_frames(results_dir, analyzer.permeation_events)
     end3_all = get_end3_all_frames(results_dir, analyzer.permeation_events)
 
+    from analysis.ion_state_sequence import run_ion_state_sequence
+
+    run_ion_state_sequence(
+        universe          = u,
+        permeation_events = analyzer.permeation_events,
+        glu_residues      = glu_residues,
+        asn_residues      = asn_residues,
+        results_dir       = results_dir,
+        channel_type      = channel_type,
+        frame_duration    = frame_duration,
+        run               = run_number,
+        channel2          = ch2,
+        force_rerun       = False,
+    )
+
     # from analysis.pip_binding_quality import run_pip_binding_quality
 
     # run_pip_binding_quality(
