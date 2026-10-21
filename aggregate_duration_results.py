@@ -10,6 +10,9 @@ all runs of one channel:
   --analysis touch            run_first_touch_analysis: the FIRST residue /
                               subunit within the threshold in the first
                               --window frames (default 10) after end_1
+  --analysis lasttouch        run_last_touch_analysis: the LAST residue /
+                              subunit within the threshold in the last
+                              --window frames (default 10) before end_2
   --analysis first            run_first_duration_analysis: which residue /
                               subunit was the FIRST contact after the ion
                               left the SF (end_1)
@@ -48,6 +51,7 @@ Default output folders (t = threshold, d = min_duration):
     --analysis last   <base>/aggregated_duration/t*_d*/{ALL,HIGH,TYPICAL,LOW}/
     --analysis first  <base>/aggregated_first_duration/t*_d*/{ALL,HIGH,TYPICAL,LOW}/
     --analysis touch  <base>/aggregated_first_touch/t*_w*/{ALL,HIGH,TYPICAL,LOW}/
+    --analysis lasttouch  <base>/aggregated_last_touch/t*_w*/{ALL,HIGH,TYPICAL,LOW}/
 
 Outputs (per folder; with --analysis first the "last"/"longest" files are a
 single "first" set):
@@ -143,6 +147,15 @@ ANALYSES = {
         'gap_title': 'end_1 → first touch',
         'desc': 'first residue touched after leaving the SF',
     },
+    'lasttouch': {
+        'dir': 'duration_lasttouch_{mode}',       # RUN*/duration_lasttouch_residue/<t>_w<window>/
+        'sides': ['lasttouch'],                   # lasttouch_duration_residue.json
+        'out': 'aggregated_last_touch',
+        'titles': {'lasttouch': 'LAST {unit} Touched Before Leaving Cavity'},
+        'gap_name': 'touch_to_end_2',             # frames from the touch to end_2
+        'gap_title': 'last touch → end_2',
+        'desc': 'last residue touched before leaving the cavity',
+    },
 }
 
 
@@ -184,11 +197,12 @@ class DurationResultsAggregator:
         else:
             self.threshold_str = str(self.threshold)
         self.window = window
-        if analysis == 'touch':
-            # first touch: no minimum duration, a window of frames after end_1
+        if analysis in ('touch', 'lasttouch'):
+            # touches: no minimum duration, a window of frames after end_1 / before end_2
             self.variant = f"_w{window}"
             self.tag = f"t{self.threshold_str}_w{window}"
-            self.rule = f"< {self.threshold} Å within {window} frames after the SF"
+            self.rule = (f"< {self.threshold} Å within {window} frames after the SF" if analysis == 'touch'
+                         else f"< {self.threshold} Å within the last {window} frames in the cavity")
         else:
             self.variant = f"_{self.min_duration}"
             self.tag = f"t{self.threshold_str}_d{self.min_duration}"
@@ -227,6 +241,11 @@ class DurationResultsAggregator:
             if self.analysis in ('first', 'touch'):
                 gap = (ev['start_frame'] - ev['end_1_frame']
                        if ev.get('start_frame') is not None and ev.get('end_1_frame') is not None else None)
+            elif self.analysis == 'lasttouch':
+                # the touch is the LATEST frame of the run, stored as touch_frame / end_frame
+                t = ev.get('touch_frame', ev.get('end_frame'))
+                gap = (ev['end_2_frame'] - t
+                       if t is not None and ev.get('end_2_frame') is not None else None)
             else:
                 gap = (ev['end_2_frame'] - ev['end_frame']
                        if ev.get('end_frame') is not None and ev.get('end_2_frame') is not None else None)
@@ -566,7 +585,7 @@ class DurationResultsAggregator:
                 ev.to_excel(events_xl, sheet_name=mode, index=False)
 
                 if mode == 'residue':
-                    prefix = {'first': 'first_', 'touch': 'touch_'}.get(self.analysis, '')
+                    prefix = {'first': 'first_', 'touch': 'touch_', 'lasttouch': 'lasttouch_'}.get(self.analysis, '')
                     self.duration_plot(frames, group,
                                        output_dir / f"{prefix}contact_durations_residue_{self.tag}.png")
 
@@ -617,12 +636,15 @@ def main():
                         help="Minimum duration value used in the analysis (e.g., 5); "
                              "needed for --analysis last/first")
     parser.add_argument("--window", type=int, default=10,
-                        help="--analysis touch only: frames after end_1 searched (default: 10)")
+                        help="--analysis touch / lasttouch only: frames after end_1 / before end_2 "
+                             "searched (default: 10)")
     parser.add_argument("--analysis", choices=sorted(ANALYSES), default="last",
                         help="last: last/longest contact before end_2 (run_last_duration_analysis); "
                              "first: first contact after end_1 (run_first_duration_analysis or derive_first_contact.py); "
                              "touch: first residue within the threshold in the first --window frames "
-                             "after end_1 (run_first_touch_analysis)")
+                             "after end_1 (run_first_touch_analysis); "
+                             "lasttouch: last residue within the threshold in the last --window frames "
+                             "before end_2 (run_last_touch_analysis)")
     parser.add_argument("--output_dir", type=str, default=None,
                         help="Output directory (default: base_directory/aggregated_duration/t*_d*, or "
                              "aggregated_first_duration/t*_d* with --analysis first). "
@@ -638,7 +660,7 @@ def main():
     parser.add_argument("--channel_type", type=str, default=None,
                         help="Label for plot titles (default: base_directory folder name)")
     args = parser.parse_args()
-    if args.analysis != 'touch' and args.min_duration is None:
+    if args.analysis not in ('touch', 'lasttouch') and args.min_duration is None:
         parser.error("--min_duration is required for --analysis last/first")
 
     aggregator = DurationResultsAggregator(args.base_directory, args.threshold, args.min_duration,

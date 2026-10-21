@@ -9,6 +9,8 @@ ALL channels into ONE Excel file, for comparing channels:
     first    FIRST residue/subunit contacted after leaving the SF
     touch    FIRST residue/subunit within the threshold in the first --window
              frames after leaving the SF (run_first_touch_analysis)
+    lasttouch LAST residue/subunit within the threshold in the last --window
+             frames before leaving the cavity (run_last_touch_analysis)
 
 each in residue and subunit mode, for every run group:
 
@@ -56,7 +58,9 @@ from aggregate_duration_results import (DurationResultsAggregator, load_categori
 
 
 # Contact kinds: (analysis passed to the aggregator, side inside it)
-CONTACTS = [('last', 'last'), ('last', 'longest'), ('first', 'first'), ('touch', 'touch')]
+CONTACTS = [('last', 'last'), ('last', 'longest'), ('first', 'first'), ('touch', 'touch'),
+            ('lasttouch', 'lasttouch')]
+WINDOW_CONTACTS = {'touch', 'lasttouch'}      # no min_duration, a --window of frames
 MODES = ['residue', 'subunit']
 RINGS = {'152': 'upper ring (152/141)', '141': 'upper ring (152/141)',
          '184': 'lower ring (184/173)', '173': 'lower ring (184/173)'}
@@ -190,22 +194,22 @@ def main():
     parser.add_argument("--contacts", nargs='+', default=None, choices=[c for _, c in CONTACTS],
                         help="Only these contacts (default: all), e.g. --contacts touch")
     parser.add_argument("--window", type=int, default=10,
-                        help="Window of the first-touch analysis (frames after end_1, default 10)")
+                        help="Window of the touch analyses (frames after end_1 / before end_2, default 10)")
     parser.add_argument("--channels", nargs='+', default=None,
                         help="Channels to include (default: every sub-folder with RUN* folders)")
     parser.add_argument("--output", default=None,
                         help="Output .xlsx (default: <results_root>/duration_comparison_t*_d*.xlsx)")
     args = parser.parse_args()
     contacts = args.contacts or [c for _, c in CONTACTS]
-    if args.min_duration is None and set(contacts) - {'touch'}:
+    if args.min_duration is None and set(contacts) - WINDOW_CONTACTS:
         parser.error("--min_duration is needed for last/longest/first (or use --contacts touch)")
 
     root = Path(args.results_root)
     channels = args.channels or find_channels(root)
     t = int(args.threshold) if float(args.threshold).is_integer() else args.threshold
     # e.g. t3.5_d5, t3.5_w10 (touch only) or t3.5_d5_w10
-    tag = f"t{t}" + (f"_d{args.min_duration}" if set(contacts) - {'touch'} else '') + \
-        (f"_w{args.window}" if 'touch' in contacts else '')
+    tag = f"t{t}" + (f"_d{args.min_duration}" if set(contacts) - WINDOW_CONTACTS else '') + \
+        (f"_w{args.window}" if set(contacts) & WINDOW_CONTACTS else '')
     output = Path(args.output) if args.output else root / f"duration_comparison_{tag}.xlsx"
 
     all_events, coverage = [], []
@@ -257,17 +261,19 @@ def main():
 
     readme = pd.DataFrame({'item': [
         'threshold (A)', 'min_duration (frames)', 'channels', 'contact = last',
-        'contact = longest', 'contact = first', 'contact = touch', 'mode', 'group', 'label',
+        'contact = longest', 'contact = first', 'contact = touch', 'contact = lasttouch', 'mode', 'group', 'label',
         'mean_pct_per_run / sem / median / min / max',
         'n_runs_with_label', 'pooled_count / pooled_pct', 'mean/median_duration_fr',
         'mean_gap_fr', 'ring', 'No contact', 'durations',
     ], 'meaning': [
-        args.threshold, f"{args.min_duration} (touch: none, window = {args.window} frames)", ', '.join(channels),
+        args.threshold, f"{args.min_duration} (touch / lasttouch: none, window = {args.window} frames)", ', '.join(channels),
         'LAST residue/subunit the ion contacted before leaving the GLU/ASN cavity (searched end_2 -> end_1)',
         'LONGEST contact before leaving the cavity (end_1 -> end_2)',
         'FIRST residue/subunit contacted after leaving the SF (end_1 -> end_2, same window as last)',
         'FIRST residue/subunit within the threshold in the first <window> frames after end_1 '
         '(any duration; duration = frames in a row in the window)',
+        'LAST residue/subunit within the threshold in the last <window> frames before end_2 '
+        '(any duration; duration = frames in a row in the window, going back)',
         'residue = single residues; subunit = chain (its GLU/GLN + ASN/ASP together)',
         'ALL runs; HIGH/TYPICAL/LOW = permeation categories; ligand D/E = G12_ML ligand categories',
         'residue position (e.g. 173.G1) or subunit (G2.a, G1); compare positions, not names, across mutants',
@@ -276,7 +282,8 @@ def main():
         'number of runs in which this label occurred at least once',
         'all events of the group pooled (runs with more events weigh more)',
         'contact length in frames (consecutive frames closest and within the threshold)',
-        'last/longest: frames from the end of the contact to end_2; first: frames from end_1 to the contact',
+        'last/longest: frames from the end of the contact to end_2; first/touch: frames from end_1 to the contact; '
+        'lasttouch: frames from the touch to end_2 (0 = touching at the last cavity frame)',
         'upper ring = 152/141 (GLU/GLN), lower ring = 184/173 (ASN/ASP)',
         'the ion never stayed within the threshold for min_duration frames',
         'in frames; convert with each channel\'s time per frame before comparing channels in ns',
