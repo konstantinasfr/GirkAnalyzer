@@ -163,6 +163,33 @@ def to_pdb(resid: int, channel_type: str) -> str:
     return str(resid)
 
 
+_FROM_PDB_CACHE = {}
+
+
+def from_pdb(seq_number: int, chain: str, channel_type: str, max_resid: int = 1400):
+    """
+    Reverse of to_pdb(): (sequence number, chain suffix) -> MDAnalysis resid.
+
+    Built by running to_pdb() over resids 1..max_resid and inverting the
+    result, so the two can never disagree. e.g. from_pdb(141, "G1", "G12")
+    -> 99. Returns None when no resid maps to that label, raises if more than
+    one does.
+    """
+    ct = channel_type.upper().strip()
+    if ct not in _FROM_PDB_CACHE:
+        table = {}
+        for r in range(1, max_resid + 1):
+            label = to_pdb(r, ct)
+            if label == str(r):                       # outside every chain
+                continue
+            table.setdefault(label, []).append(r)
+        _FROM_PDB_CACHE[ct] = table
+    hits = _FROM_PDB_CACHE[ct].get(f"{int(seq_number)}.{chain}", [])
+    if len(hits) > 1:
+        raise ValueError(f"from_pdb: {seq_number}.{chain} ({ct}) maps to several resids {hits}")
+    return hits[0] if hits else None
+
+
 def subunit_label(pdb_label: str) -> str:
     """
     Subunit (chain) name from a PDB-style label: '152.2a' -> 'G2.a',

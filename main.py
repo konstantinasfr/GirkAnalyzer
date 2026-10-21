@@ -62,6 +62,12 @@ def main():
     # parser.add_argument("--channel_type", default="G12")
     parser.add_argument("--channel_type", default="G12")
     parser.add_argument("--run_number", default=1)
+    parser.add_argument("--salt_bridge_rerun", action="store_true",
+                        help="recompute the pore-loop salt bridge even if its CSV exists")
+    parser.add_argument("--salt_bridge_frames", type=int, default=None,
+                        help="scan only the first N frames (quick check)")
+    parser.add_argument("--salt_bridge_diagnostics_only", action="store_true",
+                        help="print the salt bridge diagnostics and stop")
     # parser.add_argument("--channel_type", default="G2_FD")
     args = parser.parse_args()
     generate_electric_field_heatmap =  False
@@ -715,75 +721,93 @@ def main():
     end_frame = len(u.trajectory) - 1
     # end_frame = 3000
     print(f"Using end_frame = {end_frame} (last frame of trajectory)")
+
+    if channel_type in ("G12", "G2"):
+        from analysis.pore_salt_bridge import run_pore_salt_bridge, SaltBridgeCheckError
+
+        try:
+            run_pore_salt_bridge(
+                universe         = u,
+                results_dir      = results_dir,
+                channel_type     = channel_type,
+                frame_duration   = frame_duration,
+                start_frame      = start_frame,
+                end_frame        = end_frame,
+                max_frames       = args.salt_bridge_frames,
+                diagnostics_only = args.salt_bridge_diagnostics_only,
+                force_rerun      = args.salt_bridge_rerun,
+            )
+        except SaltBridgeCheckError:
+            raise SystemExit("Salt bridge diagnostics failed - see the message above.")
     
-    ch1 = Channel(u, upper1, lower1, num=1, radius=2.5)
-    ch2 = Channel(u, upper2, lower2, num=2, radius=15.0)
-    ch3 = Channel(u, upper3, lower3, num=3, radius=15.0)
-    ch4 = Channel(u, upper4, lower4, num=4, radius=10.0)
+    # ch1 = Channel(u, upper1, lower1, num=1, radius=2.5)
+    # ch2 = Channel(u, upper2, lower2, num=2, radius=15.0)
+    # ch3 = Channel(u, upper3, lower3, num=3, radius=15.0)
+    # ch4 = Channel(u, upper4, lower4, num=4, radius=10.0)
 
  # ========== TRY TO LOAD SAVED STATE ==========
-    saved_state = load_analyzer_state(results_dir)
+    # saved_state = load_analyzer_state(results_dir)
     
-    if saved_state is not None:
+    # if saved_state is not None:
         # Use saved state - SKIP trajectory analysis
-        print("\n" + "="*80)
-        print("USING SAVED ANALYZER STATE")
-        print("="*80)
+    #     print("\n" + "="*80)
+    #     print("USING SAVED ANALYZER STATE")
+    #     print("="*80)
         
-        analyzer = restore_analyzer_from_state(
-            u, saved_state, results_dir, ch1, ch2, ch3, ch4,
-            hbc_residues, hbc_diagonal_pairs,
-            sf_low_res_residues, sf_low_res_diagonal_pairs,
-            upper_gl_residues, upper_gl_diagonal_pairs,
-            lower_gl_residues, lower_gl_diagonal_pairs
-        )
+    #     analyzer = restore_analyzer_from_state(
+    #         u, saved_state, results_dir, ch1, ch2, ch3, ch4,
+    #         hbc_residues, hbc_diagonal_pairs,
+    #         sf_low_res_residues, sf_low_res_diagonal_pairs,
+    #         upper_gl_residues, upper_gl_diagonal_pairs,
+    #         lower_gl_residues, lower_gl_diagonal_pairs
+    #     )
         
-    else:
+    # else:
         # No saved state - run full analysis
-        print("\n" + "="*80)
-        print("RUNNING FULL TRAJECTORY ANALYSIS")
-        print("="*80)
+    #     print("\n" + "="*80)
+    #     print("RUNNING FULL TRAJECTORY ANALYSIS")
+    #     print("="*80)
         
-        analyzer = IonPermeationAnalysis(
-            u, ion_selection="resname K+ K", 
-            start_frame=start_frame, end_frame=end_frame,
-            channel1=ch1, channel2=ch2, channel3=ch3, channel4=ch4,
-            hbc_residues=hbc_residues, hbc_diagonal_pairs=hbc_diagonal_pairs,
-            sf_low_res_residues=sf_low_res_residues, 
-            sf_low_res_diagonal_pairs=sf_low_res_diagonal_pairs,
-            upper_gl_residues=upper_gl_residues,
-            upper_gl_diagonal_pairs=upper_gl_diagonal_pairs,
-            lower_gl_residues=lower_gl_residues,
-            lower_gl_diagonal_pairs=lower_gl_diagonal_pairs,
-            results_dir=results_dir,
-            count_ions=True
-        )
+    #     analyzer = IonPermeationAnalysis(
+    #         u, ion_selection="resname K+ K", 
+    #         start_frame=start_frame, end_frame=end_frame,
+    #         channel1=ch1, channel2=ch2, channel3=ch3, channel4=ch4,
+    #         hbc_residues=hbc_residues, hbc_diagonal_pairs=hbc_diagonal_pairs,
+    #         sf_low_res_residues=sf_low_res_residues, 
+    #         sf_low_res_diagonal_pairs=sf_low_res_diagonal_pairs,
+    #         upper_gl_residues=upper_gl_residues,
+    #         upper_gl_diagonal_pairs=upper_gl_diagonal_pairs,
+    #         lower_gl_residues=lower_gl_residues,
+    #         lower_gl_diagonal_pairs=lower_gl_diagonal_pairs,
+    #         results_dir=results_dir,
+    #         count_ions=True
+    #     )
         
-        analyzer.run_analysis()
-        analyzer.print_results()
+    #     analyzer.run_analysis()
+    #     analyzer.print_results()
         
         # SAVE STATE for future runs
-        save_analyzer_state(analyzer, results_dir)
+    #     save_analyzer_state(analyzer, results_dir)
     
-    from analysis.end2_utils import get_end2_all_frames, get_end3_all_frames
+    # from analysis.end2_utils import get_end2_all_frames, get_end3_all_frames
 
-    end2_all = get_end2_all_frames(results_dir, analyzer.permeation_events)
-    end3_all = get_end3_all_frames(results_dir, analyzer.permeation_events)
+    # end2_all = get_end2_all_frames(results_dir, analyzer.permeation_events)
+    # end3_all = get_end3_all_frames(results_dir, analyzer.permeation_events)
 
-    from analysis.ion_state_sequence import run_ion_state_sequence
+    # from analysis.ion_state_sequence import run_ion_state_sequence
 
-    run_ion_state_sequence(
-        universe          = u,
-        permeation_events = analyzer.permeation_events,
-        glu_residues      = glu_residues,
-        asn_residues      = asn_residues,
-        results_dir       = results_dir,
-        channel_type      = channel_type,
-        frame_duration    = frame_duration,
-        run               = run_number,
-        channel2          = ch2,
-        force_rerun       = False,
-    )
+    # run_ion_state_sequence(
+    #     universe          = u,
+    #     permeation_events = analyzer.permeation_events,
+    #     glu_residues      = glu_residues,
+    #     asn_residues      = asn_residues,
+    #     results_dir       = results_dir,
+    #     channel_type      = channel_type,
+    #     frame_duration    = frame_duration,
+    #     run               = run_number,
+    #     channel2          = ch2,
+    #     force_rerun       = False,
+    # )
 
     # from analysis.pip_binding_quality import run_pip_binding_quality
 
@@ -1756,23 +1780,23 @@ def main():
 
     # LAST TOUCH: last residue within the threshold in the last `window` frames before the
     # ion leaves the cavity (end_2); no minimum duration, reads only `window` frames per event
-    from analysis.longest_duration_analysis import run_last_touch_analysis
-    threshold = 3.5
-    window = 10
-    for groups, mode in ((None, "residue"), (subunit_groups, "subunit")):
-        run_last_touch_analysis(
-            universe=u,
-            permeation_events=analyzer.permeation_events,
-            asn_residues=asn_residues,
-            glu_residues=glu_residues,
-            channel_type=channel_type,
-            threshold=threshold,
-            window=window,
-            analysis_start_frame=start_frame,
-            residue_types=['ASN', 'GLU'],
-            subunit_groups=groups,
-            results_dir=f"{results_dir}/duration_lasttouch_{mode}/{threshold}_w{window}"
-        )
+    # from analysis.longest_duration_analysis import run_last_touch_analysis
+    # threshold = 3.5
+    # window = 10
+    # for groups, mode in ((None, "residue"), (subunit_groups, "subunit")):
+    #     run_last_touch_analysis(
+    #         universe=u,
+    #         permeation_events=analyzer.permeation_events,
+    #         asn_residues=asn_residues,
+    #         glu_residues=glu_residues,
+    #         channel_type=channel_type,
+    #         threshold=threshold,
+    #         window=window,
+    #         analysis_start_frame=start_frame,
+    #         residue_types=['ASN', 'GLU'],
+    #         subunit_groups=groups,
+    #         results_dir=f"{results_dir}/duration_lasttouch_{mode}/{threshold}_w{window}"
+    #     )
 
 
 #     #  NEW: Add proximity analysis
