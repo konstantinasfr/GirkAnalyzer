@@ -6,8 +6,10 @@ Pore-loop salt bridge behind the selectivity filter: the conserved ARG two
 residues after the GYG motif and the GLU behind the filter, per subunit.
 
     Kir3.1 (G1):  R149 <-> E139      GYG = G145-Y146-G147
-    Kir3.2 (G2):  R158 <-> E148      GYG = G154-Y155-G156
-(human full-length sequence numbering - see SALT_BRIDGE_PAIRS)
+    Kir3.2 (G2):  R160 <-> E150      GYG = G156-Y157-G158
+(to_pdb numbering of this system - see SALT_BRIDGE_PAIRS. Kir3.2 here is
+2 above the R158/E148, GYG 154-156 numbering: G12 RUN3 shows
+TETTI-GYG-YRVIT with the GYG at 156-158 through to_pdb.)
 
 NUMBERING
 ---------
@@ -22,7 +24,7 @@ SUBUNIT TYPE
 ------------
 From the to_pdb() chain label: G1 -> Kir3.1, 2x -> Kir3.2. Chains are the
 protein residues grouped by that label. The filter motif (T[IV]GYG) and the
-residue after GYG are printed per chain for eyeballing; they do not stop
+residue 3 after the last GYG glycine are printed per chain for eyeballing; they do not stop
 the run.
 
 DIAGNOSTICS (printed, and saved to diagnostics.txt; any failure -> stop)
@@ -103,10 +105,12 @@ SUPPORTED_CHANNELS = ("G12", "G2")
 # Sequence numbering (human full length), per subunit type
 SALT_BRIDGE_PAIRS = {
     "Kir3.1": {"arg": 149, "glu": 139, "gyg_first_g": 145},
-    "Kir3.2": {"arg": 158, "glu": 148, "gyg_first_g": 154},
+    "Kir3.2": {"arg": 160, "glu": 150, "gyg_first_g": 156},   # = R158/E148 in GYG-154 numbering
 }
-# residue at GYG+3 (first G = +0) -> subunit type
+# residue 3 after the last GYG glycine (GYG-Y-R-[x]) -> subunit type
+# Kir3.1 ...GYGYR[Y]IT...   Kir3.2 ...GYGYR[V]IT...
 GYG3_TYPE = {"Y": "Kir3.1", "V": "Kir3.2"}
+GYG3_OFFSET = 5                                        # from the first GYG glycine
 FILTER_MOTIF = re.compile(r"T[IV]GYG")
 
 ARG_N = ("NE", "NH1", "NH2")
@@ -198,11 +202,11 @@ def show_filter_motif(chain, log):
         return
     for g in hits:
         res = chain["residues"]
-        gyg3 = seq[g + 3] if g + 3 < len(seq) else "-"
+        gyg3 = seq[g + GYG3_OFFSET] if g + GYG3_OFFSET < len(seq) else "-"
         log(f"   chain {chain['label']:>3} ({chain['type']}):  "
             f"{seq[g-5:g]}-{seq[g:g+3]}-{seq[g+3:g+8]}   "
             f"GYG at resid {res.resids[g]}-{res.resids[g+2]} = seq "
-            f"{chain['seqnums'][g]}-{chain['seqnums'][g+2]};  GYG+3 = {gyg3} "
+            f"{chain['seqnums'][g]}-{chain['seqnums'][g+2]};  last G+3 = {gyg3} "
             f"(sequence suggests {GYG3_TYPE.get(gyg3, '??')})")
 
 
