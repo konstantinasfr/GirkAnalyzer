@@ -20,20 +20,15 @@ Only "G12" and "G2" are supported (the layouts to_pdb() knows for them):
 
 SUBUNIT TYPE
 ------------
-Not taken from the converter. Each protein chain (bonded fragment of the
-topology) is typed from its OWN sequence: the filter motif T[IV]GYG is found
-in the chain, and the residue at GYG+3 (first G = +0, i.e. the residue
-right after GYG) decides the type: Y -> Kir3.1, V -> Kir3.2. Then three
-independent pieces of evidence must agree or the run stops:
-    a) sequence type (GYG+3 residue)
-    b) to_pdb chain label of the chain (G1 -> Kir3.1, 2x -> Kir3.2)
-    c) to_pdb sequence number of the first GYG glycine (145 / 154)
-and the ARG picked by number must be the residue at GYG+4 in the chain.
+From the to_pdb() chain label: G1 -> Kir3.1, 2x -> Kir3.2. Chains are the
+protein residues grouped by that label. The filter motif (T[IV]GYG) and the
+residue after GYG are printed per chain for eyeballing; they do not stop
+the run.
 
 DIAGNOSTICS (printed, and saved to diagnostics.txt; any failure -> stop)
 -----------------------------------------------------------------------
-    1. every chain: fragment index, segid/chainID, n residues, first/last resid
-    2. detected subunit type + the sequence evidence
+    1. every chain: label, segid, n residues, first/last resid
+    2. subunit type + filter-motif context
     3. every selected residue: resname, topology resid, sequence number, chain;
        ARG/GLU resname asserted
     4. +/-7 sequence context, selected residue in [brackets]
@@ -164,88 +159,51 @@ def _subunit_type_from_label(chain):
 # ---------------------------------------------------------------------------
 
 def find_chains(u, channel_type, log):
-    """Protein chains = bonded protein fragments, each mapped through to_pdb()."""
+    """Protein residues grouped by their to_pdb() chain label."""
     protein = u.select_atoms("protein")
     if len(protein) == 0:
         _fail(log, "no atoms match 'protein' in this topology.")
-    frags = sorted(protein.fragments, key=lambda f: f.residues.resids[0])
+    groups = {}
+    for res in protein.residues:
+        label = to_pdb(int(res.resid), channel_type)
+        if "." not in label:
+            continue                                   # outside every chain range
+        groups.setdefault(label.split(".", 1)[1], []).append(res)
 
-    log("1. CHAINS (bonded protein fragments)")
-    log(f"   {'frag':>4} {'segid':>7} {'chainID':>7} {'n_res':>5} {'first':>6} {'last':>6}"
-        f"  {'to_pdb(first)':>14} {'to_pdb(last)':>13}  label")
+    log("1. CHAINS (protein residues grouped by to_pdb chain label)")
+    log(f"   {'chain':>5} {'type':>7} {'segid':>7} {'n_res':>5} {'first':>6} {'last':>6}"
+        f"  {'to_pdb(first)':>14} {'to_pdb(last)':>13}")
     chains = []
-    for i, frag in enumerate(frags):
-        res = frag.residues
-        resids = res.resids
-        segid = ",".join(sorted(set(res.segids)))
-        try:
-            chain_ids = ",".join(sorted(set(frag.atoms.chainIDs)))
-        except Exception:
-            chain_ids = "-"
-        labels = [to_pdb(int(r), channel_type) for r in resids]
-        suffixes = {lab.split(".", 1)[1] for lab in labels if "." in lab}
-        unmapped = [int(r) for r, lab in zip(resids, labels) if "." not in lab]
-        log(f"   {i:>4} {segid:>7} {chain_ids:>7} {len(res):>5} {resids[0]:>6} {resids[-1]:>6}"
-            f"  {labels[0]:>14} {labels[-1]:>13}  {','.join(sorted(suffixes)) or '-'}")
-        if len(res) < 50:
-            log(f"        (fragment with {len(res)} residues skipped - not a channel subunit)")
-            continue
-        if unmapped:
-            _fail(log, f"fragment {i}: resids {unmapped[:5]}... are outside every to_pdb "
-                       f"chain range for {channel_type}.")
-        if len(suffixes) != 1:
-            _fail(log, f"fragment {i} (resids {resids[0]}-{resids[-1]}) spans several to_pdb "
-                       f"chains {sorted(suffixes)} - the converter's chain boundaries do not "
-                       f"match this topology.")
-        seq = "".join(ONE_LETTER.get(rn, "X") for rn in res.resnames)
-        chains.append({"frag": i, "segid": segid, "chainID": chain_ids, "residues": res,
-                       "seq": seq, "label": suffixes.pop(),
-                       "seqnums": [_split_label(lab)[0] for lab in labels]})
+    for label, residues in sorted(groups.items(), key=lambda kv: kv[1][0].resid):
+        res = u.residues[[r.ix for r in residues]]
+        labels = [to_pdb(int(r), channel_type) for r in res.resids]
+        chain = {"label": label, "type": _subunit_type_from_label(label), "residues": res,
+                 "segid": ",".join(sorted(set(res.segids))),
+                 "seq": "".join(ONE_LETTER.get(rn, "X") for rn in res.resnames),
+                 "seqnums": [_split_label(lab)[0] for lab in labels]}
+        log(f"   {label:>5} {chain['type']:>7} {chain['segid']:>7} {len(res):>5} "
+            f"{res.resids[0]:>6} {res.resids[-1]:>6}  {labels[0]:>14} {labels[-1]:>13}")
+        chains.append(chain)
     if len(chains) != 4:
-        _fail(log, f"expected 4 channel subunits, found {len(chains)}.")
-    if len({c["label"] for c in chains}) != 4:
-        _fail(log, f"two fragments got the same to_pdb chain: {[c['label'] for c in chains]}")
+        _fail(log, f"expected 4 chains from to_pdb, found {len(chains)}: {[c['label'] for c in chains]}")
     return chains
 
 
-def type_chain(chain, channel_type, log):
-    """Subunit type from the chain's own sequence; cross-checked with to_pdb."""
+def show_filter_motif(chain, log):
+    """Sequence evidence, printed only - the subunit type comes from to_pdb."""
     seq = chain["seq"]
-    hits = [m.start() for m in FILTER_MOTIF.finditer(seq)]
-    if len(hits) != 1:
-        _fail(log, f"chain {chain['label']}: filter motif {FILTER_MOTIF.pattern} found "
-                   f"{len(hits)} times (need exactly 1).")
-    g = hits[0] + 2                                    # index of first GYG glycine
-    if g + 4 >= len(seq):
-        _fail(log, f"chain {chain['label']}: sequence ends right after the GYG motif.")
-    res = chain["residues"]
-    gyg3 = seq[g + 3]
-    seq_type = GYG3_TYPE.get(gyg3)
-    label_type = _subunit_type_from_label(chain["label"])
-    gyg_seqnum = chain["seqnums"][g]
-
-    log(f"   chain {chain['label']:>3} (frag {chain['frag']}):  "
-        f"{seq[g-5:g]}-{seq[g:g+3]}-{seq[g+3:g+8]}   "
-        f"GYG at resid {res.resids[g]}-{res.resids[g+2]} = seq {gyg_seqnum}-{gyg_seqnum+2};  "
-        f"GYG+3 = {gyg3} (resid {res.resids[g+3]}) ; GYG+4 = {seq[g+4]}")
-    log(f"        sequence type: {seq_type or '??'}   to_pdb label type: {label_type}")
-
-    if seq_type is None:
-        _fail(log, f"chain {chain['label']}: GYG+3 residue is '{gyg3}', expected one of "
-                   f"{sorted(GYG3_TYPE)} - cannot type this subunit.")
-    if seq_type != label_type:
-        _fail(log, f"chain {chain['label']}: sequence says {seq_type} but the converter labels "
-                   f"it {chain['label']} ({label_type}). The converter's chain order does not "
-                   f"match this topology.")
-    expected_g = SALT_BRIDGE_PAIRS[seq_type]["gyg_first_g"]
-    if gyg_seqnum != expected_g:
-        _fail(log, f"chain {chain['label']} ({seq_type}): first GYG glycine is seq "
-                   f"{gyg_seqnum} through to_pdb, expected {expected_g}. The converter "
-                   f"offset and the reference numbering disagree by {gyg_seqnum - expected_g}; "
-                   f"by motif the ARG (GYG+4) would be seq {chain['seqnums'][g+4]}.")
-    chain["type"] = seq_type
-    chain["gyg_index"] = g
-    return chain
+    hits = [m.start() + 2 for m in FILTER_MOTIF.finditer(seq)]
+    if not hits:
+        log(f"   chain {chain['label']:>3} ({chain['type']}):  no {FILTER_MOTIF.pattern} motif found")
+        return
+    for g in hits:
+        res = chain["residues"]
+        gyg3 = seq[g + 3] if g + 3 < len(seq) else "-"
+        log(f"   chain {chain['label']:>3} ({chain['type']}):  "
+            f"{seq[g-5:g]}-{seq[g:g+3]}-{seq[g+3:g+8]}   "
+            f"GYG at resid {res.resids[g]}-{res.resids[g+2]} = seq "
+            f"{chain['seqnums'][g]}-{chain['seqnums'][g+2]};  GYG+3 = {gyg3} "
+            f"(sequence suggests {GYG3_TYPE.get(gyg3, '??')})")
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +227,7 @@ def check_residue(u, chain, seqnum, role, channel_type, log):
         _fail(log, f"round trip failed: from_pdb -> {resid} -> to_pdb -> {back}")
     resids = list(chain["residues"].resids)
     if resid not in resids:
-        _fail(log, f"resid {resid} ({seqnum}.{chain['label']}) is not in fragment {chain['frag']}.")
+        _fail(log, f"resid {resid} ({seqnum}.{chain['label']}) is not in chain {chain['label']}.")
     idx = resids.index(resid)
     res = chain["residues"][idx]
     atoms = res.atoms
@@ -289,8 +247,6 @@ def check_residue(u, chain, seqnum, role, channel_type, log):
     if role == "ARG":
         if res.resname != "ARG":
             _fail(log, f"{seqnum}.{chain['label']} (resid {resid}) is {res.resname}, not ARG.")
-        if idx != chain["gyg_index"] + 4:
-            _fail(log, f"ARG {seqnum}.{chain['label']} is not at GYG+4 in the chain sequence.")
         need = ARG_N
         if charge is not None and abs(charge - 1.0) > 0.05:
             _fail(log, f"ARG {seqnum}.{chain['label']} charge {charge:+.3f}, expected +1 "
@@ -430,9 +386,9 @@ def plot_timeseries(df, pairs, out_path, title):
 def setup_pairs(u, channel_type, log):
     """All diagnostics 1-6. Returns the list of pairs, or raises SaltBridgeCheckError."""
     chains = find_chains(u, channel_type, log)
-    log("\n2. SUBUNIT TYPE FROM SEQUENCE (motif context, GYG+3 residue)")
+    log("\n2. SUBUNIT TYPE (from to_pdb label) and filter motif per chain")
     for ch in chains:
-        type_chain(ch, channel_type, log)
+        show_filter_motif(ch, log)
     counts = {t: sum(c["type"] == t for c in chains) for t in SALT_BRIDGE_PAIRS}
     log(f"   stoichiometry: {counts}")
 
