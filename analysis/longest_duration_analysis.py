@@ -1054,7 +1054,17 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
 
     Also stored per event: the delay from end_1 to the touch, and how many
     consecutive frames (inside the window) the ion stayed with that residue.
+
+    LastTouchAnalysis below is the same search run backwards from end_2.
     """
+
+    ANALYSIS = 'touch'                       # file names: duration_touch_*, touch_duration_*
+    NAME = 'FIRST TOUCH'
+    REVERSE = False                          # scan the window forwards
+    DELAY_TITLE = 'end_1 \u2192 first touch'
+    DESC = 'first touch after leaving the SF'
+    PLOT_TITLE = 'FIRST {unit} Touched After Leaving the SF'
+    FILE_PREFIX = 'first_touch'
 
     def __init__(self, universe, permeation_events, asn_residues, glu_residues,
                  channel_type="G12", threshold=3.5, window=10, analysis_start_frame=0,
@@ -1067,12 +1077,20 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
     def rule_text(self):
         return f"< {self.threshold} Å within {self.window} frames after the SF"
 
+    def _window(self, end_1_frame, end_2_frame):
+        """Frames searched: the first `window` frames after end_1, never past end_2."""
+        return end_1_frame + 1, min(end_1_frame + self.window, end_2_frame)
+
+    def _delay(self, touch_frame, end_1_frame, end_2_frame):
+        """Frames from end_1 to the touch."""
+        return touch_frame - end_1_frame
+
     def analyze_event(self, event):
         ion_id = event['ion_id']
         # Last frame in the SF; stored as 'R1_end' in older runs
         end_1_frame = int(event.get('end_1', event.get('R1_end', event.get('start_2'))))
         end_2_frame = int(event['end_2'])
-        start, stop = end_1_frame + 1, min(end_1_frame + self.window, end_2_frame)
+        start, stop = self._window(end_1_frame, end_2_frame)
 
         touch, touch_frame, run_length, min_distance = None, None, 0, None
         if stop >= start:
@@ -1080,7 +1098,9 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
             if D is not None:
                 min_distance = float(D.min())
                 key = 'subunit' if self.subunit_groups else 'residue_id'
-                for i, row in enumerate(D):
+                order = range(len(D) - 1, -1, -1) if self.REVERSE else range(len(D))
+                for i in order:
+                    row = D[i]
                     info, _ = self._closest_from_row(row)
                     if touch is None:
                         if info:
@@ -1090,17 +1110,28 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
                     else:
                         break
 
+        # touch_frame is the frame found (first one forwards, last one backwards);
+        # the run of frames in a row with that residue extends away from it
+        if touch is None:
+            first_frame = last_frame = None
+        elif self.REVERSE:
+            first_frame, last_frame = touch_frame - run_length + 1, touch_frame
+        else:
+            first_frame, last_frame = touch_frame, touch_frame + run_length - 1
         return {
             'ion_id': int(ion_id),
             'end_1_frame': end_1_frame,
             'end_2_frame': end_2_frame,
+            'window_start_frame': start,
             'window_end_frame': stop,
             'mode': 'subunit' if self.subunit_groups else 'residue',
             'touch_identifier': (touch['subunit'] if self.subunit_groups else touch['residue_id']) if touch else None,
             'touch_residues': [touch] if touch else None,
             'touch_duration': run_length,
-            'touch_start_frame': touch_frame,
-            'touch_end_frame': touch_frame + run_length - 1 if touch else None,
+            'touch_frame': touch_frame,
+            'touch_delay': self._delay(touch_frame, end_1_frame, end_2_frame) if touch else None,
+            'touch_start_frame': first_frame,
+            'touch_end_frame': last_frame,
             'touch_distance': touch['distance'] if touch else None,
             'min_distance_in_window': min_distance,
         }
@@ -1108,9 +1139,9 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
     def run_analysis(self):
         mode_str = "SUBUNIT" if self.subunit_groups else "RESIDUE"
         print("\n" + "="*80)
-        print(f"FIRST TOUCH AFTER LEAVING THE SF - {mode_str} MODE")
+        print(f"{self.NAME} ({self.DESC}) - {mode_str} MODE")
         print("="*80)
-        print(f"Distance threshold: {self.threshold} Å, window: {self.window} frames after end_1")
+        print(f"Distance threshold: {self.threshold} Å, {self.rule_text()}")
         print(f"Analyzing {len(self.permeation_events)} permeation events...")
         for event in self.permeation_events:
             r = self.analyze_event(event)
@@ -1118,7 +1149,7 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
             if r['touch_identifier'] is not None:
                 t = r['touch_residues'][0]
                 print(f"Ion {r['ion_id']}: {r['touch_identifier']} [{t['residue_type']} {t['residue_pdb']}] "
-                      f"at frame {r['touch_start_frame']} (+{r['touch_start_frame'] - r['end_1_frame']}), "
+                      f"at frame {r['touch_frame']} (delay {r['touch_delay']} frames), "
                       f"{t['distance']:.2f} Å, {r['touch_duration']} frames")
             else:
                 md = r['min_distance_in_window']
@@ -1128,10 +1159,10 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
     def save_results(self):
         self.results_dir.mkdir(parents=True, exist_ok=True)
         mode_str = "subunit" if self.subunit_groups else "residue"
-        complete_file = self.results_dir / f"duration_touch_complete_{mode_str}.json"
+        complete_file = self.results_dir / f"duration_{self.ANALYSIS}_complete_{mode_str}.json"
         with open(complete_file, 'w') as f:
             json.dump({
-                'analysis': 'touch',
+                'analysis': self.ANALYSIS,
                 'threshold': self.threshold,
                 'window': self.window,
                 'min_duration': 1,
@@ -1145,7 +1176,7 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
             }, f, indent=2)
         print(f"\n✓ Complete results saved to: {complete_file}")
 
-        touch_file = self.results_dir / f"touch_duration_{mode_str}.json"
+        touch_file = self.results_dir / f"{self.ANALYSIS}_duration_{mode_str}.json"
         with open(touch_file, 'w') as f:
             json.dump({'threshold': self.threshold, 'window': self.window, 'mode': mode_str,
                        'results': [{
@@ -1157,10 +1188,12 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
                            'duration': r['touch_duration'],
                            'start_frame': r['touch_start_frame'],
                            'end_frame': r['touch_end_frame'],
+                           'touch_frame': r['touch_frame'],
+                           'delay': r['touch_delay'],
                            'distance': r['touch_distance'],
                            'min_distance_in_window': r['min_distance_in_window'],
                        } for r in self.results]}, f, indent=2)
-        print(f"✓ FIRST TOUCH results saved to: {touch_file}")
+        print(f"✓ {self.NAME} results saved to: {touch_file}")
 
     def create_summary(self):
         if not self.results:
@@ -1172,7 +1205,7 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
         for r in hits:
             key = str(r['touch_identifier']) if self.subunit_groups else r['touch_residues'][0]['residue_type']
             counts[key] = counts.get(key, 0) + 1
-        delays = [r['touch_start_frame'] - r['end_1_frame'] for r in hits]
+        delays = [r['touch_delay'] for r in hits]
         summary = {
             'total_events': len(self.results),
             'threshold': self.threshold,
@@ -1180,22 +1213,23 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
             'mode': mode_str,
             'touch_counts': counts,
             'none_count': len(self.results) - len(hits),
-            'end_1_to_touch_mean': float(np.mean(delays)) if delays else None,
+            'delay_mean_frames': float(np.mean(delays)) if delays else None,
+            'delay_is': self.DELAY_TITLE,
             'touch_frames_mean': float(np.mean([r['touch_duration'] for r in hits])) if hits else None,
         }
-        output_file = self.results_dir / f"duration_touch_summary_{mode_str}.json"
+        output_file = self.results_dir / f"duration_{self.ANALYSIS}_summary_{mode_str}.json"
         with open(output_file, 'w') as f:
             json.dump(summary, f, indent=2)
-        print(f"\nFIRST TOUCH ({mode_str}): " + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
+        print(f"\n{self.NAME} ({mode_str}): " + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
               + f", None: {summary['none_count']}  (of {len(self.results)} events)")
         print(f"✓ Summary saved to: {output_file}")
         return summary
 
     def create_duration_plot(self, output_file):
-        """Histograms: frames from end_1 to the touch, and frames the touch lasted (in the window)."""
+        """Histograms: delay of the touch (see DELAY_TITLE), and frames it lasted (in the window)."""
         hits = [r for r in self.results if r['touch_identifier'] is not None]
         panels = [
-            ('end_1 → first touch', [r['touch_start_frame'] - r['end_1_frame'] for r in hits]),
+            (self.DELAY_TITLE, [r['touch_delay'] for r in hits]),
             ('Touch length (frames in a row, in window)', [r['touch_duration'] for r in hits]),
         ]
         plt.rcParams['font.family'] = 'DejaVu Sans'
@@ -1211,12 +1245,12 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
             if not values:
                 ax.text(0.5, 0.5, 'no contacts', transform=ax.transAxes, ha='center', va='center', fontsize=14)
                 continue
-            bins = np.arange(0.5, self.window + 1.5, 1)
+            bins = np.arange(-0.5, self.window + 1.5, 1)
             ax.hist(values, bins=bins, color=self.SUBUNIT_COLOR, edgecolor='black', linewidth=0.8,
                     alpha=0.9, zorder=3)
             ax.xaxis.set_major_locator(MaxNLocator(integer=True))
             ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-        fig.suptitle(f"{self.channel_type}: first touch after leaving the SF ({self.rule_text()}; "
+        fig.suptitle(f"{self.channel_type}: {self.DESC} ({self.rule_text()}; "
                      f"{len(self.results) - len(hits)}/{len(self.results)} events with no contact)",
                      fontsize=16, fontweight='bold')
         plt.tight_layout()
@@ -1233,9 +1267,43 @@ class FirstTouchAnalysis(LastAndLongestDurationAnalysis):
         mode_str = "subunit" if self.subunit_groups else "residue"
         unit = "Subunit" if self.subunit_groups else "Residue"
         tag = f"t{self.threshold}_w{self.window}"
-        self.create_bar_plot('touch', f"{self.channel_type}: FIRST {unit} Touched After Leaving the SF",
-                             output_dir / f"first_touch_{mode_str}_frequency_{tag}.png")
-        self.create_duration_plot(output_dir / f"first_touch_frames_{mode_str}_{tag}.png")
+        self.create_bar_plot('touch', f"{self.channel_type}: " + self.PLOT_TITLE.format(unit=unit),
+                             output_dir / f"{self.FILE_PREFIX}_{mode_str}_frequency_{tag}.png")
+        self.create_duration_plot(output_dir / f"{self.FILE_PREFIX}_frames_{mode_str}_{tag}.png")
+
+
+class LastTouchAnalysis(FirstTouchAnalysis):
+    """
+    The LAST residue/subunit the ion touches before it leaves the GLU/ASN
+    cavity: within the last `window` frames in the cavity (end_2-window+1
+    ... end_2, never before end_1+1), the LATEST frame at which the closest
+    of the GLU/ASN residues is within `threshold`. No minimum duration.
+    Events where nothing comes within the threshold in the window are
+    "No contact".
+
+    Also stored per event: how many frames before end_2 the touch was
+    (0 = touching at the last cavity frame), and how many consecutive frames
+    (inside the window, going back) the ion was with that residue.
+    """
+
+    ANALYSIS = 'lasttouch'                   # duration_lasttouch_*, lasttouch_duration_*
+    NAME = 'LAST TOUCH'
+    REVERSE = True                           # scan the window backwards from end_2
+    DELAY_TITLE = 'last touch \u2192 end_2'
+    DESC = 'last touch before leaving the cavity'
+    PLOT_TITLE = 'LAST {unit} Touched Before Leaving Cavity'
+    FILE_PREFIX = 'last_touch'
+
+    def rule_text(self):
+        return f"< {self.threshold} Å within the last {self.window} frames in the cavity"
+
+    def _window(self, end_1_frame, end_2_frame):
+        """Frames searched: the last `window` frames up to end_2, never before end_1+1."""
+        return max(end_1_frame + 1, end_2_frame - self.window + 1), end_2_frame
+
+    def _delay(self, touch_frame, end_1_frame, end_2_frame):
+        """Frames from the touch to end_2."""
+        return end_2_frame - touch_frame
 
 
 def plot_duration_results(json_file, output_dir=None, channel_type=None, topology=None):
@@ -1267,7 +1335,8 @@ def plot_duration_results(json_file, output_dir=None, channel_type=None, topolog
         relabel(data['results'])
         with open(json_file, 'w') as f:
             json.dump(data, f, indent=2)
-        for side in {'first': ('first',), 'touch': ('touch',)}.get(data.get('analysis'), ('last', 'longest')):
+        for side in {'first': ('first',), 'touch': ('touch',), 'lasttouch': ('lasttouch',)}.get(
+                data.get('analysis'), ('last', 'longest')):
             side_file = json_file.parent / f"{side}_duration_{data['mode']}.json"
             if side_file.exists():
                 with open(side_file) as f:
@@ -1277,8 +1346,8 @@ def plot_duration_results(json_file, output_dir=None, channel_type=None, topolog
                     json.dump(side_data, f, indent=2)
         print(f"✓ Residue names updated from {topology}: {names}")
 
-    cls = {'first': FirstContactAnalysis, 'touch': FirstTouchAnalysis}.get(data.get('analysis'),
-                                                                          LastAndLongestDurationAnalysis)
+    cls = {'first': FirstContactAnalysis, 'touch': FirstTouchAnalysis,
+           'lasttouch': LastTouchAnalysis}.get(data.get('analysis'), LastAndLongestDurationAnalysis)
     analyzer = cls.__new__(cls)
     analyzer.window = data.get('window')
     analyzer.results = data['results']
@@ -1423,6 +1492,33 @@ def run_first_touch_analysis(universe, permeation_events, asn_residues,
                                   glu_residues, channel_type, threshold, window,
                                   analysis_start_frame, residue_types, subunit_groups,
                                   results_dir)
+    analyzer.run_analysis()
+    analyzer.save_results()
+    analyzer.create_summary()
+    analyzer.create_plots()
+
+    return analyzer
+
+
+def run_last_touch_analysis(universe, permeation_events, asn_residues,
+                            glu_residues, channel_type="G12", threshold=3.5,
+                            window=10, analysis_start_frame=0,
+                            residue_types=['ASN', 'GLU'], subunit_groups=None,
+                            results_dir="."):
+    """
+    Convenience function to run the LAST-TOUCH analysis: the last residue
+    (or subunit) within `threshold` in the last `window` frames before the
+    ion leaves the cavity (end_2). Suggested results_dir:
+    f"{results_dir}/duration_lasttouch_<residue|subunit>/{threshold}_w{window}"
+
+    Returns:
+    --------
+    LastTouchAnalysis : The analysis object with results
+    """
+    analyzer = LastTouchAnalysis(universe, permeation_events, asn_residues,
+                                 glu_residues, channel_type, threshold, window,
+                                 analysis_start_frame, residue_types, subunit_groups,
+                                 results_dir)
     analyzer.run_analysis()
     analyzer.save_results()
     analyzer.create_summary()

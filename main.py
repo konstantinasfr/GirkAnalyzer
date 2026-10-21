@@ -1754,6 +1754,26 @@ def main():
     #         results_dir=f"{results_dir}/duration_touch_{mode}/{threshold}_w{window}"
     #     )
 
+    # LAST TOUCH: last residue within the threshold in the last `window` frames before the
+    # ion leaves the cavity (end_2); no minimum duration, reads only `window` frames per event
+    from analysis.longest_duration_analysis import run_last_touch_analysis
+    threshold = 3.5
+    window = 10
+    for groups, mode in ((None, "residue"), (subunit_groups, "subunit")):
+        run_last_touch_analysis(
+            universe=u,
+            permeation_events=analyzer.permeation_events,
+            asn_residues=asn_residues,
+            glu_residues=glu_residues,
+            channel_type=channel_type,
+            threshold=threshold,
+            window=window,
+            analysis_start_frame=start_frame,
+            residue_types=['ASN', 'GLU'],
+            subunit_groups=groups,
+            results_dir=f"{results_dir}/duration_lasttouch_{mode}/{threshold}_w{window}"
+        )
+
 
 #     #  NEW: Add proximity analysis
 #     print("\n" + "="*70)
