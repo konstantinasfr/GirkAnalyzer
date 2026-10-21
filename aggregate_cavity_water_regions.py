@@ -1060,6 +1060,9 @@ python3 aggregate_cavity_water_regions.py /media/ziyue/328bfc27-c1a6-4fce-9199-9
 python3 aggregate_cavity_water_regions.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ \
 --channel G12
 
+python3 aggregate_cavity_water_regions.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_GAT/ \
+--channel G12_GAT
+
 python3 aggregate_cavity_water_regions.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ \
 --channel G2
 

@@ -919,6 +919,10 @@ python3 aggregate_cavity_mobility.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389
 python3 aggregate_cavity_mobility.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ \
 --channel G12 --frame_duration 0.075
 
+python3 aggregate_cavity_mobility.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_GAT/ \
+--channel G12_GAT --frame_duration 0.075
+
+
 python3 aggregate_cavity_mobility.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ \
 --channel G2 --frame_duration 0.4
 

@@ -801,126 +801,126 @@ def main():
     #     force_rerun  = False,
     # )
 
-    # from analysis.end2_contact_force import run_end2_contact_force
+    from analysis.end2_contact_force import run_end2_contact_force
 
-    # for ev in ("end_2", "end_3"):
-    #     run_end2_contact_force(universe=u, permeation_events=analyzer.permeation_events,
-    #                     results_dir=results_dir, channel_type=channel_type,
-    #                     frame_duration=frame_duration, run=run_number, event=ev,
-    #                     force_rerun=True)
+    for ev in ("end_2", "end_3"):
+        run_end2_contact_force(universe=u, permeation_events=analyzer.permeation_events,
+                        results_dir=results_dir, channel_type=channel_type,
+                        frame_duration=frame_duration, run=run_number, event=ev,
+                        force_rerun=True)
 
-    # from analysis.cavity_mobility import run_cavity_mobility
+    from analysis.cavity_mobility import run_cavity_mobility
 
-    # run_cavity_mobility(
-    #     universe          = u,
-    #     permeation_events = analyzer.permeation_events,
-    #     results_dir       = results_dir,
-    #     channel_type      = channel_type,
-    #     frame_duration    = frame_duration,
-    #     start_frame       = start_frame,
-    #     end_frame         = end_frame,
-    #     run               = run_number,
-    #     glu_residues      = glu_residues,
-    #     asn_residues      = asn_residues,
-    #     hbc_residues      = hbc_residues,
-    #     force_rerun       = False,
-    # )
+    run_cavity_mobility(
+        universe          = u,
+        permeation_events = analyzer.permeation_events,
+        results_dir       = results_dir,
+        channel_type      = channel_type,
+        frame_duration    = frame_duration,
+        start_frame       = start_frame,
+        end_frame         = end_frame,
+        run               = run_number,
+        glu_residues      = glu_residues,
+        asn_residues      = asn_residues,
+        hbc_residues      = hbc_residues,
+        force_rerun       = False,
+    )
 
-    # from analysis.cavity_water_regions import run_cavity_water_regions
+    from analysis.cavity_water_regions import run_cavity_water_regions
 
-    # run_cavity_water_regions(
-    #     universe          = u,
-    #     permeation_events = analyzer.permeation_events,
-    #     results_dir       = results_dir,
-    #     channel_type      = channel_type,
-    #     frame_duration    = frame_duration,
-    #     start_frame       = start_frame,
-    #     end_frame         = end_frame,
-    #     radius            = 12.0,
-    #     run               = run_number,
-    #     glu_residues      = glu_residues,
-    #     asn_residues      = asn_residues,
-    #     hbc_residues      = hbc_residues,
-    #     force_rerun       = False,
-    # )
+    run_cavity_water_regions(
+        universe          = u,
+        permeation_events = analyzer.permeation_events,
+        results_dir       = results_dir,
+        channel_type      = channel_type,
+        frame_duration    = frame_duration,
+        start_frame       = start_frame,
+        end_frame         = end_frame,
+        radius            = 12.0,
+        run               = run_number,
+        glu_residues      = glu_residues,
+        asn_residues      = asn_residues,
+        hbc_residues      = hbc_residues,
+        force_rerun       = False,
+    )
 
-    # from analysis.ion_hydration_regions import run_ion_hydration_regions
+    from analysis.ion_hydration_regions import run_ion_hydration_regions
 
-    # run_ion_hydration_regions(
-    #     universe          = u,
-    #     permeation_events = analyzer.permeation_events,
-    #     results_dir       = results_dir,
-    #     channel_type      = channel_type,
-    #     frame_duration    = frame_duration,
-    #     start_frame       = start_frame,
-    #     end_frame         = end_frame,
-    #     shell             = 3.5,
-    #     run               = run_number,
-    #     glu_residues      = glu_residues,
-    #     asn_residues      = asn_residues,
-    #     hbc_residues      = hbc_residues,
-    #     force_rerun       = False,
-    # )
+    run_ion_hydration_regions(
+        universe          = u,
+        permeation_events = analyzer.permeation_events,
+        results_dir       = results_dir,
+        channel_type      = channel_type,
+        frame_duration    = frame_duration,
+        start_frame       = start_frame,
+        end_frame         = end_frame,
+        shell             = 3.5,
+        run               = run_number,
+        glu_residues      = glu_residues,
+        asn_residues      = asn_residues,
+        hbc_residues      = hbc_residues,
+        force_rerun       = False,
+    )
 
-    # from analysis.permeation_ion_table import run_permeation_ion_table
+    from analysis.permeation_ion_table import run_permeation_ion_table
 
-    # run_permeation_ion_table(
-    #     universe          = u,
-    #     permeation_events = analyzer.permeation_events,
-    #     glu_residues      = glu_residues,
-    #     asn_residues      = asn_residues,
-    #     results_dir       = results_dir,
-    #     channel_type      = channel_type,
-    #     frame_duration    = frame_duration,
-    #     start_frame       = start_frame,
-    #     end_frame         = end_frame,
-    #     cutoff            = 3.5,
-    #     run               = run_number,
-    #     force_rerun       = False,
-    # )
+    run_permeation_ion_table(
+        universe          = u,
+        permeation_events = analyzer.permeation_events,
+        glu_residues      = glu_residues,
+        asn_residues      = asn_residues,
+        results_dir       = results_dir,
+        channel_type      = channel_type,
+        frame_duration    = frame_duration,
+        start_frame       = start_frame,
+        end_frame         = end_frame,
+        cutoff            = 3.5,
+        run               = run_number,
+        force_rerun       = False,
+    )
 
-    # from analysis.permeation_ion_stats import run_permeation_ion_stats
+    from analysis.permeation_ion_stats import run_permeation_ion_stats
 
-    # run_permeation_ion_stats(
-    #     results_dir    = results_dir,
-    #     channel_type   = channel_type,
-    #     frame_duration = frame_duration,
-    #     run            = run_number,
-    #     force_rerun    = False,
-    # )
+    run_permeation_ion_stats(
+        results_dir    = results_dir,
+        channel_type   = channel_type,
+        frame_duration = frame_duration,
+        run            = run_number,
+        force_rerun    = False,
+    )
 
-    # from analysis.permeation_correlation import run_permeation_correlation
+    from analysis.permeation_correlation import run_permeation_correlation
 
-    # run_permeation_correlation(
-    #     results_dir    = results_dir,
-    #     channel_type   = channel_type,
-    #     frame_duration = frame_duration,
-    #     run            = run_number,
-    #     force_rerun    = False,
-    # )
+    run_permeation_correlation(
+        results_dir    = results_dir,
+        channel_type   = channel_type,
+        frame_duration = frame_duration,
+        run            = run_number,
+        force_rerun    = False,
+    )
 
-    # from analysis.permeation_ion_combinations import run_permeation_combinations
+    from analysis.permeation_ion_combinations import run_permeation_combinations
 
-    # run_permeation_combinations(
-    #     results_dir  = results_dir,
-    #     channel_type = channel_type,
-    #     run          = run_number,
-    #     unit         = "frames",
-    #     force_rerun  = False,
-    # )
+    run_permeation_combinations(
+        results_dir  = results_dir,
+        channel_type = channel_type,
+        run          = run_number,
+        unit         = "frames",
+        force_rerun  = False,
+    )
 
-    # from analysis.glu_asn_cavity_split_analysis import run_cavity_split_analysis
+    from analysis.glu_asn_cavity_split_analysis import run_cavity_split_analysis
 
-    # run_cavity_split_analysis(
-    #     u                 = u,
-    #     results_dir       = results_dir,
-    #     channel_type      = args.channel_type,
-    #     permeation_events = analyzer.permeation_events,
-    #     frame_duration    = frame_duration,
-    #     glu_resids      = glu_residues,
-    #     asn_resids      = asn_residues,
-    #     force_rerun       = True,
-    # )
+    run_cavity_split_analysis(
+        u                 = u,
+        results_dir       = results_dir,
+        channel_type      = args.channel_type,
+        permeation_events = analyzer.permeation_events,
+        frame_duration    = frame_duration,
+        glu_resids      = glu_residues,
+        asn_resids      = asn_residues,
+        force_rerun       = True,
+    )
 
     # from analysis.pip_199_64_permeation_corr import build_hbc_permeation_percentage_table
 
@@ -1735,23 +1735,24 @@ def main():
 
     # FIRST TOUCH: first residue within the threshold in the first `window` frames after the SF
     # (no minimum duration; reads only `window` frames per event, so it is fast)
-    from analysis.longest_duration_analysis import run_first_touch_analysis
-    threshold = 3.5
-    window = 10
-    for groups, mode in ((None, "residue"), (subunit_groups, "subunit")):
-        run_first_touch_analysis(
-            universe=u,
-            permeation_events=analyzer.permeation_events,
-            asn_residues=asn_residues,
-            glu_residues=glu_residues,
-            channel_type=channel_type,
-            threshold=threshold,
-            window=window,
-            analysis_start_frame=start_frame,
-            residue_types=['ASN', 'GLU'],
-            subunit_groups=groups,
-            results_dir=f"{results_dir}/duration_touch_{mode}/{threshold}_w{window}"
-        )
+    # #hereeee
+    # from analysis.longest_duration_analysis import run_first_touch_analysis
+    # threshold = 3.5
+    # window = 10
+    # for groups, mode in ((None, "residue"), (subunit_groups, "subunit")):
+    #     run_first_touch_analysis(
+    #         universe=u,
+    #         permeation_events=analyzer.permeation_events,
+    #         asn_residues=asn_residues,
+    #         glu_residues=glu_residues,
+    #         channel_type=channel_type,
+    #         threshold=threshold,
+    #         window=window,
+    #         analysis_start_frame=start_frame,
+    #         residue_types=['ASN', 'GLU'],
+    #         subunit_groups=groups,
+    #         results_dir=f"{results_dir}/duration_touch_{mode}/{threshold}_w{window}"
+    #     )
 
 
 #     #  NEW: Add proximity analysis
