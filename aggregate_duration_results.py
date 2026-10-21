@@ -773,4 +773,87 @@ python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c38
 python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/ \
 --threshold 3.5 --analysis touch --window 10
 
+
+=========G12===================
+# last + longest contact (3.5 Å, ≥ 5 frames)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ \
+--threshold 3.5 --min_duration 5
+
+# first contact (3.5 Å, ≥ 5 frames)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ \
+--threshold 3.5 --min_duration 5 --analysis first
+
+# first touch (3.5 Å, first 10 frames after the SF)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ \
+--threshold 3.5 --analysis touch --window 10
+
+# last touch (3.5 Å, last 10 frames before leaving the cavity)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ \
+--threshold 3.5 --analysis lasttouch --window 10
+
+
+=========G2===================
+# last + longest contact (3.5 Å, ≥ 5 frames)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ \
+--threshold 3.5 --min_duration 5
+
+# first contact (3.5 Å, ≥ 5 frames)
+
+python3 derive_first_contact.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results \
+  --threshold 3.5 --min_duration 5 --channels G2
+
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ \
+--threshold 3.5 --min_duration 5 --analysis first
+
+# first touch (3.5 Å, first 10 frames after the SF)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ \
+--threshold 3.5 --analysis touch --window 10
+
+# last touch (3.5 Å, last 10 frames before leaving the cavity)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ \
+--threshold 3.5 --analysis lasttouch --window 10
+
+
+=========G12_D173N===================
+# last + longest contact (3.5 Å, ≥ 5 frames)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/ \
+--threshold 3.5 --min_duration 5
+
+# first contact (3.5 Å, ≥ 5 frames)
+
+python3 derive_first_contact.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results \
+  --threshold 3.5 --min_duration 5 --channels G12_D173N
+
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/ \
+--threshold 3.5 --min_duration 5 --analysis first
+
+# first touch (3.5 Å, first 10 frames after the SF)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/ \
+--threshold 3.5 --analysis touch --window 10
+
+# last touch (3.5 Å, last 10 frames before leaving the cavity)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N/ \
+--threshold 3.5 --analysis lasttouch --window 10
+
+=========G12_E141Q===================
+# last + longest contact (3.5 Å, ≥ 5 frames)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/ \
+--threshold 3.5 --min_duration 5
+
+# first contact (3.5 Å, ≥ 5 frames)
+
+python3 derive_first_contact.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results \
+  --threshold 3.5 --min_duration 5 --channels G12_E141Q
+
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/ \
+--threshold 3.5 --min_duration 5 --analysis first
+
+# first touch (3.5 Å, first 10 frames after the SF)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/ \
+--threshold 3.5 --analysis touch --window 10
+
+# last touch (3.5 Å, last 10 frames before leaving the cavity)
+python3 aggregate_duration_results.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q/ \
+--threshold 3.5 --analysis lasttouch --window 10
+
 '''
