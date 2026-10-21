@@ -35,9 +35,11 @@ Sheets of the output file:
 USAGE
 -----
     python3 collect_duration_results.py /path/to/girk_analyser_results --threshold 3.5 --min_duration 5
+    python3 collect_duration_results.py /path/to/girk_analyser_results --threshold 3.5 --contacts touch --window 10
 
 Channels are all sub-folders containing RUN* folders, or pass --channels G12 G12_ML ...
-Output: <results_root>/duration_comparison_t3.5_d5.xlsx (or --output).
+Output: <results_root>/duration_comparison_t3.5_d5_w10.xlsx (all contacts),
+        duration_comparison_t3.5_w10.xlsx (--contacts touch), or --output.
 """
 
 import io
@@ -72,13 +74,15 @@ def find_channels(root):
                   if d.is_dir() and any(c.is_dir() and c.name.startswith('RUN') for c in d.iterdir()))
 
 
-def load_channel(channel_dir, threshold, min_duration, window=10):
+def load_channel(channel_dir, threshold, min_duration, window=10, contacts=None):
     """Events of one channel (DataFrame) + run categories + coverage notes."""
     channel = channel_dir.name
     rows, coverage = [], []
     runs_found = {}
 
     for analysis, side in CONTACTS:
+        if contacts and side not in contacts:
+            continue
         agg = DurationResultsAggregator(channel_dir, threshold, min_duration, channel, analysis, window)
         with contextlib.redirect_stdout(io.StringIO()):
             agg.load_all_runs()
@@ -181,7 +185,10 @@ def main():
                                                  "into one Excel file")
     parser.add_argument("results_root", help="Folder containing one folder per channel (G12, G12_ML, ...)")
     parser.add_argument("--threshold", type=float, required=True, help="Threshold used (e.g. 3.5)")
-    parser.add_argument("--min_duration", type=int, required=True, help="min_duration used (e.g. 5)")
+    parser.add_argument("--min_duration", type=int, default=None,
+                        help="min_duration used (e.g. 5); needed for last/longest/first")
+    parser.add_argument("--contacts", nargs='+', default=None, choices=[c for _, c in CONTACTS],
+                        help="Only these contacts (default: all), e.g. --contacts touch")
     parser.add_argument("--window", type=int, default=10,
                         help="Window of the first-touch analysis (frames after end_1, default 10)")
     parser.add_argument("--channels", nargs='+', default=None,
@@ -189,24 +196,28 @@ def main():
     parser.add_argument("--output", default=None,
                         help="Output .xlsx (default: <results_root>/duration_comparison_t*_d*.xlsx)")
     args = parser.parse_args()
+    contacts = args.contacts or [c for _, c in CONTACTS]
+    if args.min_duration is None and set(contacts) - {'touch'}:
+        parser.error("--min_duration is needed for last/longest/first (or use --contacts touch)")
 
     root = Path(args.results_root)
     channels = args.channels or find_channels(root)
     t = int(args.threshold) if float(args.threshold).is_integer() else args.threshold
-    tag = f"t{t}_d{args.min_duration}"
+    # e.g. t3.5_d5, t3.5_w10 (touch only) or t3.5_d5_w10
+    tag = f"t{t}" + (f"_d{args.min_duration}" if set(contacts) - {'touch'} else '') + \
+        (f"_w{args.window}" if 'touch' in contacts else '')
     output = Path(args.output) if args.output else root / f"duration_comparison_{tag}.xlsx"
 
     all_events, coverage = [], []
     for ch in channels:
-        ev, cov = load_channel(root / ch, args.threshold, args.min_duration, args.window)
+        ev, cov = load_channel(root / ch, args.threshold, args.min_duration, args.window, contacts)
         coverage += cov
         if ev.empty:
-            print(f"  ✗ {ch}: no contact results for threshold={args.threshold}, min_duration={args.min_duration}")
+            print(f"  ✗ {ch}: no {'/'.join(contacts)} results for threshold={args.threshold}")
             continue
         all_events.append(ev)
-        n = {c: ev.loc[ev['contact'] == c, 'run'].nunique() for c in ['last', 'first', 'touch']}
-        print(f"  ✓ {ch}: last/longest from {n['last']} runs, first from {n['first']} runs, "
-              f"touch from {n['touch']} runs")
+        n = {c: ev.loc[ev['contact'] == c, 'run'].nunique() for c in contacts}
+        print(f"  ✓ {ch}: " + ", ".join(f"{c} from {k} runs" for c, k in n.items()))
     if not all_events:
         print("No results found. Exiting.")
         return
