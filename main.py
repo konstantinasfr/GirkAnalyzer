@@ -1798,6 +1798,23 @@ def main():
     #         results_dir=f"{results_dir}/duration_lasttouch_{mode}/{threshold}_w{window}"
     #     )
 
+    # GLU OCCUPANCY AT SF EXIT: at end_1 (and at the first touch), how many GLUs have another
+    # K+ within the threshold, next to the first touch (residue mode, same rule as FIRST TOUCH)
+    # from analysis.glu_occupancy_at_exit import run_glu_occupancy_at_exit_analysis
+    # threshold = 3.5
+    # window = 10
+    # run_glu_occupancy_at_exit_analysis(
+    #     universe=u,
+    #     permeation_events=analyzer.permeation_events,
+    #     asn_residues=asn_residues,
+    #     glu_residues=glu_residues,
+    #     channel_type=channel_type,
+    #     threshold=threshold,
+    #     window=window,
+    #     analysis_start_frame=start_frame,
+    #     results_dir=f"{results_dir}/glu_occupancy_exit/{threshold}_w{window}"
+    # )
+
 
 #     #  NEW: Add proximity analysis
 #     print("\n" + "="*70)
