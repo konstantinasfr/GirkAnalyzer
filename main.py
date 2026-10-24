@@ -1798,8 +1798,10 @@ def main():
     #         results_dir=f"{results_dir}/duration_lasttouch_{mode}/{threshold}_w{window}"
     #     )
 
-    # GLU OCCUPANCY AT SF EXIT: at end_1 (and at the first touch), how many GLUs have another
-    # K+ within the threshold, next to the first touch (residue mode, same rule as FIRST TOUCH)
+    # GLU / ASN OCCUPANCY AT SF EXIT: first touch (same rule as FIRST TOUCH) + which GLU and
+    # ASN/ASP residues have another K+ at <= threshold, at end_1, at the touch and around end_1
+    # (needs analyzer.permeation_events: the saved-state / IonPermeationAnalysis block above)
+    # Plots and JSONs: <results_dir>/glu_occupancy_exit/<threshold>_w<window>/
     # from analysis.glu_occupancy_at_exit import run_glu_occupancy_at_exit_analysis
     # threshold = 3.5
     # window = 10
