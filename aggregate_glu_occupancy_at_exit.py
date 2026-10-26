@@ -21,6 +21,8 @@ Outputs (per folder; t = threshold, w = window or no_w; <at> = end_1 or touch):
     glu_occupancy_<at>_t*_w*.png            left: occupied GLUs per first-touch ring
                                             right: first-touch ring per number of occupied GLUs
     asn_occupancy_<at>_t*_w*.png            the same for the ASN/ASP ring
+    first_touch_by_glu_occupied_<at>_counts_t*_w*.png    x: GLUs occupied, one bar per first touch,
+    first_touch_by_glu_occupied_<at>_percent_t*_w*.png   y: events / % of all events (also _by_asn_)
     residue_occupancy_<at>_t*_w*.png        % occupied of each residue separately, per first-touch ring
     touched_residue_heatmap_<at>_t*_w*.png  first-touched residue x occupied residue (% of events)
     ring_occupancy_timecourse_t*_w*.png     mean occupied GLUs / ASN/ASP vs frames from end_1

@@ -37,6 +37,8 @@ Aggregate over runs with aggregate_glu_occupancy_at_exit.py (same plots, pooled)
 
 Plots (shared with the aggregator):
     plot_occupancy_vs_touch       occupied GLUs (or ASN/ASP) at end_1 per first-touch ring, and the reverse
+    plot_first_touch_by_occupancy number of occupied GLUs (or ASN/ASP) on x, one bar per first touch;
+                                  raw counts and % of all events in two files
     plot_residue_occupancy        % of events each residue is occupied at end_1, per first-touch ring
     plot_touched_residue_heatmap  first-touched residue (rows) x occupied residue at end_1 (columns)
     plot_ring_timecourse          mean occupied GLUs / ASN/ASP vs frames from end_1, per first-touch ring
@@ -52,6 +54,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+from matplotlib.ticker import MaxNLocator
 from MDAnalysis.lib.distances import distance_array
 
 from analysis.converter import convert_to_pdb_numbering
@@ -400,6 +403,45 @@ def plot_occupancy_vs_touch(rows, key, n_max, ring_labels, occ_name, frame_desc,
     _save(fig, output_file)
 
 
+def plot_first_touch_by_occupancy(rows, key, n_max, ring_labels, occ_name, frame_desc, title, output_file,
+                                  percent=False):
+    """
+    x: number of occupied residues (key 'n_glu' or 'n_asn', 0..n_max); for each,
+    one bar per first touch (ASN/ASP, GLU, No contact). y: number of events, or
+    with percent=True the % of ALL events (every bar of the plot adds up to 100%).
+    """
+    rows = [r for r in rows if r[key] is not None]
+    if not rows:
+        return
+    rings = _rings_present(rows, ring_labels)
+    colors = _ring_colors(ring_labels)
+    occs = np.arange(n_max + 1)
+    width = 0.8 / len(rings)
+    total = len(rows)
+
+    plt.rcParams['font.family'] = 'DejaVu Sans'
+    fig, ax = plt.subplots(figsize=(max(9, 2 * len(occs)), 6))
+    top = 0
+    for i, g in enumerate(rings):
+        counts = np.array([sum(1 for r in rows if r['ring'] == g and r[key] == n) for n in occs], dtype=float)
+        values = 100 * counts / total if percent else counts
+        xs = occs + (i - (len(rings) - 1) / 2) * width
+        ax.bar(xs, values, width, color=colors[g], edgecolor='black', linewidth=0.8, zorder=3,
+               hatch='//' if g == NO_CONTACT else None, label=g)
+        for xi, v in zip(xs, values):
+            ax.text(xi, v, f" {v:.1f}%" if percent else f" {int(v)}", ha='center', va='bottom',
+                    fontsize=10, rotation=90 if percent else 0)
+        top = max(top, values.max())
+    ax.set_xticks(occs)
+    _style(ax, f'{occ_name} occupied by another K+ at {frame_desc}',
+           f'% of all events (n={total})' if percent else 'Number of events', ylim=(0, top * 1.18 + 1))
+    if not percent:
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.legend(title='First touch', loc='upper left', bbox_to_anchor=(1.01, 1.0), fontsize=11, title_fontsize=11)
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=12)
+    _save(fig, output_file)
+
+
 def plot_residue_occupancy(rows, residues, ring_labels, frame_desc, title, output_file):
     """Each GLU and ASN/ASP on the x axis: % of events it is occupied, one bar per first-touch ring."""
     rows = [r for r in rows if r['occ'] is not None]
@@ -570,6 +612,11 @@ def write_all_plots(rows, residues, ring_labels, channel_type, threshold, window
             plot_occupancy_vs_touch(rr, key, n_ring[ring], ring_labels, ring_labels[ring], desc,
                                     f"{head}: {ring_labels[ring]} occupied at {desc} vs first touch {rule}",
                                     output_dir / f"{ring.lower()}_occupancy_{at}_{tag}.png")
+            for percent, kind in ((False, 'counts'), (True, 'percent')):
+                plot_first_touch_by_occupancy(
+                    rr, key, n_ring[ring], ring_labels, ring_labels[ring], desc,
+                    f"{head}: first touch per number of {ring_labels[ring]} occupied at {desc}\n{rule}",
+                    output_dir / f"first_touch_by_{ring.lower()}_occupied_{at}_{kind}_{tag}.png", percent)
         plot_residue_occupancy(rr, residues, ring_labels, desc,
                                f"{head}: each residue occupied at {desc}, per first touch {rule}",
                                output_dir / f"residue_occupancy_{at}_{tag}.png")
