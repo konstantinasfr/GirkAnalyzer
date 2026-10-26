@@ -1801,10 +1801,11 @@ def main():
     # GLU / ASN OCCUPANCY AT SF EXIT: first touch (same rule as FIRST TOUCH) + which GLU and
     # ASN/ASP residues have another K+ at <= threshold, at end_1, at the touch and around end_1
     # (needs analyzer.permeation_events: the saved-state / IonPermeationAnalysis block above)
-    # Plots and JSONs: <results_dir>/glu_occupancy_exit/<threshold>_w<window>/
-    from analysis.glu_occupancy_at_exit import run_glu_occupancy_at_exit_analysis
+    # window = 10    first touch in the first 10 frames after the SF -> glu_occupancy_exit/3.5_w10/
+    # window = None  no window: first touch anywhere in the cavity (end_1 to end_2) -> glu_occupancy_exit/3.5_no_w/
+    from analysis.glu_occupancy_at_exit import run_glu_occupancy_at_exit_analysis, settings_folder
     threshold = 3.5
-    window = 10
+    window = None
     run_glu_occupancy_at_exit_analysis(
         universe=u,
         permeation_events=analyzer.permeation_events,
@@ -1814,7 +1815,7 @@ def main():
         threshold=threshold,
         window=window,
         analysis_start_frame=start_frame,
-        results_dir=f"{results_dir}/glu_occupancy_exit/{threshold}_w{window}"
+        results_dir=f"{results_dir}/glu_occupancy_exit/{settings_folder(threshold, window)}"
     )
 
 

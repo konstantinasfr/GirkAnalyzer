@@ -10,20 +10,26 @@ touch is a glutamate.
 
 For every permeation event this runs the FIRST-TOUCH analysis
 (FirstTouchAnalysis in longest_duration_analysis.py, residue mode: first
-ASN/ASP/GLU residue within `threshold` in the first `window` frames after
-end_1), and reads the occupancy of every GLU and every ASN/ASP residue,
+ASN/ASP/GLU residue within `threshold` after end_1), and reads the occupancy of every GLU and every ASN/ASP residue,
 each one separately:
 
     end_1        the last frame of the ion in the SF (the moment it leaves)
     touch_frame  the frame of the first touch (None if there was no touch)
-    time course  every frame from end_1 - window to end_1 + window
+    time course  every frame from end_1 - timecourse_frames to end_1 + timecourse_frames
+
+Where the first touch is searched:
+    window=10    the first 10 frames after end_1 (never past end_2)
+    window=None  no window: every frame from end_1 to end_2, the whole stay in
+                 the cavity. "No contact" then means the ion crossed the cavity
+                 without coming within `threshold` of any GLU or ASN/ASP.
 
 A residue is "occupied" when another K+ / K ion (not the permeating ion) is
 at <= `threshold` from any of its atoms. Stored per event and residue: the
 ions on it and the closest other ion; per ring: how many residues are
 occupied and how many distinct ions sit on them.
 
-Results (results_dir, suggested f"{results_dir}/glu_occupancy_exit/{threshold}_w{window}"):
+Results (results_dir, suggested f"{results_dir}/glu_occupancy_exit/{settings_folder(threshold, window)}",
+i.e. glu_occupancy_exit/3.5_w10 or, with window=None, glu_occupancy_exit/3.5_no_w):
     glu_occupancy_exit_complete.json   every event, all fields
     glu_occupancy_exit_summary.json    cross-tables (counts)
     plots/                             the plots below, for this run
@@ -31,6 +37,8 @@ Aggregate over runs with aggregate_glu_occupancy_at_exit.py (same plots, pooled)
 
 Plots (shared with the aggregator):
     plot_occupancy_vs_touch       occupied GLUs (or ASN/ASP) at end_1 per first-touch ring, and the reverse
+    plot_first_touch_by_occupancy number of occupied GLUs (or ASN/ASP) on x, one bar per first touch;
+                                  raw counts and % of all events in two files
     plot_residue_occupancy        % of events each residue is occupied at end_1, per first-touch ring
     plot_touched_residue_heatmap  first-touched residue (rows) x occupied residue at end_1 (columns)
     plot_ring_timecourse          mean occupied GLUs / ASN/ASP vs frames from end_1, per first-touch ring
@@ -46,6 +54,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+from matplotlib.ticker import MaxNLocator
 from MDAnalysis.lib.distances import distance_array
 
 from analysis.converter import convert_to_pdb_numbering
@@ -66,6 +75,22 @@ def ring_name(resnames, resids):
     return '/'.join(sorted({resnames.get(int(r), 'Unknown') for r in resids}))
 
 
+def window_tag(window):
+    """'w10' for a 10-frame first-touch window, 'no_w' for no window (window=None)."""
+    return 'no_w' if window is None else f"w{window}"
+
+
+def settings_folder(threshold, window):
+    """Results sub-folder of one setting: '3.5_w10', or '3.5_no_w' without a window."""
+    return f"{threshold}_{window_tag(window)}"
+
+
+def touch_rule(window):
+    """How the first touch was searched, for plot titles."""
+    return ("first touch anywhere in the cavity (end_1 to end_2)" if window is None
+            else f"first touch within {window} frames")
+
+
 def residue_tick(res):
     """'E152.2a' from {'pdb': '152.2a', 'residue_type': 'GLU'}."""
     return f"{ONE_LETTER.get(res['residue_type'], '')}{res['pdb']}"
@@ -83,11 +108,13 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
 
     def __init__(self, universe, permeation_events, asn_residues, glu_residues,
                  channel_type="G12", threshold=3.5, window=10, analysis_start_frame=0,
-                 ion_selection=ION_SELECTION, results_dir="."):
+                 ion_selection=ION_SELECTION, results_dir=".", timecourse_frames=10):
         # Residue mode, both rings compete for the first touch
         super().__init__(universe, permeation_events, asn_residues, glu_residues,
-                         channel_type, threshold, window, analysis_start_frame,
-                         ['ASN', 'GLU'], None, results_dir)
+                         channel_type, threshold, window if window is not None else 1,
+                         analysis_start_frame, ['ASN', 'GLU'], None, results_dir)
+        self.window = window                       # None: no window, search end_1 ... end_2
+        self.timecourse_frames = int(timecourse_frames)
         self.ions = self.u.select_atoms(ion_selection)
         self.ion_selection = ion_selection
 
@@ -107,8 +134,14 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
                             'ASN': ring_name(self.resnames, asn_residues)}
 
     def rule_text(self):
-        return (f"first touch < {self.threshold} Å within {self.window} frames after the SF; "
+        return (f"first touch < {self.threshold} Å, {touch_rule(self.window)}; "
                 f"occupied = other K+ <= {self.threshold} Å")
+
+    def _window(self, end_1_frame, end_2_frame):
+        """Frames searched for the first touch: end_1+1 ... end_2 without a window."""
+        if self.window is None:
+            return end_1_frame + 1, end_2_frame
+        return super()._window(end_1_frame, end_2_frame)
 
     def _distances(self, ion_id):
         """(other ions, D[residue, ion]) at the current frame; the permeating ion is left out."""
@@ -145,13 +178,14 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
         return out
 
     def timecourse(self, end_1_frame, ion_id):
-        """Occupied (1) or not (0) of every residue at end_1-window ... end_1+window (None outside the trajectory)."""
-        offsets = list(range(-self.window, self.window + 1))
+        """Occupied (1) or not (0) of every residue at end_1 -/+ timecourse_frames (None outside the trajectory)."""
+        n = self.timecourse_frames
+        offsets = list(range(-n, n + 1))
         occupied = {res['pdb']: [None] * len(offsets) for res in self.residues}
-        first = max(0, end_1_frame - self.window)
-        last = min(len(self.u.trajectory) - 1, end_1_frame + self.window)
+        first = max(0, end_1_frame - n)
+        last = min(len(self.u.trajectory) - 1, end_1_frame + n)
         for ts in self.u.trajectory[first:last + 1]:
-            i = ts.frame - end_1_frame + self.window
+            i = ts.frame - end_1_frame + n
             _, D = self._distances(ion_id)
             for j, res in enumerate(self.residues):
                 occupied[res['pdb']][i] = int(D is not None and bool((D[j] <= self.threshold).any()))
@@ -175,7 +209,7 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
         print("\n" + "="*80)
         print(f"{self.NAME}")
         print("="*80)
-        print(f"Distance threshold: {self.threshold} Å, window: {self.window} frames")
+        print(f"Distance threshold: {self.threshold} Å, {touch_rule(self.window)}")
         print(f"Residues: {', '.join(residue_tick(r) for r in self.residues)}; "
               f"ions: '{self.ion_selection}' ({len(self.ions)} atoms)")
         print(f"Analyzing {len(self.permeation_events)} permeation events...")
@@ -198,6 +232,7 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
                 'analysis': self.ANALYSIS,
                 'threshold': self.threshold,
                 'window': self.window,
+                'timecourse_frames': self.timecourse_frames,
                 'channel_type': self.channel_type,
                 'ion_selection': self.ion_selection,
                 'asn_residues': self.asn_residues,
@@ -257,7 +292,7 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
         output_dir.mkdir(parents=True, exist_ok=True)
         write_all_plots([event_row(r) for r in self.results], self.residues, self.ring_labels,
                         self.channel_type, self.threshold, self.window, output_dir,
-                        f"t{self.threshold}_w{self.window}",
+                        f"t{self.threshold}_{window_tag(self.window)}",
                         touch_rows=[event_row(r, 'touch') for r in self.results])
 
 
@@ -365,6 +400,45 @@ def plot_occupancy_vs_touch(rows, key, n_max, ring_labels, occ_name, frame_desc,
               loc='upper left', bbox_to_anchor=(1.01, 1.0), fontsize=11)
 
     fig.suptitle(title, fontsize=16, fontweight='bold')
+    _save(fig, output_file)
+
+
+def plot_first_touch_by_occupancy(rows, key, n_max, ring_labels, occ_name, frame_desc, title, output_file,
+                                  percent=False):
+    """
+    x: number of occupied residues (key 'n_glu' or 'n_asn', 0..n_max); for each,
+    one bar per first touch (ASN/ASP, GLU, No contact). y: number of events, or
+    with percent=True the % of ALL events (every bar of the plot adds up to 100%).
+    """
+    rows = [r for r in rows if r[key] is not None]
+    if not rows:
+        return
+    rings = _rings_present(rows, ring_labels)
+    colors = _ring_colors(ring_labels)
+    occs = np.arange(n_max + 1)
+    width = 0.8 / len(rings)
+    total = len(rows)
+
+    plt.rcParams['font.family'] = 'DejaVu Sans'
+    fig, ax = plt.subplots(figsize=(max(9, 2 * len(occs)), 6))
+    top = 0
+    for i, g in enumerate(rings):
+        counts = np.array([sum(1 for r in rows if r['ring'] == g and r[key] == n) for n in occs], dtype=float)
+        values = 100 * counts / total if percent else counts
+        xs = occs + (i - (len(rings) - 1) / 2) * width
+        ax.bar(xs, values, width, color=colors[g], edgecolor='black', linewidth=0.8, zorder=3,
+               hatch='//' if g == NO_CONTACT else None, label=g)
+        for xi, v in zip(xs, values):
+            ax.text(xi, v, f"{v:.1f}%" if percent else f"{int(v)}", ha='center', va='bottom',
+                    fontsize=9 if percent else 10)
+        top = max(top, values.max())
+    ax.set_xticks(occs)
+    _style(ax, f'{occ_name} occupied by another K+ at {frame_desc}',
+           f'% of all events (n={total})' if percent else 'Number of events', ylim=(0, top * 1.18 + 1))
+    if not percent:
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.legend(title='First touch', loc='upper left', bbox_to_anchor=(1.01, 1.0), fontsize=11, title_fontsize=11)
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=12)
     _save(fig, output_file)
 
 
@@ -530,7 +604,7 @@ def write_all_plots(rows, residues, ring_labels, channel_type, threshold, window
     """Every plot of this analysis for one set of events (one run, or a group of runs)."""
     output_dir = Path(output_dir)
     head = f"{channel_type}{' ' + label if label else ''}"
-    rule = f"(K+ <= {threshold} Å, first touch within {window} frames)"
+    rule = f"(K+ <= {threshold} Å, {touch_rule(window)})"
     n_ring = {g: sum(1 for res in residues if res['ring'] == g) for g in RINGS}
     frames = [('end_1', 'end_1', rows)] + ([('touch', 'first touch', touch_rows)] if touch_rows else [])
     for at, desc, rr in frames:
@@ -538,6 +612,11 @@ def write_all_plots(rows, residues, ring_labels, channel_type, threshold, window
             plot_occupancy_vs_touch(rr, key, n_ring[ring], ring_labels, ring_labels[ring], desc,
                                     f"{head}: {ring_labels[ring]} occupied at {desc} vs first touch {rule}",
                                     output_dir / f"{ring.lower()}_occupancy_{at}_{tag}.png")
+            for percent, kind in ((False, 'counts'), (True, 'percent')):
+                plot_first_touch_by_occupancy(
+                    rr, key, n_ring[ring], ring_labels, ring_labels[ring], desc,
+                    f"{head}: first touch per number of {ring_labels[ring]} occupied at {desc}\n{rule}",
+                    output_dir / f"first_touch_by_{ring.lower()}_occupied_{at}_{kind}_{tag}.png", percent)
         plot_residue_occupancy(rr, residues, ring_labels, desc,
                                f"{head}: each residue occupied at {desc}, per first touch {rule}",
                                output_dir / f"residue_occupancy_{at}_{tag}.png")
@@ -555,12 +634,14 @@ def write_all_plots(rows, residues, ring_labels, channel_type, threshold, window
 def run_glu_occupancy_at_exit_analysis(universe, permeation_events, asn_residues, glu_residues,
                                        channel_type="G12", threshold=3.5, window=10,
                                        analysis_start_frame=0, ion_selection=ION_SELECTION,
-                                       results_dir="."):
+                                       results_dir=".", timecourse_frames=10):
     """
     Convenience function: first touch after the SF + occupancy of every GLU
     and ASN/ASP by other K+ (<= threshold) at end_1, at the touch frame and
-    around end_1. Suggested results_dir:
-    f"{results_dir}/glu_occupancy_exit/{threshold}_w{window}"
+    around end_1. window=None: no window, the first touch is searched over
+    the whole stay in the cavity (end_1 to end_2). Suggested results_dir:
+    f"{results_dir}/glu_occupancy_exit/{settings_folder(threshold, window)}"
+    (3.5_w10, or 3.5_no_w without a window)
 
     Returns:
     --------
@@ -568,7 +649,7 @@ def run_glu_occupancy_at_exit_analysis(universe, permeation_events, asn_residues
     """
     analyzer = GluOccupancyAtExitAnalysis(universe, permeation_events, asn_residues, glu_residues,
                                           channel_type, threshold, window, analysis_start_frame,
-                                          ion_selection, results_dir)
+                                          ion_selection, results_dir, timecourse_frames)
     analyzer.run_analysis()
     analyzer.save_results()
     analyzer.create_summary()
