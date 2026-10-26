@@ -39,6 +39,9 @@ Plots (shared with the aggregator):
     plot_occupancy_vs_touch       occupied GLUs (or ASN/ASP) at end_1 per first-touch ring, and the reverse
     plot_first_touch_by_occupancy number of occupied GLUs (or ASN/ASP) on x, one bar per first touch;
                                   raw counts and % of all events in two files
+    plot_occupied_combinations    which GLUs (or ASN/ASP) are occupied together: a panel per number occupied,
+                                  a bar per combination (top 10), stacked by first touch; all panels in one
+                                  file plus one file per panel
     plot_residue_occupancy        % of events each residue is occupied at end_1, per first-touch ring
     plot_touched_residue_heatmap  first-touched residue (rows) x occupied residue at end_1 (columns)
     plot_ring_timecourse          mean occupied GLUs / ASN/ASP vs frames from end_1, per first-touch ring
@@ -442,6 +445,101 @@ def plot_first_touch_by_occupancy(rows, key, n_max, ring_labels, occ_name, frame
     _save(fig, output_file)
 
 
+def _combination_counts(rows, pdbs, k, top):
+    """Events with exactly k of `pdbs` occupied, and their `top` most common combinations [(combo, n)]."""
+    sub = [r for r in rows if sum(r['occ'].get(p, 0) for p in pdbs) == k]
+    counts = {}
+    for r in sub:
+        combo = tuple(p for p in pdbs if r['occ'].get(p, 0))
+        counts[combo] = counts.get(combo, 0) + 1
+    return sub, sorted(counts.items(), key=lambda c: -c[1])[:top]
+
+
+def _combination_panel(ax, sub, combos, k, ticks, ring_name, rings, colors):
+    """
+    One panel: a bar per combination of k occupied residues, stacked by first
+    touch. Above the bar: events (% of the events with k occupied); inside each
+    colour: % of that bar (left out where the colour is too thin to fit it).
+    """
+    ax.set_title(f"{k} {ring_name} occupied (n={len(sub)})", fontsize=14, fontweight='bold')
+    ax.grid(True, axis='y', alpha=0.25, zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ['top', 'right']:
+        ax.spines[spine].set_visible(False)
+    if not combos:
+        ax.text(0.5, 0.5, 'no events', transform=ax.transAxes, ha='center', va='center', fontsize=13)
+        ax.set_xticks([])
+        return
+    ymax = max(n for _, n in combos) * 1.25 + 1
+    x = np.arange(len(combos))
+    bottom = np.zeros(len(combos))
+    for g in rings:
+        v = np.array([sum(1 for r in sub if r['ring'] == g and tuple(p for p in c if r['occ'].get(p, 0)) == c)
+                      for c, _ in combos], dtype=float)
+        ax.bar(x, v, 0.7, bottom=bottom, color=colors[g], edgecolor='black', linewidth=0.8, zorder=3,
+               hatch='//' if g == NO_CONTACT else None, label=g)
+        for xi, vi, b, (_, n) in zip(x, v, bottom, combos):
+            if vi > 0 and vi / ymax >= 0.045:            # only where the label fits
+                ax.text(xi, b + vi / 2, f"{100 * vi / n:.0f}%", ha='center', va='center', fontsize=10,
+                        fontweight='bold', zorder=4,
+                        bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='none', alpha=0.8)
+                        if g == NO_CONTACT else None)
+        bottom += v
+    for xi, (_, n) in zip(x, combos):
+        ax.text(xi, n, f"{n}\n({100 * n / len(sub):.0f}%)", ha='center', va='bottom', fontsize=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels([' +\n'.join(ticks[p] for p in c) for c, _ in combos], fontsize=10)
+    ax.set_ylim(0, ymax)
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+
+
+def plot_occupied_combinations(rows, residues, ring, ring_labels, frame_desc, title, output_file,
+                               top=10, separate_files=True):
+    """
+    Which residues of one ring ('GLU' or 'ASN') are occupied together at
+    `frame_desc`: one panel per number occupied (1, 2, 3, 4), a bar per
+    combination (most common first, at most `top`), stacked by first touch.
+    Writes the figure with all panels to output_file and, with
+    separate_files, every panel on its own as <output_file>_<k>occupied.png.
+    """
+    rows = [r for r in rows if r['occ'] is not None]
+    if not rows:
+        return
+    pdbs = [res['pdb'] for res in residues if res['ring'] == ring]
+    ticks = {res['pdb']: residue_tick(res) for res in residues}
+    rings = _rings_present(rows, ring_labels)
+    colors = _ring_colors(ring_labels)
+    ring_name = ring_labels[ring]
+    panels = [(k,) + _combination_counts(rows, pdbs, k, top) for k in range(1, len(pdbs) + 1)]
+    n_free = sum(1 for r in rows if not any(r['occ'].get(p, 0) for p in pdbs))
+    subtitle = (f"above bar: events (% of the events with that many occupied); inside: % of the bar per first touch; "
+                f"0 {ring_name} occupied: n={n_free} of {len(rows)}")
+
+    def legend(ax):
+        ax.legend(title='First touch', loc='upper left', bbox_to_anchor=(1.02, 1), fontsize=11, title_fontsize=11)
+
+    plt.rcParams['font.family'] = 'DejaVu Sans'
+    widths = [max(1.6, len(combos)) for _, _, combos in panels]
+    fig, axes = plt.subplots(1, len(panels), figsize=(max(12, 1.3 * sum(widths) + 3), 7),
+                             gridspec_kw={'width_ratios': widths}, squeeze=False)
+    for ax, (k, sub, combos) in zip(axes[0], panels):
+        _combination_panel(ax, sub, combos, k, ticks, ring_name, rings, colors)
+    axes[0][0].set_ylabel('Number of events', fontsize=14, fontweight='bold')
+    legend(axes[0][-1])
+    fig.suptitle(f"{title}\n{subtitle}", fontsize=14, fontweight='bold')
+    _save(fig, output_file)
+
+    if separate_files:
+        output_file = Path(output_file)
+        for k, sub, combos in panels:
+            fig, ax = plt.subplots(figsize=(max(6, 1.5 * len(combos) + 3), 6.5))
+            _combination_panel(ax, sub, combos, k, ticks, ring_name, rings, colors)
+            ax.set_ylabel('Number of events', fontsize=14, fontweight='bold')
+            legend(ax)
+            fig.suptitle(f"{title}\n{subtitle}", fontsize=12, fontweight='bold')
+            _save(fig, output_file.with_name(f"{output_file.stem}_{k}occupied{output_file.suffix}"))
+
+
 def plot_residue_occupancy(rows, residues, ring_labels, frame_desc, title, output_file):
     """Each GLU and ASN/ASP on the x axis: % of events it is occupied, one bar per first-touch ring."""
     rows = [r for r in rows if r['occ'] is not None]
@@ -617,6 +715,10 @@ def write_all_plots(rows, residues, ring_labels, channel_type, threshold, window
                     rr, key, n_ring[ring], ring_labels, ring_labels[ring], desc,
                     f"{head}: first touch per number of {ring_labels[ring]} occupied at {desc}\n{rule}",
                     output_dir / f"first_touch_by_{ring.lower()}_occupied_{at}_{kind}_{tag}.png", percent)
+            plot_occupied_combinations(
+                rr, residues, ring, ring_labels, desc,
+                f"{head}: which {ring_labels[ring]} are occupied together at {desc} {rule}",
+                output_dir / f"{ring.lower()}_combinations_{at}_{tag}.png")
         plot_residue_occupancy(rr, residues, ring_labels, desc,
                                f"{head}: each residue occupied at {desc}, per first touch {rule}",
                                output_dir / f"residue_occupancy_{at}_{tag}.png")
