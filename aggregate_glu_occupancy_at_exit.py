@@ -14,7 +14,10 @@ The runs are aggregated into ALL/, HIGH/, TYPICAL/, LOW/ (and D/, E/ for
 G12_ML), with the same category files as aggregate_duration_results.py.
 Events of all runs in a folder are pooled.
 
-Outputs (per folder; t = threshold, w = window; <at> = end_1 or touch):
+Runs analysed without a window (window=None in main.py, results in
+RUN*/glu_occupancy_exit/<t>_no_w/) are aggregated with --no_window.
+
+Outputs (per folder; t = threshold, w = window or no_w; <at> = end_1 or touch):
     glu_occupancy_<at>_t*_w*.png            left: occupied GLUs per first-touch ring
                                             right: first-touch ring per number of occupied GLUs
     asn_occupancy_<at>_t*_w*.png            the same for the ASN/ASP ring
@@ -40,6 +43,7 @@ Default output folder: <base>/aggregated_glu_occupancy_exit/t*_w*/
 USAGE
 -----
     python3 aggregate_glu_occupancy_at_exit.py /path/to/G12 --threshold 3.5 --window 10
+    python3 aggregate_glu_occupancy_at_exit.py /path/to/G12 --threshold 3.5 --no_window
 """
 
 import json
@@ -52,7 +56,8 @@ from scipy.stats import fisher_exact, mannwhitneyu
 
 from aggregate_duration_results import (CATEGORIES, LIGAND_CATEGORIES, LIGAND_CHANNELS, run_sort_key,
                                         load_categories, load_ligand_categories, report_coverage)
-from analysis.glu_occupancy_at_exit import NO_CONTACT, RINGS, event_row, residue_tick, write_all_plots
+from analysis.glu_occupancy_at_exit import (NO_CONTACT, RINGS, event_row, residue_tick, window_tag,
+                                            write_all_plots)
 
 FRAMES = {'end_1': 'end_1 (leaving the SF)', 'touch': 'the first-touch frame'}
 
@@ -74,7 +79,7 @@ class GluOccupancyAggregator:
         self.window = window
         self.channel_type = channel_type or self.base_dir.name
         self.threshold_str = str(int(threshold)) if float(threshold).is_integer() else str(threshold)
-        self.tag = f"t{self.threshold_str}_w{window}"
+        self.tag = f"t{self.threshold_str}_{window_tag(window)}"
         self.events = []          # one dict per event: run + event_row at end_1 and at the touch
         self.runs_loaded = []
         self.ring_labels = None
@@ -82,7 +87,7 @@ class GluOccupancyAggregator:
 
     def _find_file(self, run_dir):
         for t in (self.threshold_str, str(self.threshold)):
-            f = run_dir / "glu_occupancy_exit" / f"{t}_w{self.window}" / "glu_occupancy_exit_complete.json"
+            f = run_dir / "glu_occupancy_exit" / f"{t}_{window_tag(self.window)}" / "glu_occupancy_exit_complete.json"
             if f.exists():
                 return f
         return None
@@ -227,7 +232,9 @@ class GluOccupancyAggregator:
                    'ion_id': r['ion_id'], 'end_1_frame': r['end_1_frame'], 'end_2_frame': r['end_2_frame'],
                    'first_touch': r['touch_ring_label'], 'touch_residue': r['touch_residue_pdb'],
                    'touch_type': r['touch_residue_type'], 'touch_frame': r['touch_frame'],
-                   'touch_delay': r['touch_delay']}
+                   'touch_delay': r['touch_delay'],
+                   'frames_in_cavity': r['end_2_frame'] - r['end_1_frame'],
+                   'closest_residue_distance': r.get('min_distance_in_window')}
             for at in FRAMES:
                 occ = r[f'occupancy_at_{at}']
                 for key, name in (('glu', 'GLU'), ('asn', 'ASN')):
@@ -291,6 +298,8 @@ def main():
     parser.add_argument("base_directory", help="Base directory containing RUN subdirectories")
     parser.add_argument("--threshold", type=float, default=3.5, help="Threshold used in the analysis (default: 3.5)")
     parser.add_argument("--window", type=int, default=10, help="First-touch window used in the analysis (default: 10)")
+    parser.add_argument("--no_window", action="store_true",
+                        help="Aggregate the runs analysed without a window (window=None, <t>_no_w folders)")
     parser.add_argument("--output_dir", default=None,
                         help="Default: base_directory/aggregated_glu_occupancy_exit/t*_w*")
     parser.add_argument("--categories", default=None,
@@ -303,7 +312,8 @@ def main():
     parser.add_argument("--channel_type", default=None, help="Label for plot titles (default: folder name)")
     args = parser.parse_args()
 
-    agg = GluOccupancyAggregator(args.base_directory, args.threshold, args.window, args.channel_type)
+    window = None if args.no_window else args.window
+    agg = GluOccupancyAggregator(args.base_directory, args.threshold, window, args.channel_type)
     if not agg.load_all_runs():
         print("No data found. Exiting.")
         return
@@ -355,4 +365,7 @@ python3 aggregate_glu_occupancy_at_exit.py /media/ziyue/328bfc27-c1a6-4fce-9199-
 
 python3 aggregate_glu_occupancy_at_exit.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/ \
 --threshold 3.5 --window 10
+
+python3 aggregate_glu_occupancy_at_exit.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/ \
+--threshold 3.5 --no_window
 '''
