@@ -418,6 +418,7 @@ def plot_first_touch_by_occupancy(rows, key, n_max, ring_labels, occ_name, frame
     occs = np.arange(n_max + 1)
     width = 0.8 / len(rings)
     total = len(rows)
+    top_pad = 0.3                              # % above the bar where a rotated label starts
 
     plt.rcParams['font.family'] = 'DejaVu Sans'
     fig, ax = plt.subplots(figsize=(max(9, 2 * len(occs)), 6))
@@ -429,12 +430,16 @@ def plot_first_touch_by_occupancy(rows, key, n_max, ring_labels, occ_name, frame
         ax.bar(xs, values, width, color=colors[g], edgecolor='black', linewidth=0.8, zorder=3,
                hatch='//' if g == NO_CONTACT else None, label=g)
         for xi, v in zip(xs, values):
-            ax.text(xi, v, f" {v:.1f}%" if percent else f" {int(v)}", ha='center', va='bottom',
-                    fontsize=10, rotation=90 if percent else 0)
+            if percent:
+                # 45°, starting at the left part of its own bar so it does not run into the next bar
+                ax.text(xi - 0.35 * width, v + top_pad, f"{v:.1f}%", ha='left', va='bottom', fontsize=9.5,
+                        rotation=45, rotation_mode='anchor')
+            else:
+                ax.text(xi, v, f"{int(v)}", ha='center', va='bottom', fontsize=10)
         top = max(top, values.max())
     ax.set_xticks(occs)
     _style(ax, f'{occ_name} occupied by another K+ at {frame_desc}',
-           f'% of all events (n={total})' if percent else 'Number of events', ylim=(0, top * 1.18 + 1))
+           f'% of all events (n={total})' if percent else 'Number of events', ylim=(0, top * (1.25 if percent else 1.18) + 1))
     if not percent:
         ax.yaxis.set_major_locator(MaxNLocator(integer=True))
     ax.legend(title='First touch', loc='upper left', bbox_to_anchor=(1.01, 1.0), fontsize=11, title_fontsize=11)
