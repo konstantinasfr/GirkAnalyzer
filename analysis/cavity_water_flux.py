@@ -34,16 +34,18 @@ passed: 1 -> 4 is sf_in + asn_down + hbc_out, 1 -> 3 is sf_in + asn_down,
 Residence
 ---------
 A visit = one unbroken run of frames a water spends inside a region. It is
-tracked for three regions:
+tracked for four regions:
 
+    SF        region 1
     GLU/ASN   region 2
     ASN/HBC   region 3
     GLU/HBC   region 2 or 3 (whole cavity: a 2 <-> 3 move does NOT end it)
 
 Residence time = number of frames inside x frame_duration, so a water seen
-in a single frame has residence 1 frame. Visits already running at the first
-frame, or still running at the last, are CENSORED (their true length is
-unknown, only a lower bound). They are saved with a flag but left out of the
+in a single frame has residence 1 frame. A water already inside at the first
+frame is treated as entering at that frame, and its visit counts like any
+other. A visit still running at the last frame has no exit, so its true
+length is unknown: it is saved with censored = 1 but left out of the
 mean / median / histograms / boxplots.
 
 Caveats
@@ -110,11 +112,12 @@ BOUNDARIES = {
 
 # residence region -> labels that count as inside it
 RES_REGIONS = {
+    "SF":      (1,),
     "GLU/ASN": (2,),
     "ASN/HBC": (3,),
     "GLU/HBC": (2, 3),
 }
-RES_COLORS = {"GLU/ASN": "#1E88E5", "ASN/HBC": "#FB8C00", "GLU/HBC": "#43A047"}
+RES_COLORS = {"SF": "#5E35B1", "GLU/ASN": "#1E88E5", "ASN/HBC": "#FB8C00", "GLU/HBC": "#43A047"}
 
 
 def label_regions(pos, channels):
@@ -175,7 +178,7 @@ class ResidenceTracker:
     def inside(self, labels):
         return np.isin(labels, self.labels_inside)
 
-    def update(self, labels, frame, first=False):
+    def update(self, labels, frame):
         now = self.inside(labels)
         was = self.entry >= 0
         left = np.nonzero(was & ~now)[0]
@@ -183,9 +186,8 @@ class ResidenceTracker:
             # last frame inside was the previous one
             self._record(left, frame - 1)
             self.entry[left] = -1
+        # on the first frame every water inside is a new entry at that frame
         self.entry[now & ~was] = frame
-        if first:
-            self.first_frame = frame
 
     def finish(self, last_frame):
         open_ = np.nonzero(self.entry >= 0)[0]
@@ -194,9 +196,8 @@ class ResidenceTracker:
             self.entry[open_] = -1
 
     def _record(self, idx, end, end_censored=False):
-        start = self.entry[idx]
-        censored = (start == self.first_frame) | end_censored
-        self.visits.append((idx, start, np.full(len(idx), end), censored))
+        self.visits.append((idx, self.entry[idx], np.full(len(idx), end),
+                            np.full(len(idx), end_censored)))
 
     def result(self):
         if not self.visits:
@@ -283,7 +284,7 @@ def run_cavity_water_flux(
 
         cur = label_regions(waters.positions, channels)
         for r, tr in trackers.items():
-            tr.update(cur, ts.frame, first=(prev is None))
+            tr.update(cur, ts.frame)
             n_in[r][fi] = int(np.sum(tr.entry >= 0))
 
         # first frame has no previous frame, so its crossings stay 0;
@@ -339,7 +340,7 @@ def run_cavity_water_flux(
     res_stats = {}
     lines += [
         "",
-        "RESIDENCE (complete visits only, ns)",
+        "RESIDENCE (ns; censored = still inside at the last frame, excluded)",
         "=" * 78,
         f"{'region':<10} {'n':>7} {'censored':>9} {'mean':>8} {'median':>8} "
         f"{'std':>8} {'q1':>7} {'q3':>7} {'max':>8}",
@@ -529,10 +530,14 @@ def _plot_flux_timeseries(frame_indices, counts, frame_duration, bin_ns,
     print(f"  ✅ Saved: {out_path}")
 
 
-def _plot_residence_hist(complete, stats, frame_duration, out_path):
+def _plot_residence_hist(complete, stats, frame_duration, out_path, title=None):
     """One histogram per region; residence times are multiples of one frame."""
-    fig, axes = plt.subplots(1, len(complete), figsize=(5 * len(complete), 4.5))
-    for ax, (r, t) in zip(np.atleast_1d(axes), complete.items()):
+    ncol = 2 if len(complete) == 4 else len(complete)
+    nrow = int(np.ceil(len(complete) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(5.5 * ncol, 4.5 * nrow), squeeze=False)
+    for ax in axes.flat[len(complete):]:
+        ax.set_visible(False)
+    for ax, (r, t) in zip(axes.flat, complete.items()):
         if t.size == 0:
             ax.set_title(f"{r}  (no complete visits)", fontsize=12)
             continue
@@ -553,13 +558,15 @@ def _plot_residence_hist(complete, stats, frame_duration, out_path):
         ax.set_title(f"{r}  (n = {t.size})", fontsize=12, fontweight="bold")
         ax.legend(fontsize=9)
 
+    if title:
+        fig.suptitle(title, fontsize=13, fontweight="bold")
     plt.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"  ✅ Saved: {out_path}")
 
 
-def _plot_residence_box(complete, stats, out_path):
+def _plot_residence_box(complete, stats, out_path, title=None):
     names = [r for r in complete if complete[r].size]
     if not names:
         return
@@ -576,7 +583,7 @@ def _plot_residence_box(complete, stats, out_path):
                    for r in names], fontsize=10)
     ax.set_yscale("log")
     ax.set_ylabel("residence time (ns, log)", fontsize=11)
-    ax.set_title("Water residence per region (◇ = mean, line = median)",
+    ax.set_title(title or "Water residence per region (◇ = mean, line = median)",
                  fontsize=12, fontweight="bold")
     ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
 
