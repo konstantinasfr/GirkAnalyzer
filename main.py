@@ -722,23 +722,23 @@ def main():
     # end_frame = 3000
     print(f"Using end_frame = {end_frame} (last frame of trajectory)")
 
-    if channel_type in ("G12", "G2"):
-        from analysis.pore_salt_bridge import run_pore_salt_bridge, SaltBridgeCheckError
+    # if channel_type in ("G12", "G2"):
+    #     from analysis.pore_salt_bridge import run_pore_salt_bridge, SaltBridgeCheckError
 
-        try:
-            run_pore_salt_bridge(
-                universe         = u,
-                results_dir      = results_dir,
-                channel_type     = channel_type,
-                frame_duration   = frame_duration,
-                start_frame      = start_frame,
-                end_frame        = end_frame,
-                max_frames       = args.salt_bridge_frames,
-                diagnostics_only = args.salt_bridge_diagnostics_only,
-                force_rerun      = args.salt_bridge_rerun,
-            )
-        except SaltBridgeCheckError:
-            raise SystemExit("Salt bridge diagnostics failed - see the message above.")
+    #     try:
+    #         run_pore_salt_bridge(
+    #             universe         = u,
+    #             results_dir      = results_dir,
+    #             channel_type     = channel_type,
+    #             frame_duration   = frame_duration,
+    #             start_frame      = start_frame,
+    #             end_frame        = end_frame,
+    #             max_frames       = args.salt_bridge_frames,
+    #             diagnostics_only = args.salt_bridge_diagnostics_only,
+    #             force_rerun      = args.salt_bridge_rerun,
+    #         )
+    #     except SaltBridgeCheckError:
+    #         raise SystemExit("Salt bridge diagnostics failed - see the message above.")
     
     ch1 = Channel(u, upper1, lower1, num=1, radius=2.5)
     ch2 = Channel(u, upper2, lower2, num=2, radius=15.0)
