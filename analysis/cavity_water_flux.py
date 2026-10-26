@@ -20,13 +20,16 @@ the previous frame gives the crossings:
 
     sf_in      1   -> 2/3    influx from the SF             (asked for)
     sf_back    2/3 -> 1      backflow up into the SF
+    asn_down   2   -> 3      past the ASN ring, downward
+    asn_up     3   -> 2      past the ASN ring, upward
     hbc_out    2/3 -> 4      outflux through the HBC gate   (asked for)
     hbc_back   4   -> 2/3    re-entry from below the HBC
     side_in    0   -> 2/3    entered the cavity any other way
     side_out   2/3 -> 0      left the cavity any other way
 
-A 1 -> 4 jump (straight through the cavity between two saved frames) counts
-as both sf_in and hbc_out.
+A jump that skips regions between two saved frames counts every boundary it
+passed: 1 -> 4 is sf_in + asn_down + hbc_out, 1 -> 3 is sf_in + asn_down,
+2 -> 4 is asn_down + hbc_out (and the reverse for upward jumps).
 
 Caveats
 -------
@@ -40,7 +43,7 @@ Caveats
 
 What it produces   <results_dir>/water_analysis/cavity_water_flux/
 -----------------------------------------------------------------
-1. cavity_water_flux_per_frame.csv   frame, time_ns, n_cavity, 6 crossing counts
+1. cavity_water_flux_per_frame.csv   frame, time_ns, n_cavity, 8 crossing counts
 2. cavity_water_flux_summary.txt     totals, net flux, rates per ns, per ion
 3. cavity_water_flux.pkl             same data, for an aggregator
 4. cavity_water_flux_cumulative.png  cumulative crossings + K+ end_2/end_3 lines
@@ -72,7 +75,8 @@ from tqdm import tqdm
 
 _WATER_SEL = "resname WAT HOH SOL TIP3 and name O OW OH2"
 
-CROSSINGS = ("sf_in", "sf_back", "hbc_out", "hbc_back", "side_in", "side_out")
+CROSSINGS = ("sf_in", "sf_back", "asn_down", "asn_up",
+             "hbc_out", "hbc_back", "side_in", "side_out")
 
 
 def label_regions(pos, channels):
@@ -98,12 +102,20 @@ def count_crossings(prev, cur):
     """Crossing counts between two consecutive label arrays."""
     was_cav = (prev == 2) | (prev == 3)
     now_cav = (cur == 2) | (cur == 3)
-    jump = (prev == 1) & (cur == 4)
+    jump_down = (prev == 1) & (cur == 4)
+    jump_up = (prev == 4) & (cur == 1)
+    # past the ASN ring: from above it (1, 2) to below it (3, 4), or back
+    above_prev = (prev == 1) | (prev == 2)
+    below_prev = (prev == 3) | (prev == 4)
+    above_cur = (cur == 1) | (cur == 2)
+    below_cur = (cur == 3) | (cur == 4)
     return {
-        "sf_in":    int(np.sum((prev == 1) & now_cav) + np.sum(jump)),
-        "sf_back":  int(np.sum(was_cav & (cur == 1))),
-        "hbc_out":  int(np.sum(was_cav & (cur == 4)) + np.sum(jump)),
-        "hbc_back": int(np.sum((prev == 4) & now_cav)),
+        "sf_in":    int(np.sum((prev == 1) & now_cav) + np.sum(jump_down)),
+        "sf_back":  int(np.sum(was_cav & (cur == 1)) + np.sum(jump_up)),
+        "asn_down": int(np.sum(above_prev & below_cur)),
+        "asn_up":   int(np.sum(below_prev & above_cur)),
+        "hbc_out":  int(np.sum(was_cav & (cur == 4)) + np.sum(jump_down)),
+        "hbc_back": int(np.sum((prev == 4) & now_cav) + np.sum(jump_up)),
         "side_in":  int(np.sum((prev == 0) & now_cav)),
         "side_out": int(np.sum(was_cav & (cur == 0))),
     }
@@ -181,6 +193,7 @@ def run_cavity_water_flux(
     sim_ns = (n_frames - 1) * frame_duration
     n_perm = len(permeation_events)
     net_sf = totals["sf_in"] - totals["sf_back"]
+    net_asn = totals["asn_down"] - totals["asn_up"]
     net_hbc = totals["hbc_out"] - totals["hbc_back"]
 
     end2 = sorted(int(ev["end_2"]) for ev in permeation_events
@@ -208,6 +221,7 @@ def run_cavity_water_flux(
     lines += [
         "-" * 60,
         f"net SF influx  (sf_in - sf_back)    : {net_sf}",
+        f"net ASN down   (asn_down - asn_up)  : {net_asn}",
         f"net HBC efflux (hbc_out - hbc_back) : {net_hbc}",
     ]
     print("\n".join("  " + s for s in lines))
@@ -232,6 +246,7 @@ def run_cavity_water_flux(
         "counts": counts,
         "totals": totals,
         "net_sf": net_sf,
+        "net_asn": net_asn,
         "net_hbc": net_hbc,
         "n_permeation_events": n_perm,
         "end2_frames": end2,
@@ -253,11 +268,12 @@ def run_cavity_water_flux(
 # ── plotting helper ────────────────────────────────────────────────────────────
 
 def _plot_cumulative(frame_indices, counts, end2, end3, out_path):
-    fig, axes = plt.subplots(2, 1, figsize=(14, 7), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
 
     panels = (
         (axes[0], "SF → cavity", ("sf_in", "sf_back"), "#1E88E5"),
-        (axes[1], "cavity → HBC", ("hbc_out", "hbc_back"), "#43A047"),
+        (axes[1], "GLU/ASN → ASN/HBC (ASN ring)", ("asn_down", "asn_up"), "#FB8C00"),
+        (axes[2], "cavity → HBC", ("hbc_out", "hbc_back"), "#43A047"),
     )
     for ax, title, (fwd, back), color in panels:
         ax.plot(frame_indices, np.cumsum(counts[fwd]), color=color,
@@ -276,9 +292,9 @@ def _plot_cumulative(frame_indices, counts, end2, end3, out_path):
         ax.legend(fontsize=9, loc="upper left")
 
     # dashed event lines explained once, under the plot
-    axes[1].set_xlabel("Frame   (red dashed = K⁺ end_2, purple dashed = K⁺ end_3)",
+    axes[2].set_xlabel("Frame   (red dashed = K⁺ end_2, purple dashed = K⁺ end_3)",
                        fontsize=11)
-    axes[1].set_xlim(frame_indices[0], frame_indices[-1])
+    axes[2].set_xlim(frame_indices[0], frame_indices[-1])
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=150)
