@@ -1535,6 +1535,18 @@ def main():
     #     end_frame=end_frame,
     # )
 
+    # from analysis.cavity_water_flux import run_cavity_water_flux
+
+    # run_cavity_water_flux(
+    #     u=u,
+    #     channels=(ch1, ch2, ch3, ch4),
+    #     permeation_events=analyzer.permeation_events,
+    #     results_dir=results_dir,
+    #     start_frame=start_frame,
+    #     end_frame=end_frame,
+    #     frame_duration=frame_duration,
+    # )
+
     # from analysis.cavity_water_residence import run_cavity_water_residence
 
     # run_cavity_water_residence(

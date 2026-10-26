@@ -13,28 +13,30 @@ class Channel:
         self.upper_center = None
         self.lower_center = None
         self.channel_number = num
+        self._upper_atoms = None
+        self._lower_atoms = None
+
+    def _ca_atoms(self, residues):
+        atom_indices = []
+        for resid in residues:
+            residue_atoms = self.u.select_atoms(f"resid {resid} and name CA")
+            atom_indices.append(residue_atoms[0].index)
+        return self.u.atoms[atom_indices]
 
     def compute_geometry(self, gate_num):
         offset = 3  # adjust this value as needed (in Ångströms)
         
-        atom_indices = []
-        for resid in self.upper_gate_residues:
+        # CA selections are static, so build them once and reuse every frame
+        if self._upper_atoms is None:
+            self._upper_atoms = self._ca_atoms(self.upper_gate_residues)
+            self._lower_atoms = self._ca_atoms(self.lower_gate_residues)
 
-            residue_atoms = self.u.select_atoms(f"resid {resid} and name CA")
-     
-            atom_indices.append(residue_atoms[0].index)
-
-        upper_atoms = self.u.atoms[atom_indices]
+        upper_atoms = self._upper_atoms
         self.upper_center = upper_atoms.center_of_mass()
         
         # in channel 5 by choosing ca for upper gate and min for lower gate i maximize the distance between upper and lower gates
         pos = 0  # use pos if you want lowest or second-lowest atom; adjust as needed
-        atom_indices = []
-        for resid in self.lower_gate_residues:
-            residue_atoms = self.u.select_atoms(f"resid {resid} and name CA")
-            atom_indices.append(residue_atoms[0].index)
-
-        lowest_atoms = self.u.atoms[atom_indices]
+        lowest_atoms = self._lower_atoms
         self.lower_center = lowest_atoms.center_of_mass()
 
         if gate_num in [2]:
