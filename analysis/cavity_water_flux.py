@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Cavity Water Flux Analysis
-==========================
-Counts waters entering the GLU/ASN cavity from the selectivity filter and
-waters leaving the cavity through the HBC gate. One pass over the
-trajectory, no per-water storage.
+Cavity Water Flux & Residence Analysis
+======================================
+Counts waters crossing each boundary of the conduction cavity (SF, ASN ring,
+HBC gate) and measures how long every water stays in each cavity region.
+One pass over the trajectory.
 
 How it works
 ------------
@@ -18,11 +18,11 @@ first match wins, exactly like IonPermeationAnalysis._determine_ion_region):
 The cavity is regions 2 + 3. Comparing each water's label with its label in
 the previous frame gives the crossings:
 
-    sf_in      1   -> 2/3    influx from the SF             (asked for)
+    sf_in      1   -> 2/3    influx from the SF
     sf_back    2/3 -> 1      backflow up into the SF
     asn_down   2   -> 3      past the ASN ring, downward
     asn_up     3   -> 2      past the ASN ring, upward
-    hbc_out    2/3 -> 4      outflux through the HBC gate   (asked for)
+    hbc_out    2/3 -> 4      outflux through the HBC gate
     hbc_back   4   -> 2/3    re-entry from below the HBC
     side_in    0   -> 2/3    entered the cavity any other way
     side_out   2/3 -> 0      left the cavity any other way
@@ -31,22 +31,45 @@ A jump that skips regions between two saved frames counts every boundary it
 passed: 1 -> 4 is sf_in + asn_down + hbc_out, 1 -> 3 is sf_in + asn_down,
 2 -> 4 is asn_down + hbc_out (and the reverse for upward jumps).
 
+Residence
+---------
+A visit = one unbroken run of frames a water spends inside a region. It is
+tracked for three regions:
+
+    GLU/ASN   region 2
+    ASN/HBC   region 3
+    GLU/HBC   region 2 or 3 (whole cavity: a 2 <-> 3 move does NOT end it)
+
+Residence time = number of frames inside x frame_duration, so a water seen
+in a single frame has residence 1 frame. Visits already running at the first
+frame, or still running at the last, are CENSORED (their true length is
+unknown, only a lower bound). They are saved with a flag but left out of the
+mean / median / histograms / boxplots.
+
 Caveats
 -------
 - No commit rule: a water flickering across a boundary is counted every
-  time. Gross counts are inflated by that; NET flux (in - back) is not.
-- Crossings faster than one frame are missed. At 0.4 ns/frame (G2) a water
+  time, and a one-frame excursion splits a visit in two. Gross crossing
+  counts are inflated by that; NET flux (in - back) is not.
+- Anything faster than one frame is missed. At 0.4 ns/frame (G2) a water
   can go from the cavity to past ch4 unseen and is counted as side_out, so
-  G2 hbc_out is an underestimate. Do not compare G12 and G2 absolute rates.
+  G2 hbc_out is an underestimate, and residence times have a 0.4 ns
+  resolution. Do not compare G12 and G2 absolute numbers.
 - ch1 has a 2.5 A radius, so only waters in the single-file SF count as
   region 1.
 
 What it produces   <results_dir>/water_analysis/cavity_water_flux/
 -----------------------------------------------------------------
-1. cavity_water_flux_per_frame.csv   frame, time_ns, n_cavity, 8 crossing counts
-2. cavity_water_flux_summary.txt     totals, net flux, rates per ns, per ion
-3. cavity_water_flux.pkl             same data, for an aggregator
-4. cavity_water_flux_cumulative.png  cumulative crossings + K+ end_2/end_3 lines
+1. cavity_water_flux_per_frame.csv        frame, time_ns, n per region, 8 crossing counts
+2. cavity_water_flux_summary.txt          crossings + residence stats
+3. cavity_water_residence_visits.csv      every visit: region, water, start, end, length
+4. cavity_water_residence_per_water.csv   per water and region: n visits, total, mean
+5. cavity_water_flux.pkl                  all of the above, for an aggregator
+6. cavity_water_flux_cumulative.png       cumulative crossings + K+ end_2/end_3 lines
+7. cavity_water_flux_rates.png            forward / back / net per ns, per boundary
+8. cavity_water_flux_timeseries.png       net flux per ns in time bins
+9. cavity_water_residence_hist.png        histogram per region, mean + median marked
+10. cavity_water_residence_box.png        boxplot per region
 
 How to call it from main.py
 ----------------------------
@@ -77,6 +100,21 @@ _WATER_SEL = "resname WAT HOH SOL TIP3 and name O OW OH2"
 
 CROSSINGS = ("sf_in", "sf_back", "asn_down", "asn_up",
              "hbc_out", "hbc_back", "side_in", "side_out")
+
+# boundary name -> (forward crossing, backward crossing), in pore order
+BOUNDARIES = {
+    "SF":       ("sf_in", "sf_back"),
+    "ASN ring": ("asn_down", "asn_up"),
+    "HBC gate": ("hbc_out", "hbc_back"),
+}
+
+# residence region -> labels that count as inside it
+RES_REGIONS = {
+    "GLU/ASN": (2,),
+    "ASN/HBC": (3,),
+    "GLU/HBC": (2, 3),
+}
+RES_COLORS = {"GLU/ASN": "#1E88E5", "ASN/HBC": "#FB8C00", "GLU/HBC": "#43A047"}
 
 
 def label_regions(pos, channels):
@@ -121,6 +159,68 @@ def count_crossings(prev, cur):
     }
 
 
+class ResidenceTracker:
+    """
+    Run-length tracking of visits to one region, vectorised over waters.
+
+    Only the entry frame of each ongoing visit is kept; a visit is written
+    out the frame the water leaves. Frames are absolute trajectory frames.
+    """
+
+    def __init__(self, n_waters, labels_inside):
+        self.labels_inside = labels_inside
+        self.entry = np.full(n_waters, -1, dtype=np.int64)  # -1 = not inside
+        self.visits = []  # (water_i, start, end, censored) arrays per frame
+
+    def inside(self, labels):
+        return np.isin(labels, self.labels_inside)
+
+    def update(self, labels, frame, first=False):
+        now = self.inside(labels)
+        was = self.entry >= 0
+        left = np.nonzero(was & ~now)[0]
+        if len(left):
+            # last frame inside was the previous one
+            self._record(left, frame - 1)
+            self.entry[left] = -1
+        self.entry[now & ~was] = frame
+        if first:
+            self.first_frame = frame
+
+    def finish(self, last_frame):
+        open_ = np.nonzero(self.entry >= 0)[0]
+        if len(open_):
+            self._record(open_, last_frame, end_censored=True)
+            self.entry[open_] = -1
+
+    def _record(self, idx, end, end_censored=False):
+        start = self.entry[idx]
+        censored = (start == self.first_frame) | end_censored
+        self.visits.append((idx, start, np.full(len(idx), end), censored))
+
+    def result(self):
+        if not self.visits:
+            empty = np.zeros(0, dtype=np.int64)
+            return {"water_i": empty, "start": empty, "end": empty,
+                    "n_frames": empty, "censored": np.zeros(0, dtype=bool)}
+        w, s, e, c = (np.concatenate(x) for x in zip(*self.visits))
+        order = np.lexsort((w, s))
+        w, s, e, c = w[order], s[order], e[order], c[order]
+        return {"water_i": w, "start": s, "end": e,
+                "n_frames": e - s + 1, "censored": c}
+
+
+def describe(values):
+    """n, mean, median, std, min, max, q1, q3 of a 1-D array (nan if empty)."""
+    v = np.asarray(values, dtype=float)
+    if v.size == 0:
+        return {k: (0 if k == "n" else float("nan"))
+                for k in ("n", "mean", "median", "std", "min", "max", "q1", "q3")}
+    return {"n": int(v.size), "mean": float(v.mean()), "median": float(np.median(v)),
+            "std": float(v.std()), "min": float(v.min()), "max": float(v.max()),
+            "q1": float(np.percentile(v, 25)), "q3": float(np.percentile(v, 75))}
+
+
 def run_cavity_water_flux(
     u,
     channels,
@@ -130,9 +230,10 @@ def run_cavity_water_flux(
     end_frame=None,
     frame_duration=0.075,
     water_selection=_WATER_SEL,
+    flux_bin_ns=5.0,
 ):
     """
-    Main entry point — count water crossings per frame, save results & plots.
+    Main entry point — water crossings and residence, save results & plots.
 
     Parameters
     ----------
@@ -144,6 +245,7 @@ def run_cavity_water_flux(
     end_frame         : int or None
     frame_duration    : float  ns per frame (0.075 G12, 0.4 G2)
     water_selection   : str  MDAnalysis selection for water oxygens
+    flux_bin_ns       : float  bin width (ns) of the flux time-series plot
     """
     out_dir = Path(results_dir) / "water_analysis" / "cavity_water_flux"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -153,7 +255,7 @@ def run_cavity_water_flux(
     n_frames = end_frame - start_frame + 1
 
     print("\n" + "=" * 70)
-    print("CAVITY WATER FLUX ANALYSIS")
+    print("CAVITY WATER FLUX & RESIDENCE ANALYSIS")
     print("=" * 70)
 
     waters = u.select_atoms(water_selection)
@@ -168,8 +270,9 @@ def run_cavity_water_flux(
 
     # ── per-frame loop ─────────────────────────────────────────────────────────
     frame_indices = np.arange(start_frame, end_frame + 1, dtype=int)
-    n_cavity = np.zeros(n_frames, dtype=int)
+    n_in = {r: np.zeros(n_frames, dtype=int) for r in RES_REGIONS}
     counts = {k: np.zeros(n_frames, dtype=int) for k in CROSSINGS}
+    trackers = {r: ResidenceTracker(len(waters), labs) for r, labs in RES_REGIONS.items()}
     prev = None
 
     for fi, ts in enumerate(tqdm(u.trajectory[start_frame: end_frame + 1],
@@ -179,7 +282,9 @@ def run_cavity_water_flux(
             ch.compute_geometry(num)
 
         cur = label_regions(waters.positions, channels)
-        n_cavity[fi] = int(np.sum((cur == 2) | (cur == 3)))
+        for r, tr in trackers.items():
+            tr.update(cur, ts.frame, first=(prev is None))
+            n_in[r][fi] = int(np.sum(tr.entry >= 0))
 
         # first frame has no previous frame, so its crossings stay 0;
         # waters already inside are initial residents, never counted as influx
@@ -188,13 +293,14 @@ def run_cavity_water_flux(
                 counts[k][fi] = v
         prev = cur
 
-    # ── summary ───────────────────────────────────────────────────────────────
+    for tr in trackers.values():
+        tr.finish(end_frame)
+
+    # ── crossings summary ─────────────────────────────────────────────────────
     totals = {k: int(v.sum()) for k, v in counts.items()}
     sim_ns = (n_frames - 1) * frame_duration
     n_perm = len(permeation_events)
-    net_sf = totals["sf_in"] - totals["sf_back"]
-    net_asn = totals["asn_down"] - totals["asn_up"]
-    net_hbc = totals["hbc_out"] - totals["hbc_back"]
+    net = {b: totals[f] - totals[k] for b, (f, k) in BOUNDARIES.items()}
 
     end2 = sorted(int(ev["end_2"]) for ev in permeation_events
                   if ev.get("end_2") is not None
@@ -204,12 +310,18 @@ def run_cavity_water_flux(
                   and start_frame <= int(ev["end_3"]) <= end_frame)
 
     lines = [
-        "CAVITY WATER FLUX",
+        "CAVITY WATER FLUX & RESIDENCE",
         f"Frames          : {start_frame} → {end_frame}  ({sim_ns:.2f} ns, {frame_duration} ns/frame)",
         f"Channel radii   : {[ch.radius for ch in channels]} Å",
-        f"Initial residents in cavity (frame {start_frame}): {n_cavity[0]}",
-        f"Mean waters in cavity : {n_cavity.mean():.2f}",
         f"K+ permeation events  : {n_perm}",
+        "",
+        f"{'region':<10} {'initial':>8} {'mean n':>8}",
+    ]
+    for r in RES_REGIONS:
+        lines.append(f"{r:<10} {n_in[r][0]:>8} {n_in[r].mean():>8.2f}")
+    lines += [
+        "",
+        "CROSSINGS",
         "=" * 60,
         f"{'crossing':<10} {'total':>8} {'per ns':>10} {'per ion':>10}",
         "-" * 60,
@@ -218,83 +330,255 @@ def run_cavity_water_flux(
         per_ns = totals[k] / sim_ns if sim_ns > 0 else float("nan")
         per_ion = totals[k] / n_perm if n_perm else float("nan")
         lines.append(f"{k:<10} {totals[k]:>8} {per_ns:>10.3f} {per_ion:>10.2f}")
+    lines.append("-" * 60)
+    for b, (f, k) in BOUNDARIES.items():
+        lines.append(f"net {b:<9} ({f} - {k}) : {net[b]}")
+
+    # ── residence summary ─────────────────────────────────────────────────────
+    visits = {r: tr.result() for r, tr in trackers.items()}
+    res_stats = {}
     lines += [
-        "-" * 60,
-        f"net SF influx  (sf_in - sf_back)    : {net_sf}",
-        f"net ASN down   (asn_down - asn_up)  : {net_asn}",
-        f"net HBC efflux (hbc_out - hbc_back) : {net_hbc}",
+        "",
+        "RESIDENCE (complete visits only, ns)",
+        "=" * 78,
+        f"{'region':<10} {'n':>7} {'censored':>9} {'mean':>8} {'median':>8} "
+        f"{'std':>8} {'q1':>7} {'q3':>7} {'max':>8}",
+        "-" * 78,
     ]
+    for r, v in visits.items():
+        t = v["n_frames"][~v["censored"]] * frame_duration
+        st = describe(t)
+        st["n_censored"] = int(v["censored"].sum())
+        res_stats[r] = st
+        lines.append(f"{r:<10} {st['n']:>7} {st['n_censored']:>9} {st['mean']:>8.3f} "
+                     f"{st['median']:>8.3f} {st['std']:>8.3f} {st['q1']:>7.3f} "
+                     f"{st['q3']:>7.3f} {st['max']:>8.3f}")
+    lines.append(f"(one frame = {frame_duration} ns, the shortest possible residence)")
     print("\n".join("  " + s for s in lines))
 
-    txt_path = out_dir / "cavity_water_flux_summary.txt"
-    txt_path.write_text("\n".join(lines) + "\n")
+    (out_dir / "cavity_water_flux_summary.txt").write_text("\n".join(lines) + "\n")
 
-    csv_path = out_dir / "cavity_water_flux_per_frame.csv"
-    with open(csv_path, "w", newline="") as f:
+    # ── csv ───────────────────────────────────────────────────────────────────
+    with open(out_dir / "cavity_water_flux_per_frame.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["frame", "time_ns", "n_cavity", *CROSSINGS])
+        w.writerow(["frame", "time_ns", *(f"n_{r}" for r in RES_REGIONS), *CROSSINGS])
         for i, fr in enumerate(frame_indices):
-            w.writerow([fr, round(fr * frame_duration, 4), n_cavity[i],
+            w.writerow([fr, round(fr * frame_duration, 4),
+                        *(n_in[r][i] for r in RES_REGIONS),
                         *(counts[k][i] for k in CROSSINGS)])
+
+    water_index = waters.indices
+    with open(out_dir / "cavity_water_residence_visits.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["region", "water_atom_index", "water_resid", "start_frame",
+                    "end_frame", "n_frames", "residence_ns", "censored"])
+        for r, v in visits.items():
+            for wi, s, e, n, c in zip(v["water_i"], v["start"], v["end"],
+                                      v["n_frames"], v["censored"]):
+                w.writerow([r, water_index[wi], waters.resids[wi], s, e, n,
+                            round(n * frame_duration, 4), int(c)])
+
+    with open(out_dir / "cavity_water_residence_per_water.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["region", "water_atom_index", "water_resid", "n_visits",
+                    "n_censored", "total_ns", "mean_complete_ns", "max_ns"])
+        for r, v in visits.items():
+            for wi in np.unique(v["water_i"]):
+                m = v["water_i"] == wi
+                t = v["n_frames"][m] * frame_duration
+                done = t[~v["censored"][m]]
+                w.writerow([r, water_index[wi], waters.resids[wi], int(m.sum()),
+                            int(v["censored"][m].sum()), round(t.sum(), 4),
+                            round(done.mean(), 4) if done.size else "",
+                            round(t.max(), 4)])
 
     pkl_data = {
         "start_frame": start_frame,
         "end_frame": end_frame,
         "frame_duration": frame_duration,
         "frame_indices": frame_indices,
-        "n_cavity": n_cavity,
+        "n_in_region": n_in,
         "counts": counts,
         "totals": totals,
-        "net_sf": net_sf,
-        "net_asn": net_asn,
-        "net_hbc": net_hbc,
+        "net": net,
         "n_permeation_events": n_perm,
         "end2_frames": end2,
         "end3_frames": end3,
+        "residence_visits": visits,
+        "residence_stats": res_stats,
+        "water_atom_indices": water_index,
         "channel_radii": [ch.radius for ch in channels],
         "water_selection": water_selection,
     }
-    pkl_path = out_dir / "cavity_water_flux.pkl"
-    with open(pkl_path, "wb") as f:
+    with open(out_dir / "cavity_water_flux.pkl", "wb") as f:
         pickle.dump(pkl_data, f)
 
+    # ── plots ─────────────────────────────────────────────────────────────────
     _plot_cumulative(frame_indices, counts, end2, end3,
                      out_dir / "cavity_water_flux_cumulative.png")
+    _plot_rates(totals, sim_ns, out_dir / "cavity_water_flux_rates.png")
+    _plot_flux_timeseries(frame_indices, counts, frame_duration, flux_bin_ns,
+                          end2, end3, out_dir / "cavity_water_flux_timeseries.png")
+    complete = {r: v["n_frames"][~v["censored"]] * frame_duration
+                for r, v in visits.items()}
+    _plot_residence_hist(complete, res_stats, frame_duration,
+                         out_dir / "cavity_water_residence_hist.png")
+    _plot_residence_box(complete, res_stats,
+                        out_dir / "cavity_water_residence_box.png")
 
     print(f"  ✅ All outputs in: {out_dir}")
     return pkl_data
 
 
-# ── plotting helper ────────────────────────────────────────────────────────────
+# ── plotting helpers ───────────────────────────────────────────────────────────
+
+def _event_lines(ax, end2, end3, to_x=lambda f: f):
+    for ef in end2:
+        ax.axvline(to_x(ef), color="#E53935", linewidth=0.8, linestyle="--", alpha=0.6)
+    for ef in end3:
+        ax.axvline(to_x(ef), color="#8E24AA", linewidth=0.8, linestyle="--", alpha=0.6)
+
 
 def _plot_cumulative(frame_indices, counts, end2, end3, out_path):
     fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
 
-    panels = (
-        (axes[0], "SF → cavity", ("sf_in", "sf_back"), "#1E88E5"),
-        (axes[1], "GLU/ASN → ASN/HBC (ASN ring)", ("asn_down", "asn_up"), "#FB8C00"),
-        (axes[2], "cavity → HBC", ("hbc_out", "hbc_back"), "#43A047"),
-    )
-    for ax, title, (fwd, back), color in panels:
+    colors = ("#1E88E5", "#FB8C00", "#43A047")
+    for ax, (b, (fwd, back)), color in zip(axes, BOUNDARIES.items(), colors):
         ax.plot(frame_indices, np.cumsum(counts[fwd]), color=color,
                 linewidth=1.6, label=fwd)
         ax.plot(frame_indices, np.cumsum(counts[back]), color=color,
                 linewidth=1.2, linestyle=":", label=back)
         ax.plot(frame_indices, np.cumsum(counts[fwd] - counts[back]),
                 color="black", linewidth=1.4, label="net")
-        for ef in end2:
-            ax.axvline(ef, color="#E53935", linewidth=0.8, linestyle="--", alpha=0.6)
-        for ef in end3:
-            ax.axvline(ef, color="#8E24AA", linewidth=0.8, linestyle="--", alpha=0.6)
+        _event_lines(ax, end2, end3)
         ax.set_ylabel("cumulative waters", fontsize=11)
-        ax.set_title(title, fontsize=12, fontweight="bold")
+        ax.set_title(b, fontsize=12, fontweight="bold")
         ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
         ax.legend(fontsize=9, loc="upper left")
 
     # dashed event lines explained once, under the plot
-    axes[2].set_xlabel("Frame   (red dashed = K⁺ end_2, purple dashed = K⁺ end_3)",
-                       fontsize=11)
-    axes[2].set_xlim(frame_indices[0], frame_indices[-1])
+    axes[-1].set_xlabel("Frame   (red dashed = K⁺ end_2, purple dashed = K⁺ end_3)",
+                        fontsize=11)
+    axes[-1].set_xlim(frame_indices[0], frame_indices[-1])
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  ✅ Saved: {out_path}")
+
+
+def _plot_rates(totals, sim_ns, out_path):
+    """Forward / backward / net crossings per ns at each boundary."""
+    if sim_ns <= 0:
+        return
+    names = list(BOUNDARIES)
+    fwd = np.array([totals[f] for f, _ in BOUNDARIES.values()]) / sim_ns
+    back = np.array([totals[k] for _, k in BOUNDARIES.values()]) / sim_ns
+    x = np.arange(len(names))
+    wdt = 0.27
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for off, vals, label, color in ((-wdt, fwd, "forward (down)", "#1E88E5"),
+                                    (0, back, "backward (up)", "#90CAF9"),
+                                    (wdt, fwd - back, "net", "#212121")):
+        bars = ax.bar(x + off, vals, wdt, label=label, color=color)
+        ax.bar_label(bars, fmt="%.2f", fontsize=8, padding=2)
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_xticks(x, names, fontsize=11)
+    ax.set_ylabel("waters per ns", fontsize=11)
+    ax.set_title("Water crossings per boundary", fontsize=13, fontweight="bold")
+    ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
+    ax.legend(fontsize=9)
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  ✅ Saved: {out_path}")
+
+
+def _plot_flux_timeseries(frame_indices, counts, frame_duration, bin_ns,
+                          end2, end3, out_path):
+    """Net crossings per ns in bins of bin_ns, one line per boundary."""
+    per_bin = max(1, int(round(bin_ns / frame_duration)))
+    n_bins = len(frame_indices) // per_bin
+    if n_bins < 2:
+        return
+    span = n_bins * per_bin
+    t_mid = (frame_indices[:span].reshape(n_bins, per_bin).mean(axis=1)
+             * frame_duration)
+    width_ns = per_bin * frame_duration
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+    for (b, (fwd, back)), color in zip(BOUNDARIES.items(),
+                                       ("#1E88E5", "#FB8C00", "#43A047")):
+        net = (counts[fwd] - counts[back])[:span].reshape(n_bins, per_bin).sum(axis=1)
+        ax.plot(t_mid, net / width_ns, color=color, linewidth=1.5, marker="o",
+                markersize=3, label=b)
+    ax.axhline(0, color="black", linewidth=0.8)
+    _event_lines(ax, end2, end3, to_x=lambda f: f * frame_duration)
+    ax.set_xlabel("Time (ns)   (red dashed = K⁺ end_2, purple dashed = K⁺ end_3)",
+                  fontsize=11)
+    ax.set_ylabel("net waters per ns (downward +)", fontsize=11)
+    ax.set_title(f"Net water flux, {width_ns:g} ns bins", fontsize=13, fontweight="bold")
+    ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
+    ax.legend(fontsize=9)
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  ✅ Saved: {out_path}")
+
+
+def _plot_residence_hist(complete, stats, frame_duration, out_path):
+    """One histogram per region; residence times are multiples of one frame."""
+    fig, axes = plt.subplots(1, len(complete), figsize=(5 * len(complete), 4.5))
+    for ax, (r, t) in zip(np.atleast_1d(axes), complete.items()):
+        if t.size == 0:
+            ax.set_title(f"{r}  (no complete visits)", fontsize=12)
+            continue
+        # cap at the 99th percentile so the tail does not squash the bulk
+        hi = max(np.percentile(t, 99), 2 * frame_duration)
+        n_frames_hi = int(np.ceil(hi / frame_duration))
+        step = max(1, n_frames_hi // 60)
+        edges = (np.arange(0, n_frames_hi + step + 1, step) + 0.5) * frame_duration
+        ax.hist(np.minimum(t, edges[-1] - 1e-9), bins=edges,
+                color=RES_COLORS[r], alpha=0.8)
+        ax.axvline(stats[r]["mean"], color="black", linewidth=1.4,
+                   label=f"mean {stats[r]['mean']:.3f} ns")
+        ax.axvline(stats[r]["median"], color="black", linewidth=1.4, linestyle="--",
+                   label=f"median {stats[r]['median']:.3f} ns")
+        ax.set_yscale("log")
+        ax.set_xlabel("residence time (ns)  — last bin includes the tail", fontsize=10)
+        ax.set_ylabel("visits", fontsize=10)
+        ax.set_title(f"{r}  (n = {t.size})", fontsize=12, fontweight="bold")
+        ax.legend(fontsize=9)
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  ✅ Saved: {out_path}")
+
+
+def _plot_residence_box(complete, stats, out_path):
+    names = [r for r in complete if complete[r].size]
+    if not names:
+        return
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+    bp = ax.boxplot([complete[r] for r in names], showmeans=True, patch_artist=True,
+                    flierprops={"markersize": 2, "alpha": 0.3},
+                    meanprops={"marker": "D", "markerfacecolor": "white",
+                               "markeredgecolor": "black"})
+    for patch, r in zip(bp["boxes"], names):
+        patch.set_facecolor(RES_COLORS[r])
+        patch.set_alpha(0.7)
+    ax.set_xticks(range(1, len(names) + 1),
+                  [f"{r}\nmean {stats[r]['mean']:.3f}\nmedian {stats[r]['median']:.3f}"
+                   for r in names], fontsize=10)
+    ax.set_yscale("log")
+    ax.set_ylabel("residence time (ns, log)", fontsize=11)
+    ax.set_title("Water residence per region (◇ = mean, line = median)",
+                 fontsize=12, fontweight="bold")
+    ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=150)
