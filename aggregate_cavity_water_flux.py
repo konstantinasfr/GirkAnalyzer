@@ -33,6 +33,20 @@ What it produces   <output_dir>  (default <base_dir>/water_analysis/cavity_water
 6. residence_hist_<CH>.png                pooled histogram per region
 7. residence_box_<CH>.png                 pooled boxplot per region
 8. residence_box_per_run_<CH>.png         one panel per region, one box per run
+9. cavity_water_budget_<CH>.png           where the cavity's net water gain came from
+
+Cavity water budget
+-------------------
+Every water that enters GLU/HBC (regions 2 + 3) comes from the SF, from below
+the HBC or through the sides, so per run
+
+    net from below = hbc_back - hbc_out
+    net from SF    = sf_in    - sf_back
+    net from sides = side_in  - side_out
+
+and the three add up exactly to the change in cavity water count between the
+first and the last frame. A positive source fed the cavity, a negative one
+drained it.
 
 How to run
 ----------
@@ -62,6 +76,20 @@ from analysis.cavity_water_flux import (
 
 
 PKL_REL = Path("water_analysis") / "cavity_water_flux" / "cavity_water_flux.pkl"
+
+# cavity budget source -> (crossing into the cavity, crossing out of it)
+CAVITY_SOURCES = {
+    "from below (HBC)": ("hbc_back", "hbc_out"),
+    "from above (SF)":  ("sf_in", "sf_back"),
+    "through the sides": ("side_in", "side_out"),
+}
+SOURCE_COLORS = {"from below (HBC)": "#43A047", "from above (SF)": "#1E88E5",
+                 "through the sides": "#9E9E9E"}
+
+
+def cavity_budget(row):
+    """Net waters into GLU/HBC per source; their sum = cavity count change."""
+    return {src: row[i] - row[o] for src, (i, o) in CAVITY_SOURCES.items()}
 
 
 def _run_number(path):
@@ -221,6 +249,22 @@ def run_aggregate_flux(base_dir, output_dir=None, channel_type="G12", runs=None)
             f"{r:<9} {st['n']:>8} {st['n_censored']:>7} {st['mean']:>8.3f} "
             f"{st['median']:>8.3f} {st['std']:>8.3f} {st['q1']:>7.3f} {st['q3']:>7.3f} "
             f"{st['max']:>8.3f} {st['mean_of_run_means']:>9.3f} ± {st['std_of_run_means']:<6.3f}")
+    budgets = [cavity_budget(r) for r in rows]
+    gain = sum(sum(b.values()) for b in budgets)
+    lines += [
+        "",
+        "CAVITY WATER BUDGET (net waters into GLU/HBC, all runs summed)",
+        "=" * 60,
+    ]
+    for src in CAVITY_SOURCES:
+        tot = sum(b[src] for b in budgets)
+        share = f"{100 * tot / gain:>6.1f} %" if gain else ""
+        lines.append(f"{src:<20} {tot:>8} {share}")
+    lines += [
+        "-" * 60,
+        f"{'total cavity gain':<20} {gain:>8}   ({gain / len(rows):.1f} per run, "
+        f"last frame - first frame)",
+    ]
     print("\n".join("  " + s for s in lines))
     (out_dir / f"cavity_water_flux_across_runs_{ch}.txt").write_text("\n".join(lines) + "\n")
 
@@ -241,6 +285,8 @@ def run_aggregate_flux(base_dir, output_dir=None, channel_type="G12", runs=None)
                         title=f"{ch}: water residence, all runs pooled (◇ = mean)")
     _plot_box_per_run(data, out_dir / f"residence_box_per_run_{ch}.png",
                       f"{ch}: water residence per run (◇ = mean)")
+    _plot_cavity_budget(rows, out_dir / f"cavity_water_budget_{ch}.png",
+                        f"{ch}: where the cavity's net water gain came from")
 
     print(f"  ✅ All outputs in: {out_dir}")
     return result
@@ -300,6 +346,58 @@ def _plot_net_per_run(rows, out_path, title):
     ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
     ax.legend(fontsize=9)
 
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  ✅ Saved: {out_path}")
+
+
+def _plot_cavity_budget(rows, out_path, title):
+    """
+    Left: per run, net waters into the cavity from each source, stacked
+    (positive sources above zero, negative below); black dot = their sum,
+    the cavity's gain over the run. Right: the same summed over all runs.
+    """
+    budgets = [cavity_budget(r) for r in rows]
+    sources = list(CAVITY_SOURCES)
+    x = np.arange(len(rows))
+
+    fig, (ax, ax2) = plt.subplots(
+        1, 2, figsize=(max(10, 0.6 * len(rows) + 6), 5.5),
+        gridspec_kw={"width_ratios": [max(3, len(rows) / 3), 1.4]})
+
+    pos = np.zeros(len(rows))
+    neg = np.zeros(len(rows))
+    for src in sources:
+        v = np.array([b[src] for b in budgets], dtype=float)
+        base = np.where(v >= 0, pos, neg)
+        ax.bar(x, v, 0.7, bottom=base, color=SOURCE_COLORS[src], label=src)
+        pos += np.clip(v, 0, None)
+        neg += np.clip(v, None, 0)
+    gains = [sum(b.values()) for b in budgets]
+    ax.scatter(x, gains, color="black", zorder=3, s=25,
+               label="total cavity gain (last − first frame)")
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_xticks(x, [f"{r['run']}\n({r['n_permeations']} K⁺)" for r in rows], fontsize=9)
+    ax.set_ylabel("net waters into the cavity", fontsize=11)
+    ax.set_title("per run", fontsize=11)
+    ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
+    ax.legend(fontsize=9, loc="upper left")
+
+    totals = [sum(b[src] for b in budgets) for src in sources]
+    gain = sum(totals)
+    bars = ax2.bar(range(len(sources)), totals,
+                   color=[SOURCE_COLORS[s] for s in sources])
+    ax2.bar_label(bars, labels=[f"{t}\n({100 * t / gain:.0f}%)" if gain else str(t)
+                                for t in totals], fontsize=9, padding=2)
+    ax2.axhline(0, color="black", linewidth=0.8)
+    ax2.set_xticks(range(len(sources)), [s.replace(" (", "\n(") for s in sources],
+                   fontsize=9)
+    ax2.set_title(f"all runs: total gain {gain}", fontsize=11)
+    ax2.margins(y=0.15)
+    ax2.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
+
+    fig.suptitle(title, fontsize=13, fontweight="bold")
     plt.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
