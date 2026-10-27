@@ -985,16 +985,16 @@ def main():
     #     frame_duration      = frame_duration,
     # )
 
-    # from analysis.cavity_refilling_analysis import run_cavity_refilling_analysis
+    from analysis.cavity_refilling_analysis import run_cavity_refilling_analysis
 
-    # run_cavity_refilling_analysis(
-    #     permeation_events = analyzer.permeation_events,
-    #     results_dir       = results_dir,
-    #     channel_type      = args.channel_type,
-    #     frame_duration    = frame_duration,
-    #     end_frame         = end_frame,   # ← add this
-    #     force_rerun       = True,
-    # )
+    run_cavity_refilling_analysis(
+        permeation_events = analyzer.permeation_events,
+        results_dir       = results_dir,
+        channel_type      = args.channel_type,
+        frame_duration    = frame_duration,
+        end_frame         = end_frame,   # ← add this
+        force_rerun       = True,
+    )
 
     # # only these channel types have a bound ligand
     # # only these channel types have a bound ligand — each may use a different resname
@@ -1477,16 +1477,16 @@ def main():
     #     force_rerun=True,
     # )
 
-    # from analysis.cavity_occupancy_analysis import run_cavity_occupancy_analysis
-    # run_cavity_occupancy_analysis(
-    #     u, ch2, analyzer.permeation_events,
-    #     asn_residues, glu_residues, subunit_groups,
-    #     channel_type=args.channel_type,
-    #     results_dir=results_dir,   # base RUN*/ dir — subfolder created automatically
-    #     start_frame=start_frame, end_frame=end_frame, frame_duration=frame_duration,
-    #     channel3=ch3, hbc_residues=hbc_residues,
-    #     channel1=ch1, sf_residues=sf_residues,
-    # )
+    from analysis.cavity_occupancy_analysis import run_cavity_occupancy_analysis
+    run_cavity_occupancy_analysis(
+        u, ch2, analyzer.permeation_events,
+        asn_residues, glu_residues, subunit_groups,
+        channel_type=args.channel_type,
+        results_dir=results_dir,   # base RUN*/ dir — subfolder created automatically
+        start_frame=start_frame, end_frame=end_frame, frame_duration=frame_duration,
+        channel3=ch3, hbc_residues=hbc_residues,
+        channel1=ch1, sf_residues=sf_residues,
+    )
 
     # # from analysis.permeation_stage_times import run_permeation_stage_times_analysis
     # # run_permeation_stage_times_analysis(
@@ -1534,17 +1534,17 @@ def main():
     #     start_frame=start_frame,
     #     end_frame=end_frame,
     # )
-    from analysis.cavity_water_flux import run_cavity_water_flux
+    # from analysis.cavity_water_flux import run_cavity_water_flux
 
-    run_cavity_water_flux(
-        u=u,
-        channels=(ch1, ch2, ch3, ch4),
-        permeation_events=analyzer.permeation_events,
-        results_dir=results_dir,
-        start_frame=start_frame,
-        end_frame=end_frame,
-        frame_duration=frame_duration,
-    )
+    # run_cavity_water_flux(
+    #     u=u,
+    #     channels=(ch1, ch2, ch3, ch4),
+    #     permeation_events=analyzer.permeation_events,
+    #     results_dir=results_dir,
+    #     start_frame=start_frame,
+    #     end_frame=end_frame,
+    #     frame_duration=frame_duration,
+    # )
     # from analysis.cavity_water_residence import run_cavity_water_residence
 
     # run_cavity_water_residence(
@@ -1699,54 +1699,54 @@ def main():
 #        )
 
 
-#     from analysis.closest_residue_analysis import run_closest_residue_analysis
+    from analysis.closest_residue_analysis import run_closest_residue_analysis
 
-#     threshold=3
-#     closest_res_analyzer = run_closest_residue_analysis(
-#         universe=u,
-#         permeation_events=analyzer.permeation_events,
-#         asn_residues=asn_residues,
-#         glu_residues=glu_residues,
-#         channel_type=channel_type,
-#         threshold=threshold,
-#         analysis_start_frame=start_frame,
-#         residue_types=['ASN'],  # Only ASN
-#         results_dir=f"{results_dir}/closest_res/{threshold}"
-#     )  
+    threshold=3
+    closest_res_analyzer = run_closest_residue_analysis(
+        universe=u,
+        permeation_events=analyzer.permeation_events,
+        asn_residues=asn_residues,
+        glu_residues=glu_residues,
+        channel_type=channel_type,
+        threshold=threshold,
+        analysis_start_frame=start_frame,
+        residue_types=['ASN'],  # Only ASN
+        results_dir=f"{results_dir}/closest_res/{threshold}"
+    )  
 
-#     from analysis.longest_duration_analysis import run_last_duration_analysis
-    # threshold = 2.5
-    # min_duration = 3
+    from analysis.longest_duration_analysis import run_last_duration_analysis
+    threshold = 2.5
+    min_duration = 3
 
-#     # Run 1: RESIDUE-LEVEL
-#     run_last_duration_analysis(
-#         universe=u,
-#         permeation_events=analyzer.permeation_events,
-#         asn_residues=asn_residues,
-#         glu_residues=glu_residues,
-#         channel_type=channel_type,
-#         threshold=threshold,
-#         min_duration=min_duration,
-#         analysis_start_frame=start_frame,
-#         residue_types=['ASN', 'GLU'],
-#         subunit_groups=None,  # <-- Residue mode
-#         results_dir=f"{results_dir}/duration_residue/{threshold}_{min_duration}"
-#     )
+    # Run 1: RESIDUE-LEVEL
+    run_last_duration_analysis(
+        universe=u,
+        permeation_events=analyzer.permeation_events,
+        asn_residues=asn_residues,
+        glu_residues=glu_residues,
+        channel_type=channel_type,
+        threshold=threshold,
+        min_duration=min_duration,
+        analysis_start_frame=start_frame,
+        residue_types=['ASN', 'GLU'],
+        subunit_groups=None,  # <-- Residue mode
+        results_dir=f"{results_dir}/duration_residue/{threshold}_{min_duration}"
+    )
 
-#     # Run 2: SUBUNIT-LEVEL
-#     run_last_duration_analysis(
-#         universe=u,
-#         permeation_events=analyzer.permeation_events,
-#         asn_residues=asn_residues,
-#         glu_residues=glu_residues,
-#         channel_type=channel_type,
-#         threshold=threshold,
-#         min_duration=min_duration,
-#         analysis_start_frame=start_frame,
-#         residue_types=['ASN', 'GLU'],
-#         subunit_groups=subunit_groups,  # <-- Subunit mode
-#         results_dir=f"{results_dir}/duration_subunit/{threshold}_{min_duration}"
-#     )
+    # Run 2: SUBUNIT-LEVEL
+    run_last_duration_analysis(
+        universe=u,
+        permeation_events=analyzer.permeation_events,
+        asn_residues=asn_residues,
+        glu_residues=glu_residues,
+        channel_type=channel_type,
+        threshold=threshold,
+        min_duration=min_duration,
+        analysis_start_frame=start_frame,
+        residue_types=['ASN', 'GLU'],
+        subunit_groups=subunit_groups,  # <-- Subunit mode
+        results_dir=f"{results_dir}/duration_subunit/{threshold}_{min_duration}"
+    )
 
     # FIRST contact after leaving the SF (end_1 -> end_2, same window as the last contact)
     # from analysis.longest_duration_analysis import run_first_duration_analysis
