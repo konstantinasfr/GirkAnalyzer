@@ -1829,6 +1829,30 @@ def main():
     # )
 
 
+    # TOUCH -> NEXT STAY: first touch on the ASN/ASP ring, the next residue the ion stays on
+    # (stays as in the last/first-contact plots), split by GLUs occupied when it leaves the
+    # touched residue. window / min_duration: 2 frames for G2, 10 for G12 systems.
+    # -> touch_to_next_stay/ ; G12 systems also with stays >= 5 frames -> touch_to_next_stay/stay_5fr/
+    # (needs analyzer.permeation_events: the saved-state / IonPermeationAnalysis block above)
+    from analysis.touch_to_next_stay import run_touch_to_next_stay_analysis
+    stay_settings = [(None, "")] + ([(5, "stay_5fr")] if channel_type.startswith("G12") else [])
+    for min_duration, subdir in stay_settings:
+        run_touch_to_next_stay_analysis(
+            universe=u,
+            permeation_events=analyzer.permeation_events,
+            asn_residues=asn_residues,
+            glu_residues=glu_residues,
+            channel_type=channel_type,
+            run=run_number,
+            results_dir=results_dir,
+            frame_duration=frame_duration,
+            cutoff=3.5,
+            min_duration=min_duration,
+            analysis_start_frame=start_frame,
+            output_subdir=subdir,
+            force_rerun=False
+        )
+
 #     #  NEW: Add proximity analysis
 #     print("\n" + "="*70)
 #     print("RUNNING RESIDUE PROXIMITY ANALYSIS")
