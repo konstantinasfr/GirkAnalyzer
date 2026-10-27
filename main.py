@@ -1534,19 +1534,17 @@ def main():
     #     start_frame=start_frame,
     #     end_frame=end_frame,
     # )
+    from analysis.cavity_water_flux import run_cavity_water_flux
 
-    # from analysis.cavity_water_flux import run_cavity_water_flux
-
-    # run_cavity_water_flux(
-    #     u=u,
-    #     channels=(ch1, ch2, ch3, ch4),
-    #     permeation_events=analyzer.permeation_events,
-    #     results_dir=results_dir,
-    #     start_frame=start_frame,
-    #     end_frame=end_frame,
-    #     frame_duration=frame_duration,
-    # )
-
+    run_cavity_water_flux(
+        u=u,
+        channels=(ch1, ch2, ch3, ch4),
+        permeation_events=analyzer.permeation_events,
+        results_dir=results_dir,
+        start_frame=start_frame,
+        end_frame=end_frame,
+        frame_duration=frame_duration,
+    )
     # from analysis.cavity_water_residence import run_cavity_water_residence
 
     # run_cavity_water_residence(
@@ -1810,25 +1808,25 @@ def main():
     #         results_dir=f"{results_dir}/duration_lasttouch_{mode}/{threshold}_w{window}"
     #     )
 
-    # GLU / ASN OCCUPANCY AT SF EXIT: first touch (same rule as FIRST TOUCH) + which GLU and
-    # ASN/ASP residues have another K+ at <= threshold, at end_1, at the touch and around end_1
-    # (needs analyzer.permeation_events: the saved-state / IonPermeationAnalysis block above)
-    # window = 10    first touch in the first 10 frames after the SF -> glu_occupancy_exit/3.5_w10/
-    # window = None  no window: first touch anywhere in the cavity (end_1 to end_2) -> glu_occupancy_exit/3.5_no_w/
-    from analysis.glu_occupancy_at_exit import run_glu_occupancy_at_exit_analysis, settings_folder
-    threshold = 3.5
-    window = None
-    run_glu_occupancy_at_exit_analysis(
-        universe=u,
-        permeation_events=analyzer.permeation_events,
-        asn_residues=asn_residues,
-        glu_residues=glu_residues,
-        channel_type=channel_type,
-        threshold=threshold,
-        window=window,
-        analysis_start_frame=start_frame,
-        results_dir=f"{results_dir}/glu_occupancy_exit/{settings_folder(threshold, window)}"
-    )
+    # # GLU / ASN OCCUPANCY AT SF EXIT: first touch (same rule as FIRST TOUCH) + which GLU and
+    # # ASN/ASP residues have another K+ at <= threshold, at end_1, at the touch and around end_1
+    # # (needs analyzer.permeation_events: the saved-state / IonPermeationAnalysis block above)
+    # # window = 10    first touch in the first 10 frames after the SF -> glu_occupancy_exit/3.5_w10/
+    # # window = None  no window: first touch anywhere in the cavity (end_1 to end_2) -> glu_occupancy_exit/3.5_no_w/
+    # from analysis.glu_occupancy_at_exit import run_glu_occupancy_at_exit_analysis, settings_folder
+    # threshold = 3.5
+    # window = None
+    # run_glu_occupancy_at_exit_analysis(
+    #     universe=u,
+    #     permeation_events=analyzer.permeation_events,
+    #     asn_residues=asn_residues,
+    #     glu_residues=glu_residues,
+    #     channel_type=channel_type,
+    #     threshold=threshold,
+    #     window=window,
+    #     analysis_start_frame=start_frame,
+    #     results_dir=f"{results_dir}/glu_occupancy_exit/{settings_folder(threshold, window)}"
+    # )
 
 
 #     #  NEW: Add proximity analysis
