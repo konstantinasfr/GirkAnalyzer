@@ -42,19 +42,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
-from matplotlib.ticker import MaxNLocator
 
-from aggregate_duration_results import COLOR_MAP, TYPE_ORDER, NO_CONTACT_COLOR, ONE_LETTER, run_sort_key
-from analysis.touch_to_next_stay import OUT, NOT_LOWER
+from aggregate_duration_results import run_sort_key
+from analysis.touch_to_next_stay import (NOT_LOWER, CLASSES, N_GLU, bar_labels, pooled_counts,
+                                         per_run_pct, write_plots)
 
 
 SYSTEM_NAMES = {'G12': 'WT', 'G12_E141Q': 'E141Q', 'G12_D173N': 'D173N', 'G2': 'G2'}
-CLASSES = ['ASP', 'ASN']
-N_GLU = range(5)                       # 0-4 GLUs occupied
 KINDS = ['pooled', 'per_run']
 
 
@@ -91,182 +85,6 @@ def load_system(base, subdir):
     if not settings:
         raise SystemExit(f"No settings_run*.json next to the CSVs in {base}/RUN*/touch_to_next_stay/{subdir}")
     return pd.concat(frames, ignore_index=True), settings[0]
-
-
-def bar_labels(settings):
-    """The 9 bars: GLU ring, then the ASN/ASP ring (ASN before ASP), then out; and their types."""
-    ring = settings['ring_residues']
-    glu = sorted((r for r in ring if r['ring'] == 'GLU'), key=lambda r: r['pdb'])
-    low = sorted((r for r in ring if r['ring'] == 'ASN'),
-                 key=lambda r: (TYPE_ORDER.index(r['residue_type']) if r['residue_type'] in TYPE_ORDER
-                                else len(TYPE_ORDER), r['pdb']))
-    labels = [r['pdb'] for r in glu + low] + [OUT]
-    types = {r['pdb']: r['residue_type'] for r in glu + low}
-    types[OUT] = OUT
-    glu_name = '/'.join(sorted({r['residue_type'] for r in glu}))
-    return labels, types, glu_name
-
-
-def rule_text(s):
-    fd = s['frame_duration']
-    touch = ("first touch anywhere in the cavity (end_1 → end_2)" if s['window'] is None
-             else f"first-touch window {s['window']} fr ({s['window'] * fd:g} ns)")
-    return f"cutoff {s['cutoff']} Å · {touch} · stay ≥ {s['min_duration']} fr ({s['min_duration'] * fd:g} ns)"
-
-
-# ----------------------------------------------------------------------
-# Numbers
-# ----------------------------------------------------------------------
-
-def pooled_counts(sub, labels):
-    return np.array([int((sub['next_stay_residue'] == l).sum()) for l in labels])
-
-
-def per_run_pct(sub, labels):
-    """DataFrame run x label of % of the run's events in this panel (runs with none left out)."""
-    if sub.empty:
-        return pd.DataFrame(columns=labels)
-    counts = sub.groupby(['run', 'next_stay_residue']).size().unstack(fill_value=0)
-    counts = counts.reindex(columns=labels, fill_value=0)
-    counts = counts.loc[sorted(counts.index, key=run_sort_key)]
-    return 100.0 * counts.div(counts.sum(axis=1), axis=0)
-
-
-# ----------------------------------------------------------------------
-# Plots (style of create_bar_plot / aggregate_duration_results.py)
-# ----------------------------------------------------------------------
-
-def _style(ax):
-    ax.grid(True, alpha=0.25, axis='y', zorder=0)
-    ax.set_axisbelow(True)
-    for spine in ['top', 'right']:
-        ax.spines[spine].set_visible(False)
-    for spine in ['left', 'bottom']:
-        ax.spines[spine].set_linewidth(1.1)
-
-
-def _tick(label, types):
-    return label if label == OUT else f"{ONE_LETTER.get(types[label], '')}{label}"
-
-
-def _color(label, types):
-    return NO_CONTACT_COLOR if label == OUT else COLOR_MAP.get(types[label], COLOR_MAP['Unknown'])
-
-
-def legend_handles(labels, types):
-    present = {types[l] for l in labels if l != OUT}
-    handles = [Patch(facecolor=COLOR_MAP[t], edgecolor='black', label=t) for t in TYPE_ORDER if t in present]
-    handles.append(Patch(facecolor=NO_CONTACT_COLOR, edgecolor='black', hatch='//', label='out (no stay)'))
-    return handles
-
-
-def draw_panel(ax, sub, kind, labels, types, title, small=False):
-    """One panel: the 9 next-stay bars of the events in `sub`."""
-    fs = {'text': 10 if small else 13, 'tick': 12 if small else 16, 'axis': 13 if small else 18,
-          'title': 13 if small else 16}
-    x = np.arange(len(labels))
-    n_events, n_runs = len(sub), sub['run'].nunique()
-    colors = [_color(l, types) for l in labels]
-
-    if kind == 'pooled':
-        counts = pooled_counts(sub, labels)
-        bars = ax.bar(x, counts, color=colors, alpha=0.85, edgecolor='black', linewidth=1.2,
-                      width=0.65, zorder=3)
-        top = max(int(counts.max()), 1)
-        ax.set_ylim(0, top * 1.35)
-        for bar, c in zip(bars, counts):
-            text = f"{c}\n({100.0 * c / n_events:.0f}%)" if n_events else "0"
-            ax.text(bar.get_x() + bar.get_width() / 2., c + top * 0.03, text, ha='center', va='bottom',
-                    fontsize=fs['text'], fontweight='bold', zorder=4)
-        ax.set_ylabel('Number of events', fontsize=fs['axis'], fontweight='bold')
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-        n_text = f"n = {n_events} events, {n_runs} runs"
-    else:
-        pct = per_run_pct(sub, labels)
-        means = pct.mean(axis=0).reindex(labels).fillna(0).values
-        sems = (pct.std(axis=0, ddof=1) / np.sqrt(len(pct))).reindex(labels).fillna(0).values \
-            if len(pct) > 1 else np.zeros(len(labels))
-        bars = ax.bar(x, means, yerr=sems, capsize=5 if small else 6, color=colors, alpha=0.85,
-                      edgecolor='black', linewidth=1.2, width=0.65, zorder=3,
-                      error_kw={'elinewidth': 1.4, 'zorder': 4})
-        rng = np.random.default_rng(0)
-        for i, l in enumerate(labels):
-            ax.scatter(i + rng.uniform(-0.18, 0.18, len(pct)), pct[l].values, s=18 if small else 26,
-                       color='black', alpha=0.65, zorder=5, linewidths=0)
-        top = max(float(pct.values.max()) if len(pct) else 0.0, 1.0)
-        ax.set_ylim(0, top * 1.25)
-        for bar, m, e in zip(bars, means, sems):
-            if len(pct):
-                ax.text(bar.get_x() + bar.get_width() / 2., top * 1.22, f"{m:.0f}±{e:.0f}",
-                        ha='center', va='top', fontsize=fs['text'] - 1, fontweight='bold', zorder=6)
-        ax.set_ylabel('% of events in a run', fontsize=fs['axis'], fontweight='bold')
-        n_text = f"n = {n_events} events, {len(pct)} runs"
-    bars[-1].set_hatch('//')
-
-    if n_events == 0:
-        ax.text(0.5, 0.5, 'no events', transform=ax.transAxes, ha='center', va='center',
-                fontsize=fs['title'], fontweight='bold', color='0.4')
-    ax.set_xticks(x)
-    ax.set_xticklabels([_tick(l, types) for l in labels], fontsize=fs['tick'], fontweight='bold',
-                       rotation=40, ha='right')
-    ax.set_xlabel('Next stay', fontsize=fs['axis'], fontweight='bold')
-    ax.tick_params(axis='y', labelsize=fs['tick'] - 2)
-    ax.set_title(f"{title}\n({n_text})", fontsize=fs['title'], fontweight='bold', pad=12)
-    _style(ax)
-
-
-def kind_text(kind):
-    return ("pooled: every event counted once" if kind == 'pooled'
-            else "per run: mean ± SEM of % per run, dots = runs")
-
-
-def _save(fig, output_file):
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"✓ Plot saved: {output_file}")
-
-
-def figure_overall(df, kind, labels, types, head, rule, output_file):
-    plt.rcParams['font.family'] = 'DejaVu Sans'
-    fig, axes = plt.subplots(1, 2, figsize=(22, 7.5))
-    for ax, cls in zip(axes, CLASSES):
-        draw_panel(ax, df[df['first_touch_class'] == cls], kind, labels, types, f"First touch = {cls}")
-    axes[-1].legend(handles=legend_handles(labels, types), loc='upper left', bbox_to_anchor=(1.01, 1.0),
-                    fontsize=13, frameon=True, framealpha=0.9)
-    fig.suptitle(f"{head}: next stay after the first touch on the lower ring ({kind_text(kind)})\n{rule}",
-                 fontsize=18, fontweight='bold')
-    plt.tight_layout()
-    _save(fig, output_file)
-
-
-def figure_by_occupancy(df, cls, kind, labels, types, glu_name, head, rule, output_file, single_dir):
-    sub_cls = df[df['first_touch_class'] == cls]
-    plt.rcParams['font.family'] = 'DejaVu Sans'
-    fig, axes = plt.subplots(2, 3, figsize=(24, 13))
-    for k, ax in zip(N_GLU, axes.flat):
-        draw_panel(ax, sub_cls[sub_cls['n_glu_occupied'] == k], kind, labels, types,
-                   f"{k} {glu_name} occupied", small=True)
-    legend_ax = axes.flat[-1]
-    legend_ax.axis('off')
-    legend_ax.legend(handles=legend_handles(labels, types), loc='center', fontsize=14, frameon=True,
-                     title=f"First touch = {cls}\nn = {len(sub_cls)} events\n\nNext stay",
-                     title_fontsize=14)
-    fig.suptitle(f"{head}: next stay after first touch = {cls}, by {glu_name} occupied "
-                 f"when the ion leaves {cls} ({kind_text(kind)})\n{rule}",
-                 fontsize=17, fontweight='bold')
-    plt.tight_layout()
-    _save(fig, output_file)
-
-    single_dir.mkdir(parents=True, exist_ok=True)
-    for k in N_GLU:
-        fig, ax = plt.subplots(figsize=(11, 7))
-        draw_panel(ax, sub_cls[sub_cls['n_glu_occupied'] == k], kind, labels, types,
-                   f"{head}: first touch = {cls}, {k} {glu_name} occupied at leaving\n"
-                   f"{rule}\n{kind_text(kind)}")
-        ax.legend(handles=legend_handles(labels, types), loc='upper left', bbox_to_anchor=(1.01, 1.0),
-                  fontsize=12, frameon=True, framealpha=0.9)
-        plt.tight_layout()
-        _save(fig, single_dir / f"{cls.lower()}_{k}glu_occupied_{kind}.png")
 
 
 # ----------------------------------------------------------------------
@@ -324,17 +142,11 @@ def aggregate(base, subdir, channel_type=None, output_dir=None):
         occ = sub['n_glu_occupied'].value_counts()
         print(f"  {cls} by GLUs occupied: " + ", ".join(f"{k}: {occ.get(k, 0)}" for k in N_GLU))
 
-    labels, types, glu_name = bar_labels(settings)
+    labels, types, _ = bar_labels(settings)
     unknown = set(df.loc[df['first_touch_class'].isin(CLASSES), 'next_stay_residue']) - set(labels)
     if unknown:
         print(f"  ⚠ next stays not on the 9 bars (left out of the plots): {sorted(unknown)}")
-    rule = rule_text(settings)
-    for kind in KINDS:
-        figure_overall(df, kind, labels, types, head, rule, output_dir / f"fig1_next_stay_overall_{kind}.png")
-        for fig_no, cls in ((2, 'ASP'), (3, 'ASN')):
-            figure_by_occupancy(df, cls, kind, labels, types, glu_name, head, rule,
-                                output_dir / f"fig{fig_no}_{cls.lower()}_by_glu_occupancy_{kind}.png",
-                                output_dir / f"{cls.lower()}_by_glu_occupancy")
+    write_plots(df, settings, head, output_dir, KINDS)
     write_tables(df, labels, types, output_dir)
 
 
