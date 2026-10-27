@@ -23,15 +23,17 @@ Tables:
     counts_pooled.csv   one row per panel and bar: count, % of the panel
     per_run.csv         one row per run, panel and bar: count, % of the run's events in the panel
 
-Input:  <base>/RUN*/touch_to_next_stay/[<subdir>/]touch_to_next_stay_run*.csv (+ settings_run*.json)
-Output: <base>/aggregated_touch_to_next_stay/[<subdir>/]
+Input:  <base>/RUN*/touch_to_next_stay/<settings>/touch_to_next_stay_run*.csv (+ settings_run*.json)
+Output: <base>/aggregated_touch_to_next_stay/<settings>/
+<settings>: t<cutoff>_w<window>_d<min_duration>, e.g. t3.5_wno_d10 (no first-touch window,
+stays >= 10 frames), t3.5_wno_d5, t3.5_w10_d10
 
 USAGE
 -----
     python3 aggregate_touch_to_next_stay.py /path/girk_analyser_results/G12 \\
         /path/girk_analyser_results/G12_E141Q /path/girk_analyser_results/G12_D173N \\
         /path/girk_analyser_results/G2
-Each folder is aggregated on its own, with and without stay_5fr/ (when present).
+Each system folder is aggregated on its own, for every <settings> folder found in its runs.
 """
 
 import json
@@ -53,13 +55,18 @@ from analysis.touch_to_next_stay import OUT, NOT_LOWER
 SYSTEM_NAMES = {'G12': 'WT', 'G12_E141Q': 'E141Q', 'G12_D173N': 'D173N', 'G2': 'G2'}
 CLASSES = ['ASP', 'ASN']
 N_GLU = range(5)                       # 0-4 GLUs occupied
-SUBDIRS = ['', 'stay_5fr']
 KINDS = ['pooled', 'per_run']
 
 
 # ----------------------------------------------------------------------
 # Loading
 # ----------------------------------------------------------------------
+
+def settings_folders(base):
+    """Every touch_to_next_stay/<settings>/ folder name found in the runs of one system."""
+    return sorted({d.name for run_dir in Path(base).glob("RUN*")
+                   for d in (run_dir / "touch_to_next_stay").glob("t*_w*_d*") if d.is_dir()})
+
 
 def load_system(base, subdir):
     """(events DataFrame, settings of the first run) of every RUN*, or (None, None)."""
@@ -102,8 +109,9 @@ def bar_labels(settings):
 
 def rule_text(s):
     fd = s['frame_duration']
-    return (f"cutoff {s['cutoff']} Å · first-touch window {s['window']} fr ({s['window'] * fd:g} ns) · "
-            f"stay ≥ {s['min_duration']} fr ({s['min_duration'] * fd:g} ns)")
+    touch = ("first touch anywhere in the cavity (end_1 → end_2)" if s['window'] is None
+             else f"first-touch window {s['window']} fr ({s['window'] * fd:g} ns)")
+    return f"cutoff {s['cutoff']} Å · {touch} · stay ≥ {s['min_duration']} fr ({s['min_duration'] * fd:g} ns)"
 
 
 # ----------------------------------------------------------------------
@@ -334,14 +342,15 @@ def main():
     parser = argparse.ArgumentParser(description="Aggregate touch_to_next_stay results over runs, per system")
     parser.add_argument("base_directories", nargs='+',
                         help="System folders containing RUN* (e.g. .../G12 .../G12_E141Q .../G12_D173N .../G2)")
-    parser.add_argument("--subdir", default=None,
-                        help="Only this results sub-folder ('' for the main one, or stay_5fr); "
-                             "default: both, where present")
+    parser.add_argument("--settings", default=None,
+                        help="Only this settings folder (e.g. t3.5_wno_d10); default: every one found")
     parser.add_argument("--channel_type", default=None,
                         help="Name for the titles when only one folder is given (default: folder name)")
     args = parser.parse_args()
-    subdirs = SUBDIRS if args.subdir is None else [args.subdir]
     for base in args.base_directories:
+        subdirs = settings_folders(base) if args.settings is None else [args.settings]
+        if not subdirs:
+            print(f"\n{base}: no RUN*/touch_to_next_stay/t*_w*_d*/ results")
         for subdir in subdirs:
             aggregate(base, subdir, args.channel_type if len(args.base_directories) == 1 else None)
 

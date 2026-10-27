@@ -9,6 +9,8 @@ Everything except the leaving frame is computed by existing code:
 
     first touch   FirstTouchAnalysis (longest_duration_analysis.py), residue
                   mode, threshold = cutoff, first `window` frames after end_1
+                  (no_window=True: anywhere from end_1 to end_2, the same search
+                  as glu_occupancy_at_exit.py with window=None)
     stays         LastAndLongestDurationAnalysis.find_last_and_longest_duration
                   (ion_id, end_2, end_1)['all_durations']: every stay of
                   >= min_duration frames between end_1 and end_2, the same
@@ -31,7 +33,8 @@ Per permeation event:
 window and min_duration default to 2 frames for G2 and 10 frames for G12
 systems (default_frames).
 
-Results (results_dir/touch_to_next_stay/, or .../touch_to_next_stay/<output_subdir>/):
+Results (results_dir/touch_to_next_stay/<settings_folder>/, e.g. t3.5_wno_d10 = cutoff 3.5 Å,
+no first-touch window, stays >= 10 frames; t3.5_w10_d10 with a 10-frame window):
     touch_to_next_stay_run<run>.csv   one row per event
     settings_run<run>.json            cutoff, window, min_duration, frame_duration,
                                       ring residues and the first-touch count check
@@ -60,6 +63,11 @@ LEAVE_CHUNK = 50                         # frames read at a time while following
 def default_frames(channel_type):
     """First-touch window and minimum stay: 2 frames for G2, 10 for the G12 systems."""
     return 2 if str(channel_type).upper().startswith('G2') else 10
+
+
+def settings_folder(cutoff, window, min_duration):
+    """'t3.5_wno_d10': cutoff, first-touch window (no = none) and minimum stay in frames."""
+    return f"t{cutoff:g}_w{'no' if window is None else window}_d{min_duration}"
 
 
 def csv_name(run):
@@ -93,22 +101,28 @@ def next_stay(stays, touch_frame):
 
 def check_first_touch(touch_results, results_dir, cutoff, window):
     """
-    Compare the first touch of every event with the saved FirstTouchAnalysis
-    results at the same settings (duration_touch_residue/<cutoff>_w<window>/),
-    if they exist. Returns a dict for settings_run<run>.json.
+    Compare the first touch of every event with saved results at the same
+    settings, if they exist: FirstTouchAnalysis (duration_touch_residue/
+    <cutoff>_w<window>/), or without a window (window=None) the GLU/ASN
+    occupancy-at-exit analysis (glu_occupancy_exit/<cutoff>_no_w/).
+    Returns a dict for settings_run<run>.json.
     """
+    if window is None:
+        where = "glu_occupancy_exit/{t}_no_w/glu_occupancy_exit_complete.json"
+    else:
+        where = f"duration_touch_residue/{{t}}_w{window}/touch_duration_residue.json"
     found = None
     for t in dict.fromkeys((str(cutoff), f"{cutoff:g}")):
-        f = Path(results_dir) / "duration_touch_residue" / f"{t}_w{window}" / "touch_duration_residue.json"
+        f = Path(results_dir) / where.format(t=t)
         if f.exists():
             found = f
             break
     if found is None:
-        print(f"  First-touch check: no saved FirstTouchAnalysis results at {cutoff} Å, w{window} "
-              f"(duration_touch_residue/{cutoff}_w{window}/) - not compared")
+        print(f"  First-touch check: no saved results at {where.format(t=cutoff)} - not compared")
         return {'compared_with': None}
     with open(found) as fh:
-        saved = {(int(e['ion_id']), int(e['end_2_frame'])): (e['identifier'], e.get('touch_frame'))
+        saved = {(int(e['ion_id']), int(e['end_2_frame'])):
+                 (e.get('identifier', e.get('touch_identifier')), e.get('touch_frame'))
                  for e in json.load(fh)['results']}
     mismatches = []
     for r in touch_results:
@@ -132,13 +146,14 @@ def run_touch_to_next_stay_analysis(universe, permeation_events, asn_residues, g
                                     channel_type="G12", run=1, results_dir=".", frame_duration=0.075,
                                     cutoff=3.5, window=None, min_duration=None,
                                     analysis_start_frame=0, ion_selection=ION_SELECTION,
-                                    output_subdir="", force_rerun=False):
+                                    no_window=False, force_rerun=False):
     """
     First touch on the lower ring -> next stay, with the number of occupied
     GLUs when the ion leaves the touched residue. See the module docstring.
 
     window / min_duration : frames; None = default_frames(channel_type)
-    output_subdir         : e.g. "stay_5fr" for the min_duration=5 sensitivity run
+    no_window             : first touch anywhere from end_1 to end_2 (window ignored)
+    Results go to results_dir/touch_to_next_stay/<settings_folder(cutoff, window, min_duration)>/
     results_dir           : the run's results folder (RUN<run>/)
 
     Call from main.py:
@@ -146,10 +161,10 @@ def run_touch_to_next_stay_analysis(universe, permeation_events, asn_residues, g
         run_touch_to_next_stay_analysis(u, analyzer.permeation_events, asn_residues, glu_residues,
                                         channel_type, run_number, results_dir, frame_duration)
     """
-    window = default_frames(channel_type) if window is None else int(window)
+    window = None if no_window else default_frames(channel_type) if window is None else int(window)
     min_duration = default_frames(channel_type) if min_duration is None else int(min_duration)
     results_dir = Path(results_dir)
-    output_dir = results_dir / "touch_to_next_stay" / output_subdir
+    output_dir = results_dir / "touch_to_next_stay" / settings_folder(cutoff, window, min_duration)
     out_csv = output_dir / csv_name(run)
     if out_csv.exists() and not force_rerun:
         print(f"  {out_csv} already exists - skipping (use force_rerun=True to overwrite).")
@@ -157,13 +172,16 @@ def run_touch_to_next_stay_analysis(universe, permeation_events, asn_residues, g
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n" + "=" * 80)
-    print(f"TOUCH -> NEXT STAY (cutoff {cutoff} Å, first-touch window {window} fr, "
-          f"stay >= {min_duration} fr)")
+    print(f"TOUCH -> NEXT STAY (cutoff {cutoff} Å, "
+          + ("first touch anywhere end_1 -> end_2" if no_window else f"first-touch window {window} fr")
+          + f", stay >= {min_duration} fr)")
     print("=" * 80)
 
-    # 1. first touch: the existing analysis, residue mode, both rings compete
+    # 1. first touch: the existing analysis, residue mode, both rings compete.
+    # No window: a window longer than the trajectory, so the search runs end_1+1 ... end_2
     touch = FirstTouchAnalysis(universe, permeation_events, asn_residues, glu_residues,
-                               channel_type, threshold=cutoff, window=window,
+                               channel_type, threshold=cutoff,
+                               window=len(universe.trajectory) if no_window else window,
                                analysis_start_frame=analysis_start_frame,
                                residue_types=['ASN', 'GLU'], subunit_groups=None,
                                results_dir=output_dir)
