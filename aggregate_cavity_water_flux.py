@@ -349,3 +349,9 @@ if __name__ == "__main__":
 
     run_aggregate_flux(args.base_dir, args.output_dir, args.channel_type,
                        _parse_runs(args.runs) if args.runs else None)
+
+
+'''
+python3 aggregate_cavity_water_flux.py --base_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 --channel_type G12
+python3 aggregate_cavity_water_flux.py --base_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2 --channel_type G2
+'''

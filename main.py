@@ -886,42 +886,42 @@ def main():
     #     force_rerun       = False,
     # )
 
-    from analysis.permeation_ion_table import run_permeation_ion_table
+    # from analysis.permeation_ion_table import run_permeation_ion_table
 
-    run_permeation_ion_table(
-        universe          = u,
-        permeation_events = analyzer.permeation_events,
-        glu_residues      = glu_residues,
-        asn_residues      = asn_residues,
-        results_dir       = results_dir,
-        channel_type      = channel_type,
-        frame_duration    = frame_duration,
-        start_frame       = start_frame,
-        end_frame         = end_frame,
-        cutoff            = 3.5,
-        run               = run_number,
-        force_rerun       = False,
-    )
+    # run_permeation_ion_table(
+    #     universe          = u,
+    #     permeation_events = analyzer.permeation_events,
+    #     glu_residues      = glu_residues,
+    #     asn_residues      = asn_residues,
+    #     results_dir       = results_dir,
+    #     channel_type      = channel_type,
+    #     frame_duration    = frame_duration,
+    #     start_frame       = start_frame,
+    #     end_frame         = end_frame,
+    #     cutoff            = 3.5,
+    #     run               = run_number,
+    #     force_rerun       = False,
+    # )
 
-    from analysis.permeation_ion_stats import run_permeation_ion_stats
+    # from analysis.permeation_ion_stats import run_permeation_ion_stats
 
-    run_permeation_ion_stats(
-        results_dir    = results_dir,
-        channel_type   = channel_type,
-        frame_duration = frame_duration,
-        run            = run_number,
-        force_rerun    = False,
-    )
+    # run_permeation_ion_stats(
+    #     results_dir    = results_dir,
+    #     channel_type   = channel_type,
+    #     frame_duration = frame_duration,
+    #     run            = run_number,
+    #     force_rerun    = False,
+    # )
 
-    from analysis.permeation_correlation import run_permeation_correlation
+    # from analysis.permeation_correlation import run_permeation_correlation
 
-    run_permeation_correlation(
-        results_dir    = results_dir,
-        channel_type   = channel_type,
-        frame_duration = frame_duration,
-        run            = run_number,
-        force_rerun    = False,
-    )
+    # run_permeation_correlation(
+    #     results_dir    = results_dir,
+    #     channel_type   = channel_type,
+    #     frame_duration = frame_duration,
+    #     run            = run_number,
+    #     force_rerun    = False,
+    # )
 
     # from analysis.permeation_ion_combinations import run_permeation_combinations
 
@@ -1534,17 +1534,17 @@ def main():
     #     start_frame=start_frame,
     #     end_frame=end_frame,
     # )
-    # from analysis.cavity_water_flux import run_cavity_water_flux
+    from analysis.cavity_water_flux import run_cavity_water_flux
 
-    # run_cavity_water_flux(
-    #     u=u,
-    #     channels=(ch1, ch2, ch3, ch4),
-    #     permeation_events=analyzer.permeation_events,
-    #     results_dir=results_dir,
-    #     start_frame=start_frame,
-    #     end_frame=end_frame,
-    #     frame_duration=frame_duration,
-    # )
+    run_cavity_water_flux(
+        u=u,
+        channels=(ch1, ch2, ch3, ch4),
+        permeation_events=analyzer.permeation_events,
+        results_dir=results_dir,
+        start_frame=start_frame,
+        end_frame=end_frame,
+        frame_duration=frame_duration,
+    )
     # from analysis.cavity_water_residence import run_cavity_water_residence
 
     # run_cavity_water_residence(
