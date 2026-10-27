@@ -34,6 +34,10 @@ What it produces   <output_dir>  (default <base_dir>/water_analysis/cavity_water
 7. residence_box_<CH>.png                 pooled boxplot per region
 8. residence_box_per_run_<CH>.png         one panel per region, one box per run
 9. cavity_water_budget_<CH>.png           where the cavity's net water gain came from
+10. cavity_water_overview_<CH>.png        the whole story on one sheet: a pore diagram
+                                          with in / out / net waters at every boundary
+                                          (mean per run), and the cavity's net gain over
+                                          time split by source (mean over runs)
 
 Cavity water budget
 -------------------
@@ -287,6 +291,8 @@ def run_aggregate_flux(base_dir, output_dir=None, channel_type="G12", runs=None)
                       f"{ch}: water residence per run (◇ = mean)")
     _plot_cavity_budget(rows, out_dir / f"cavity_water_budget_{ch}.png",
                         f"{ch}: where the cavity's net water gain came from")
+    _plot_cavity_overview(rows, data, fd, out_dir / f"cavity_water_overview_{ch}.png",
+                          f"{ch}: water in the cavity ({len(rows)} runs)")
 
     print(f"  ✅ All outputs in: {out_dir}")
     return result
@@ -350,6 +356,121 @@ def _plot_net_per_run(rows, out_path, title):
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"  ✅ Saved: {out_path}")
+
+
+def _plot_cavity_overview(rows, data, frame_duration, out_path, title):
+    fig = plt.figure(figsize=(16, 8))
+    gs = fig.add_gridspec(2, 2, width_ratios=[1, 1.35], height_ratios=[1.6, 1])
+    _draw_pore(fig.add_subplot(gs[:, 0]), rows)
+    _draw_gain_over_time(fig.add_subplot(gs[0, 1]), fig.add_subplot(gs[1, 1]),
+                         data, frame_duration)
+    fig.suptitle(title, fontsize=15, fontweight="bold")
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  ✅ Saved: {out_path}")
+
+
+def _draw_pore(ax, rows):
+    """
+    Pore diagram: SF, cavity (split by the ASN ring), below the HBC. Each
+    boundary shows waters in / out / net, as the mean per run. Arrow width
+    follows |net|, arrow direction is the direction of the net movement.
+    """
+    from matplotlib.patches import Rectangle, FancyArrowPatch
+
+    def mean(k):
+        return float(np.mean([r[k] for r in rows]))
+
+    net_sf = mean("sf_in") - mean("sf_back")             # + = into the cavity
+    net_hbc = mean("hbc_back") - mean("hbc_out")         # + = into the cavity
+    net_side = mean("side_in") - mean("side_out")        # + = into the cavity
+    net_asn = mean("asn_down") - mean("asn_up")          # + = downward
+    gain = net_sf + net_hbc + net_side
+    nmax = max(abs(net_sf), abs(net_hbc), abs(net_side), abs(net_asn), 1e-9)
+
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 10.6)
+    ax.axis("off")
+
+    ax.add_patch(Rectangle((4.3, 7.4), 1.4, 1.6, color=RES_COLORS["SF"], alpha=0.35))
+    ax.add_patch(Rectangle((2.2, 3.4), 5.6, 3.6, color="#90CAF9", alpha=0.35))
+    ax.add_patch(Rectangle((2.2, 0.4), 5.6, 2.6, color="#A5D6A7", alpha=0.35))
+    ax.plot([2.2, 7.8], [5.2, 5.2], color="#FB8C00", linestyle="--", linewidth=1.5)
+    ax.plot([2.2, 7.8], [3.2, 3.2], color="#2E7D32", linewidth=3)
+    ax.text(5, 8.2, "SF", ha="center", va="center", fontsize=12, fontweight="bold")
+    ax.text(5, 9.9, "above the SF", ha="center", fontsize=11, color="#555555")
+    ax.text(2.35, 6.65, "GLU/ASN", fontsize=10, color="#1565C0")
+    ax.text(2.35, 3.6, "ASN/HBC", fontsize=10, color="#1565C0")
+    ax.text(7.75, 5.32, "ASN ring", fontsize=9, ha="right", color="#E65100")
+    ax.text(2.35, 2.75, "HBC gate", fontsize=9, ha="left", va="top", color="#2E7D32")
+    ax.text(5, 1.4, "below the HBC", ha="center", fontsize=11, color="#555555")
+    ax.text(5, 6.2, f"cavity gains\n{gain:+.0f} waters per run",
+            ha="center", va="center", fontsize=13, fontweight="bold")
+
+    def arrow(x0, y0, x1, y1, net, color):
+        width = 1.5 + 10 * abs(net) / nmax
+        if net < 0:
+            x0, y0, x1, y1 = x1, y1, x0, y0
+        ax.add_patch(FancyArrowPatch((x0, y0), (x1, y1), arrowstyle="-|>",
+                                     mutation_scale=12 + width, linewidth=width,
+                                     color=color, alpha=0.85))
+
+    def label(x, y, inn, out, net, ha, what_in="in", what_out="out"):
+        ax.text(x, y, f"{what_in} {inn:,.0f}\n{what_out} {out:,.0f}\nnet {net:+.1f}",
+                ha=ha, va="center", fontsize=10,
+                bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.85,
+                      "edgecolor": "#BDBDBD"})
+
+    arrow(5, 7.45, 5, 6.55, net_sf, "#1E88E5")             # down = into the cavity
+    label(5.9, 7.0, mean("sf_in"), mean("sf_back"), net_sf, "left")
+    arrow(5, 2.55, 5, 3.85, net_hbc, "#43A047")            # up = into the cavity
+    label(5.9, 2.2, mean("hbc_back"), mean("hbc_out"), net_hbc, "left")
+    arrow(0.7, 5.2, 2.15, 5.2, net_side, "#757575")        # right = into the cavity
+    label(0.1, 6.6, mean("side_in"), mean("side_out"), net_side, "left")
+    ax.text(1.4, 4.75, "sides", ha="center", fontsize=9, color="#757575")
+    arrow(8.4, 5.9, 8.4, 4.5, net_asn, "#FB8C00")           # down = downward
+    label(8.65, 5.2, mean("asn_down"), mean("asn_up"), net_asn, "left",
+          what_in="down", what_out="up")
+
+    ax.text(5, 0.05, "in / out = waters entering / leaving the cavity across that "
+            "boundary, mean per run\narrow = direction of the net movement, width = its size",
+            ha="center", va="bottom", fontsize=9, color="#555555")
+
+
+def _draw_gain_over_time(ax, ax_zoom, data, frame_duration):
+    """
+    Net waters gained by the cavity since the first frame, per source, mean
+    over runs (band = ±1 std). Black = the cavity count itself; the three
+    sources add up to it. Bottom: the first part of the runs, enlarged.
+    """
+    runs = list(data.values())
+    n = min(len(d["frame_indices"]) for d in runs)
+    t = np.arange(n) * frame_duration
+
+    curves = {}
+    for src, (i, o) in CAVITY_SOURCES.items():
+        curves[src] = np.array([np.cumsum(d["counts"][i][:n] - d["counts"][o][:n])
+                                for d in runs])
+    cav = np.array([d["n_in_region"]["GLU/HBC"][:n] - d["n_in_region"]["GLU/HBC"][0]
+                    for d in runs])
+
+    zoom = max(2, min(n, int(round(min(25.0, 0.1 * t[-1]) / frame_duration))))
+    for a, sl in ((ax, slice(None)), (ax_zoom, slice(0, zoom))):
+        for src, c in curves.items():
+            m, sd = c.mean(axis=0)[sl], c.std(axis=0)[sl]
+            a.plot(t[sl], m, color=SOURCE_COLORS[src], linewidth=1.8, label=src)
+            a.fill_between(t[sl], m - sd, m + sd, color=SOURCE_COLORS[src], alpha=0.15)
+        a.plot(t[sl], cav.mean(axis=0)[sl], color="black", linewidth=2, linestyle="--",
+               label="cavity water count (change since first frame) = sum of the three")
+        a.axhline(0, color="black", linewidth=0.8)
+        a.grid(linestyle=":", linewidth=0.5, alpha=0.6)
+        a.set_ylabel("net waters gained", fontsize=11)
+    ax.set_title("When does the cavity gain its water? (mean over runs, band = ±1 std)",
+                 fontsize=12)
+    ax.legend(fontsize=9, loc="upper left")
+    ax_zoom.set_title(f"first {t[zoom - 1]:.0f} ns, enlarged", fontsize=11)
+    ax_zoom.set_xlabel("time since the first frame (ns)", fontsize=11)
 
 
 def _plot_cavity_budget(rows, out_path, title):
