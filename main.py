@@ -740,54 +740,54 @@ def main():
     #     except SaltBridgeCheckError:
     #         raise SystemExit("Salt bridge diagnostics failed - see the message above.")
     
-    # ch1 = Channel(u, upper1, lower1, num=1, radius=2.5)
-    # ch2 = Channel(u, upper2, lower2, num=2, radius=15.0)
-    # ch3 = Channel(u, upper3, lower3, num=3, radius=15.0)
-    # ch4 = Channel(u, upper4, lower4, num=4, radius=10.0)
+    ch1 = Channel(u, upper1, lower1, num=1, radius=2.5)
+    ch2 = Channel(u, upper2, lower2, num=2, radius=15.0)
+    ch3 = Channel(u, upper3, lower3, num=3, radius=15.0)
+    ch4 = Channel(u, upper4, lower4, num=4, radius=10.0)
 
  # ========== TRY TO LOAD SAVED STATE ==========
-    # saved_state = load_analyzer_state(results_dir)
+    saved_state = load_analyzer_state(results_dir)
     
-    # if saved_state is not None:
+    if saved_state is not None:
         # Use saved state - SKIP trajectory analysis
-        # print("\n" + "="*80)
-        # print("USING SAVED ANALYZER STATE")
-        # print("="*80)
+        print("\n" + "="*80)
+        print("USING SAVED ANALYZER STATE")
+        print("="*80)
         
-        # analyzer = restore_analyzer_from_state(
-            # u, saved_state, results_dir, ch1, ch2, ch3, ch4,
-            # hbc_residues, hbc_diagonal_pairs,
-            # sf_low_res_residues, sf_low_res_diagonal_pairs,
-            # upper_gl_residues, upper_gl_diagonal_pairs,
-            # lower_gl_residues, lower_gl_diagonal_pairs
-        # )
+        analyzer = restore_analyzer_from_state(
+            u, saved_state, results_dir, ch1, ch2, ch3, ch4,
+            hbc_residues, hbc_diagonal_pairs,
+            sf_low_res_residues, sf_low_res_diagonal_pairs,
+            upper_gl_residues, upper_gl_diagonal_pairs,
+            lower_gl_residues, lower_gl_diagonal_pairs
+        )
         
-    # else:
+    else:
         # No saved state - run full analysis
-        # print("\n" + "="*80)
-        # print("RUNNING FULL TRAJECTORY ANALYSIS")
-        # print("="*80)
+        print("\n" + "="*80)
+        print("RUNNING FULL TRAJECTORY ANALYSIS")
+        print("="*80)
         
-        # analyzer = IonPermeationAnalysis(
-            # u, ion_selection="resname K+ K", 
-            # start_frame=start_frame, end_frame=end_frame,
-            # channel1=ch1, channel2=ch2, channel3=ch3, channel4=ch4,
-            # hbc_residues=hbc_residues, hbc_diagonal_pairs=hbc_diagonal_pairs,
-            # sf_low_res_residues=sf_low_res_residues, 
-            # sf_low_res_diagonal_pairs=sf_low_res_diagonal_pairs,
-            # upper_gl_residues=upper_gl_residues,
-            # upper_gl_diagonal_pairs=upper_gl_diagonal_pairs,
-            # lower_gl_residues=lower_gl_residues,
-            # lower_gl_diagonal_pairs=lower_gl_diagonal_pairs,
-            # results_dir=results_dir,
-            # count_ions=True
-        # )
+        analyzer = IonPermeationAnalysis(
+            u, ion_selection="resname K+ K", 
+            start_frame=start_frame, end_frame=end_frame,
+            channel1=ch1, channel2=ch2, channel3=ch3, channel4=ch4,
+            hbc_residues=hbc_residues, hbc_diagonal_pairs=hbc_diagonal_pairs,
+            sf_low_res_residues=sf_low_res_residues, 
+            sf_low_res_diagonal_pairs=sf_low_res_diagonal_pairs,
+            upper_gl_residues=upper_gl_residues,
+            upper_gl_diagonal_pairs=upper_gl_diagonal_pairs,
+            lower_gl_residues=lower_gl_residues,
+            lower_gl_diagonal_pairs=lower_gl_diagonal_pairs,
+            results_dir=results_dir,
+            count_ions=True
+        )
         
-        # analyzer.run_analysis()
-        # analyzer.print_results()
+        analyzer.run_analysis()
+        analyzer.print_results()
         
         # SAVE STATE for future runs
-        # save_analyzer_state(analyzer, results_dir)
+        save_analyzer_state(analyzer, results_dir)
     
     # from analysis.end2_utils import get_end2_all_frames, get_end3_all_frames
 
@@ -886,42 +886,42 @@ def main():
     #     force_rerun       = False,
     # )
 
-    # from analysis.permeation_ion_table import run_permeation_ion_table
+    from analysis.permeation_ion_table import run_permeation_ion_table
 
-    # run_permeation_ion_table(
-    #     universe          = u,
-    #     permeation_events = analyzer.permeation_events,
-    #     glu_residues      = glu_residues,
-    #     asn_residues      = asn_residues,
-    #     results_dir       = results_dir,
-    #     channel_type      = channel_type,
-    #     frame_duration    = frame_duration,
-    #     start_frame       = start_frame,
-    #     end_frame         = end_frame,
-    #     cutoff            = 3.5,
-    #     run               = run_number,
-    #     force_rerun       = False,
-    # )
+    run_permeation_ion_table(
+        universe          = u,
+        permeation_events = analyzer.permeation_events,
+        glu_residues      = glu_residues,
+        asn_residues      = asn_residues,
+        results_dir       = results_dir,
+        channel_type      = channel_type,
+        frame_duration    = frame_duration,
+        start_frame       = start_frame,
+        end_frame         = end_frame,
+        cutoff            = 3.5,
+        run               = run_number,
+        force_rerun       = False,
+    )
 
-    # from analysis.permeation_ion_stats import run_permeation_ion_stats
+    from analysis.permeation_ion_stats import run_permeation_ion_stats
 
-    # run_permeation_ion_stats(
-    #     results_dir    = results_dir,
-    #     channel_type   = channel_type,
-    #     frame_duration = frame_duration,
-    #     run            = run_number,
-    #     force_rerun    = False,
-    # )
+    run_permeation_ion_stats(
+        results_dir    = results_dir,
+        channel_type   = channel_type,
+        frame_duration = frame_duration,
+        run            = run_number,
+        force_rerun    = False,
+    )
 
-    # from analysis.permeation_correlation import run_permeation_correlation
+    from analysis.permeation_correlation import run_permeation_correlation
 
-    # run_permeation_correlation(
-    #     results_dir    = results_dir,
-    #     channel_type   = channel_type,
-    #     frame_duration = frame_duration,
-    #     run            = run_number,
-    #     force_rerun    = False,
-    # )
+    run_permeation_correlation(
+        results_dir    = results_dir,
+        channel_type   = channel_type,
+        frame_duration = frame_duration,
+        run            = run_number,
+        force_rerun    = False,
+    )
 
     # from analysis.permeation_ion_combinations import run_permeation_combinations
 
@@ -1534,7 +1534,6 @@ def main():
     #     start_frame=start_frame,
     #     end_frame=end_frame,
     # )
-
     # from analysis.cavity_water_flux import run_cavity_water_flux
 
     # run_cavity_water_flux(
@@ -1546,7 +1545,6 @@ def main():
     #     end_frame=end_frame,
     #     frame_duration=frame_duration,
     # )
-
     # from analysis.cavity_water_residence import run_cavity_water_residence
 
     # run_cavity_water_residence(
@@ -1810,44 +1808,25 @@ def main():
     #         results_dir=f"{results_dir}/duration_lasttouch_{mode}/{threshold}_w{window}"
     #     )
 
-    # GLU / ASN OCCUPANCY AT SF EXIT: first touch (same rule as FIRST TOUCH) + which GLU and
-    # ASN/ASP residues have another K+ at <= threshold, at end_1, at the touch and around end_1
-    # (needs analyzer.permeation_events: the saved-state / IonPermeationAnalysis block above)
-    # window = 10    first touch in the first 10 frames after the SF -> glu_occupancy_exit/3.5_w10/
-    # window = None  no window: first touch anywhere in the cavity (end_1 to end_2) -> glu_occupancy_exit/3.5_no_w/
+    # # GLU / ASN OCCUPANCY AT SF EXIT: first touch (same rule as FIRST TOUCH) + which GLU and
+    # # ASN/ASP residues have another K+ at <= threshold, at end_1, at the touch and around end_1
+    # # (needs analyzer.permeation_events: the saved-state / IonPermeationAnalysis block above)
+    # # window = 10    first touch in the first 10 frames after the SF -> glu_occupancy_exit/3.5_w10/
+    # # window = None  no window: first touch anywhere in the cavity (end_1 to end_2) -> glu_occupancy_exit/3.5_no_w/
     # from analysis.glu_occupancy_at_exit import run_glu_occupancy_at_exit_analysis, settings_folder
     # threshold = 3.5
     # window = None
     # run_glu_occupancy_at_exit_analysis(
-        # universe=u,
-        # permeation_events=analyzer.permeation_events,
-        # asn_residues=asn_residues,
-        # glu_residues=glu_residues,
-        # channel_type=channel_type,
-        # threshold=threshold,
-        # window=window,
-        # analysis_start_frame=start_frame,
-        # results_dir=f"{results_dir}/glu_occupancy_exit/{settings_folder(threshold, window)}"
+    #     universe=u,
+    #     permeation_events=analyzer.permeation_events,
+    #     asn_residues=asn_residues,
+    #     glu_residues=glu_residues,
+    #     channel_type=channel_type,
+    #     threshold=threshold,
+    #     window=window,
+    #     analysis_start_frame=start_frame,
+    #     results_dir=f"{results_dir}/glu_occupancy_exit/{settings_folder(threshold, window)}"
     # )
-
-    # CYLINDER ANALYSIS: K+ positions along each subunit's GLU-CA -> ASN-CA axis
-    # (same cylinders as esp_cylinders.py) -> results_dir/cylinder_analysis/
-    from analysis.cylinder_analysis import run_cylinder_analysis
-
-    run_cylinder_analysis(
-        u=u,
-        subunit_groups=subunit_groups,
-        glu_residues=glu_residues,
-        asn_residues=asn_residues,
-        results_dir=results_dir,
-        start_frame=start_frame,
-        end_frame=end_frame,
-        frame_duration=frame_duration,
-        channel_type=channel_type,
-        radius=3.0,
-        extend=3.0,
-    )
-
 
 
 #     #  NEW: Add proximity analysis

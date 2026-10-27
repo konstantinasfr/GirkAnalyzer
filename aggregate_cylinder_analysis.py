@@ -13,7 +13,7 @@ Input per run
 How runs are combined
 ---------------------
 - Every run is re-binned on ONE common set of bin edges and turned into a
-  density (K+ per frame per Å), so runs of different length weigh the same.
+  density (K+ per frame per A), so runs of different length weigh the same.
 - Each run is one independent sample. The curve is the mean over runs, the
   band its 95 % bootstrap CI (runs resampled with replacement), and every
   run is drawn as a thin grey line so a single run dominating is visible.
@@ -29,7 +29,7 @@ What it produces   <output_dir>  (default <base_dir>/cylinder_analysis_across_ru
 3. cylinder_visits_<CH>.csv            every visit of every run
 4. cylinder_across_runs_<CH>.txt       across-run summary + subunit tests
 5. cylinder_across_runs_<CH>.pkl       all of the above
-6. cylinder_density_panels_<CH>.png    per subunit: runs (grey) + mean ± CI
+6. cylinder_density_panels_<CH>.png    per subunit: runs (grey) + mean +- CI
 7. cylinder_density_overlay_<CH>.png   all subunits, ESP-profile axis
 8. cylinder_density_fractional_<CH>.png  same along s = t / L
 9. cylinder_metrics_<CH>.png           occupancy / <n> / median t per run
@@ -388,3 +388,14 @@ def _plot_metrics(per_run, names, out_path, title):
 
 if __name__ == "__main__":
     main()
+
+
+'''
+python3 aggregate_cylinder_analysis.py \
+    --base_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 \
+    --channel_type G12 --rename D:G1
+
+python3 aggregate_cylinder_analysis.py \
+    --base_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2 \
+    --channel_type G2
+'''
