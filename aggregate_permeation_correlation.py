@@ -709,11 +709,15 @@ def _err(vals, los, his):
 
 
 def plot_pooled(rows, out_path, title, color="#2980B9", sort_by=None,
-                fs=1.0, figsize=None, show_ci=True):
+                fs=1.0, figsize=None, show_ci=True,
+                title_left="Ions on each residue at permeation",
+                title_right="Fraction of permeations with the residue occupied"):
     """
     Two-panel bar figure. `fs` scales every font size and, when figsize is not
     given explicitly, the figure size too, so proportions stay the same.
     Error bars are the cluster-bootstrap 95% CIs from compute_channel_stats.
+    title_left / title_right let other aggregators (e.g. occupancy at SF exit)
+    reuse the figure for another frame.
     """
     if not rows:
         return
@@ -750,7 +754,7 @@ def plot_pooled(rows, out_path, title, color="#2980B9", sort_by=None,
                  fontsize=FS_VALUE * fs)
     ax1.set_ylabel("Mean number of other ions", fontsize=FS_AXLABEL * fs)
     ax1.set_ylim(0, top_m * 1.25 if top_m > 0 else 1)
-    ax1.set_title("Ions on each residue at permeation", fontsize=FS_SUBTITLE * fs)
+    ax1.set_title(title_left, fontsize=FS_SUBTITLE * fs)
 
     ax2.bar(x, pcts, color=color, alpha=0.55, edgecolor="black",
             linewidth=BAR_EDGE_LW, hatch="//", label="≥1 ion",
@@ -771,8 +775,7 @@ def plot_pooled(rows, out_path, title, color="#2980B9", sort_by=None,
     ax2.set_ylabel("% of permeation events", fontsize=FS_AXLABEL * fs)
     ax2.set_ylim(0, 100)
     ax2.set_yticks([0, 20, 40, 60, 80, 100])
-    ax2.set_title("Fraction of permeations with the residue occupied",
-                  fontsize=FS_SUBTITLE * fs)
+    ax2.set_title(title_right, fontsize=FS_SUBTITLE * fs)
     ax2.legend(fontsize=FS_LEGEND * fs, loc="upper right", framealpha=0.9)
 
     for ax in (ax1, ax2):

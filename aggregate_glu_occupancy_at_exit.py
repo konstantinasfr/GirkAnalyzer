@@ -30,6 +30,10 @@ Outputs (per folder; t = threshold, w = window or no_w; <at> = end_1 or touch):
     touched_residue_heatmap_<at>_t*_w*.png  first-touched residue x occupied residue (% of events)
     ring_occupancy_timecourse_t*_w*.png     mean occupied GLUs / ASN/ASP vs frames from end_1
     residue_occupancy_timecourse_t*_w*.png  % occupied vs frames from end_1, one panel per residue
+    residue_ion_count_<at>_t*_w*.png        all events pooled, same figure as aggregate_permeation_correlation.py:
+                                            mean number of other K+ on each residue, and % of events with
+                                            >= 1 / >= 2 of them, 95% CI bootstrapped over runs
+    residue_ion_count_<at>_t*_w*.csv        the numbers behind it, one row per residue
     summary_t*_w*.xlsx                      sheets:
         <at>_glu_counts / _glu_pct_touch / _glu_pct_occ   GLU cross-tables (counts, row %, column %)
         <at>_asn_counts / ...                              the same for ASN/ASP
@@ -63,8 +67,10 @@ from aggregate_duration_results import (CATEGORIES, LIGAND_CATEGORIES, LIGAND_CH
                                         load_categories, load_ligand_categories, report_coverage)
 from analysis.glu_occupancy_at_exit import (NO_CONTACT, RINGS, event_row, residue_tick, window_tag,
                                             write_all_plots)
+from aggregate_permeation_correlation import CHANNEL_COLOR, compute_channel_stats, plot_pooled, pool, write_csv
 
 FRAMES = {'end_1': 'end_1 (leaving the SF)', 'touch': 'the first-touch frame'}
+ION_COUNT_FRAMES = {'end_1': 'at SF exit', 'touch': 'at first touch'}
 
 
 def _fisher(table):
@@ -78,13 +84,14 @@ def _fisher(table):
 class GluOccupancyAggregator:
     """Loads the per-run glu_occupancy_exit_complete.json files, then writes each folder."""
 
-    def __init__(self, base_directory, threshold, window, channel_type=None):
+    def __init__(self, base_directory, threshold, window, channel_type=None, nboot=5000):
         self.base_dir = Path(base_directory)
         self.threshold = threshold
         self.window = window
         self.channel_type = channel_type or self.base_dir.name
         self.threshold_str = str(int(threshold)) if float(threshold).is_integer() else str(threshold)
         self.tag = f"t{self.threshold_str}_{window_tag(window)}"
+        self.nboot = nboot
         self.events = []          # one dict per event: run + event_row at end_1 and at the touch
         self.runs_loaded = []
         self.ring_labels = None
@@ -253,6 +260,42 @@ class GluOccupancyAggregator:
             rows.append(row)
         return pd.DataFrame(rows)
 
+    def ion_count_rows(self, events, at):
+        """
+        One row per run and residue, in the per-run format of
+        aggregate_permeation_correlation.py: events, other K+ summed over them,
+        and events with >= 1 / >= 2 other K+ on the residue at `at`.
+        """
+        rows = []
+        for run in sorted({e['run'] for e in events}, key=run_sort_key):
+            occs = [e['raw'][f'occupancy_at_{at}'] for e in events if e['run'] == run]
+            occs = [o for o in occs if o]          # no touch -> no occupancy at the touch frame
+            for res in self.residues:
+                n = [len(o['residues'][res['pdb']]['ions']) for o in occs if res['pdb'] in o['residues']]
+                rows.append({'channel_type': self.channel_type, 'run': run, 'residue': residue_tick(res),
+                             'n_events': len(n), 'total_ions': sum(n),
+                             'n_occupied': sum(1 for k in n if k >= 1),
+                             'n_2plus': sum(1 for k in n if k >= 2), 'max_ions': max(n, default=0)})
+        return rows
+
+    def plot_ion_counts(self, events, output_dir, group):
+        """Pooled residue occupancy at end_1 and at the touch, same figure as at permeation."""
+        for at, desc in ION_COUNT_FRAMES.items():
+            run_rows = self.ion_count_rows(events, at)
+            if not any(r['n_events'] for r in run_rows):
+                continue
+            pooled, _ = pool(run_rows)
+            compute_channel_stats(pooled, run_rows, nboot=self.nboot, seed=0)
+            n_runs = len({r['run'] for r in run_rows if r['n_events']})
+            stem = f"residue_ion_count_{at}_{self.tag}"
+            write_csv(pooled, output_dir / f"{stem}.csv")
+            plot_pooled(pooled, output_dir / f"{stem}.png",
+                        f"{self.channel_type} {group} — residue occupancy {desc} "
+                        f"({n_runs} runs, {pooled[0]['total_events']} permeating ions)",
+                        color=CHANNEL_COLOR.get(self.channel_type.upper(), "#2980B9"),
+                        title_left=f"Ions on each residue {desc}",
+                        title_right="Fraction of events with the residue occupied")
+
     def write_group(self, group, runs, output_dir, run_info):
         output_dir = Path(output_dir)
         events = [e for e in self.events if e['run'] in runs]
@@ -265,6 +308,7 @@ class GluOccupancyAggregator:
         write_all_plots([e['end_1'] for e in events], self.residues, self.ring_labels, self.channel_type,
                         self.threshold, self.window, output_dir, self.tag,
                         touch_rows=[e['touch'] for e in events], label=group)
+        self.plot_ion_counts(events, output_dir, group)
 
         stats = self.stats(events)
         with pd.ExcelWriter(output_dir / f"summary_{self.tag}.xlsx") as xl:
@@ -315,10 +359,12 @@ def main():
                         help="G12_ML only: ligand_categories.csv (default: "
                              "base_directory/ligand_inter_class/ligand_categories.csv)")
     parser.add_argument("--channel_type", default=None, help="Label for plot titles (default: folder name)")
+    parser.add_argument("--nboot", type=int, default=5000,
+                        help="Bootstrap resamples over runs for the residue_ion_count CIs (default: 5000)")
     args = parser.parse_args()
 
     window = None if args.no_window else args.window
-    agg = GluOccupancyAggregator(args.base_directory, args.threshold, window, args.channel_type)
+    agg = GluOccupancyAggregator(args.base_directory, args.threshold, window, args.channel_type, args.nboot)
     if not agg.load_all_runs():
         print("No data found. Exiting.")
         return
