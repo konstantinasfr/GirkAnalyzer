@@ -410,7 +410,8 @@ def main():
 
     elif args.channel_type == "G12_GAT":
         # upper1 = [107, 431, 757, 1082]
-        upper1 = [105, 429, 755, 1080]
+        # upper1 = [105, 429, 755, 1080]   755 is the R after GYGY in subunit C; the Y is 754
+        upper1 = [105, 429, 754, 1080]  # Y after GYG in every subunit (checked on a frame PDB)
         lower1 = [100, 424, 749, 1075]  #sf_residues
   
         upper2 = [100, 424, 749, 1075]  #sf_residues
@@ -552,7 +553,8 @@ def main():
 
     elif args.channel_type == "G12_D173N":
         # upper1 = [107, 431, 757, 1082]
-        upper1 = [105, 429, 755, 1080]
+        # upper1 = [105, 429, 755, 1080]   755 is the R after GYGY in subunit C; the Y is 754
+        upper1 = [105, 429, 754, 1080]  # Y after GYG in every subunit (checked on a frame PDB)
         lower1 = [100, 424, 749, 1075]  #sf_residues
   
         upper2 = [100, 424, 749, 1075]  #sf_residues
