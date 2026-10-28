@@ -1829,6 +1829,23 @@ def main():
     # )
 
 
+    # SF OCCUPANCY: K+ in the SF (ch1, region 1) at every frame, from analyzer.ion_region_tracking
+    # (no trajectory reading), and the frame each permeating ion leaves the SF (end_1).
+    # -> sf_occupancy/ (per-frame CSV, summary JSON, time series). Aggregate over runs with
+    # aggregate_sf_occupancy.py (mean occupancy vs permeations, occupancy distribution, 50 ns windows).
+    # (needs analyzer.permeation_events: the saved-state / IonPermeationAnalysis block above)
+    from analysis.sf_occupancy import run_sf_occupancy_analysis
+    run_sf_occupancy_analysis(
+        ion_region_tracking=analyzer.ion_region_tracking,
+        permeation_events=analyzer.permeation_events,
+        start_frame=analyzer.start_frame,
+        end_frame=analyzer.end_frame,
+        run=run_number,
+        results_dir=results_dir,
+        frame_duration=frame_duration,
+        force_rerun=False
+    )
+
     # TOUCH -> NEXT STAY: first touch on the ASN/ASP ring, the next residue the ion stays on
     # (stays as in the last/first-contact plots), split by GLUs occupied when it leaves the
     # touched residue. First touch anywhere from end_1 to end_2 (no_window=True; False: first
