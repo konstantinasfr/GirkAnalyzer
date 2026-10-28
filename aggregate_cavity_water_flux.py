@@ -40,13 +40,26 @@ What it produces   <output_dir>  (default <base_dir>/water_analysis/cavity_water
                                           time split by source (mean over runs)
 11. sf_transits_<CH>.png                  full SF transits per run, and net transits
                                           against K+ permeations
+12. cavity_water_origin_<CH>.png          which way waters enter and leave the cavity:
+                                          rates and shares, all runs and per run
+13. cavity_water_composition_<CH>.png     share of the cavity's waters by the way they
+                                          came in, over time (mean over runs)
 
 Full SF transits
 ----------------
-Waters that enter the SF cylinder at one end and leave at the other (see
-analysis/cavity_water_flux.py). Unlike sf_in / sf_back they exclude waters
-that step in and out of the same end. Runs analysed before this was added
-have no transit data and are left out of these numbers.
+Waters that cross the whole SF, counted with two planes at the upper1 and
+lower1 CA rings (see analysis/cavity_water_flux.py). Unlike sf_in / sf_back
+they exclude waters that step in and out of the same end. Runs analysed
+before this was added have no transit data and are left out of these numbers.
+
+Where cavity water comes from
+-----------------------------
+Every water entering the cavity comes in from below the HBC (hbc_back), from
+the sides (side_in) or from the SF (sf_in). The origin plot gives those
+entry rates and their shares, from the crossing counts, so it works for
+every run. The composition plot needs runs analysed with the current
+cavity_water_flux.py: it shows, at each frame, what share of the waters in
+the cavity came in through each route.
 
 Cavity water budget
 -------------------
@@ -83,12 +96,17 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from analysis.cavity_water_flux import (
-    BOUNDARIES, CROSSINGS, RES_REGIONS, RES_COLORS, SFTransitTracker, describe,
+    BOUNDARIES, CROSSINGS, RES_REGIONS, RES_COLORS, ROUTES, ROUTE_COLORS,
+    SFTransitTracker, describe,
     _plot_residence_hist, _plot_residence_box,
 )
 
 
 PKL_REL = Path("water_analysis") / "cavity_water_flux" / "cavity_water_flux.pkl"
+
+# route -> (crossing into the cavity, crossing out of it)
+ENTRY_ROUTES = {"below": ("hbc_back", "hbc_out"), "sides": ("side_in", "side_out"),
+                "SF": ("sf_in", "sf_back")}
 
 # cavity budget source -> (crossing into the cavity, crossing out of it)
 CAVITY_SOURCES = {
@@ -161,14 +179,23 @@ def run_row(name, d):
         row[f"res_{_slug(r)}_censored"] = st["n_censored"]
         row[f"res_{_slug(r)}_mean_ns"] = st["mean"]
         row[f"res_{_slug(r)}_median_ns"] = st["median"]
+    ent = sum(d["totals"][i] for i, _ in ENTRY_ROUTES.values())
+    for r, (i, o) in ENTRY_ROUTES.items():
+        row[f"entry_share_{r}"] = d["totals"][i] / ent if ent else np.nan
+    if "cavity_by_route" in d:
+        br = d["cavity_by_route"]
+        tot = sum(br[r] for r in ROUTES).mean()
+        for r in ROUTES:
+            row[f"cavity_share_{r}"] = br[r].mean() / tot if tot else np.nan
     tr = d.get("sf_transits")
-    if tr is not None:
+    if tr is not None and "net_jumps" in tr:
         for k in SFTransitTracker.COUNTS:
             row[f"sf_{k}"] = tr["totals"][k]
         row["sf_transit_net"] = tr["net"]
         row["sf_transit_net_per_ns"] = tr["net"] / sim_ns if sim_ns > 0 else np.nan
         row["sf_transit_net_per_ion"] = (tr["net"] / row["n_permeations"]
                                          if row["n_permeations"] else np.nan)
+        row["sf_net_incl_jumps"] = tr["net"] + tr["net_jumps"]
     return row
 
 
@@ -320,9 +347,32 @@ def run_aggregate_flux(base_dir, output_dir=None, channel_type="G12", runs=None)
             "-" * 60,
             f"net transits (down - up) : {net}"
             + (f"   ({net / n_ion:.2f} per K+ permeation, {n_ion} K+)" if n_ion else ""),
+            f"net incl. jumps          : {sum(r['sf_net_incl_jumps'] for r in tr_rows)}",
             f"Spearman rho, net transits vs K+ per run : "
             f"{spearman([r['n_permeations'] for r in tr_rows], [r['sf_transit_net'] for r in tr_rows]):.2f}",
         ]
+    lines += [
+        "",
+        "WHERE CAVITY (GLU/HBC) WATER COMES FROM (all runs)",
+        "=" * 66,
+        f"{'route':<8} {'in /ns':>8} {'share':>7} {'out /ns':>8} {'share':>7}"
+        f" {'share of cavity':>16}",
+        "-" * 66,
+    ]
+    rate = {r: np.mean([row[f"{i}_per_ns"] for row in rows]) for r, (i, _) in ENTRY_ROUTES.items()}
+    rate_out = {r: np.mean([row[f"{o}_per_ns"] for row in rows]) for r, (_, o) in ENTRY_ROUTES.items()}
+    comp_rows = [r for r in rows if "cavity_share_below" in r]
+    for r in ENTRY_ROUTES:
+        comp = (f"{100 * np.mean([x[f'cavity_share_{r}'] for x in comp_rows]):>15.1f}%"
+                if comp_rows else f"{'n/a':>16}")
+        lines.append(f"{r:<8} {rate[r]:>8.2f} {100 * rate[r] / sum(rate.values()):>6.1f}% "
+                     f"{rate_out[r]:>8.2f} {100 * rate_out[r] / sum(rate_out.values()):>6.1f}%"
+                     f" {comp}")
+    if comp_rows:
+        lines.append(f"{'initial':<8} {'':>8} {'':>7} {'':>8} {'':>7} "
+                     f"{100 * np.mean([x['cavity_share_initial'] for x in comp_rows]):>15.1f}%")
+    lines.append("(share of cavity = waters in the cavity by the way they came in, "
+                 "mean over frames and runs)")
     print("\n".join("  " + s for s in lines))
     (out_dir / f"cavity_water_flux_across_runs_{ch}.txt").write_text("\n".join(lines) + "\n")
 
@@ -350,6 +400,13 @@ def run_aggregate_flux(base_dir, output_dir=None, channel_type="G12", runs=None)
     if tr_rows:
         _plot_sf_transits(tr_rows, out_dir / f"sf_transits_{ch}.png",
                           f"{ch}: water crossing the whole SF")
+    _plot_origin(rows, out_dir / f"cavity_water_origin_{ch}.png",
+                 f"{ch}: which way water enters and leaves the cavity ({len(rows)} runs)")
+    comp_data = {n: d for n, d in data.items() if "cavity_by_route" in d}
+    if comp_data:
+        _plot_composition_across(comp_data, fd, out_dir / f"cavity_water_composition_{ch}.png",
+                                 f"{ch}: where the waters in the cavity came in from "
+                                 f"({len(comp_data)} runs)")
 
     print(f"  ✅ All outputs in: {out_dir}")
     return result
@@ -408,6 +465,100 @@ def _plot_net_per_run(rows, out_path, title):
     ax.set_title(title, fontsize=12, fontweight="bold")
     ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
     ax.legend(fontsize=9)
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  ✅ Saved: {out_path}")
+
+
+def _plot_origin(rows, out_path, title):
+    """
+    Left: waters entering and leaving the cavity per ns by route, mean over
+    runs (dots = runs), labelled with the share. Right: per run, the share of
+    entries by route as a 100% bar.
+    """
+    routes = list(ENTRY_ROUTES)
+    fig, (ax, ax2) = plt.subplots(1, 2, figsize=(15, max(5.5, 0.38 * len(rows) + 2)),
+                                  gridspec_kw={"width_ratios": [1.1, 1]})
+
+    y = np.arange(len(routes))[::-1]
+    h = 0.38
+    rng = np.random.default_rng(0)
+    xmax = 0.0
+    for (word, idx, off, alpha) in (("in", 0, h / 2, 0.9), ("out", 1, -h / 2, 0.4)):
+        vals = np.array([[row[f"{ENTRY_ROUTES[r][idx]}_per_ns"] for row in rows] for r in routes])
+        mean = vals.mean(axis=1)
+        total = mean.sum()
+        ax.barh(y + off, mean, h, color=[ROUTE_COLORS[r] for r in routes],
+                alpha=alpha, edgecolor="black", linewidth=0.5)
+        for i in range(len(routes)):
+            ax.scatter(vals[i], y[i] + off + rng.uniform(-h / 4, h / 4, vals.shape[1]),
+                       s=9, color="white", edgecolor="black", linewidth=0.5, zorder=3)
+            # label past the furthest run so the dots never cover it
+            ax.text(vals[i].max() * 1.03 + 0.3, y[i] + off,
+                    f"{word} {mean[i]:.2f} /ns ({100 * mean[i] / total:.1f}%)",
+                    va="center", fontsize=9.5)
+        xmax = max(xmax, vals.max())
+    ax.set_yticks(y, routes, fontsize=11)
+    ax.set_xlim(0, xmax * 1.55)
+    from matplotlib.patches import Patch
+    ax.legend(handles=[Patch(facecolor="#757575", alpha=0.9, label="entering the cavity"),
+                       Patch(facecolor="#757575", alpha=0.4, label="leaving the cavity")],
+              fontsize=9, loc="lower right")
+    ax.set_xlabel("waters per ns (bar = mean over runs, dots = runs)", fontsize=10)
+    ax.set_title("Entering and leaving the cavity, by route", fontsize=12)
+    ax.grid(axis="x", linestyle=":", linewidth=0.5, alpha=0.6)
+
+    yr = np.arange(len(rows))[::-1]
+    left = np.zeros(len(rows))
+    for r in routes:
+        share = np.array([100 * row[f"entry_share_{r}"] for row in rows])
+        ax2.barh(yr, share, 0.7, left=left, color=ROUTE_COLORS[r], label=f"from {r}")
+        left += share
+    sf = [100 * row["entry_share_SF"] for row in rows]
+    for yi, v in zip(yr, sf):
+        ax2.text(101, yi, f"SF {v:.1f}%", va="center", fontsize=8, color="#1565C0")
+    ax2.set_yticks(yr, [f"{row['run']} ({row['n_permeations']} K⁺)" for row in rows], fontsize=9)
+    ax2.set_xlim(0, 112)
+    ax2.set_xlabel("share of the waters entering the cavity (%)", fontsize=10)
+    ax2.set_title("Per run: where the entering waters came from", fontsize=12)
+    ax2.legend(fontsize=9, loc="lower center", bbox_to_anchor=(0.45, 1.06), ncol=3, frameon=False)
+
+    fig.suptitle(title, fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  ✅ Saved: {out_path}")
+
+
+def _plot_composition_across(data, frame_duration, out_path, title):
+    """Share of the cavity's waters by entry route over time, mean over runs."""
+    runs = list(data.values())
+    n = min(len(d["frame_indices"]) for d in runs)
+    t = np.arange(n) * frame_duration
+    order = ("initial", "below", "sides", "SF")
+    shares = {}
+    for r in order:
+        per_run = []
+        for d in runs:
+            br = d["cavity_by_route"]
+            tot = sum(br[x][:n] for x in order).astype(float)
+            per_run.append(np.divide(100 * br[r][:n], tot, out=np.zeros(n), where=tot > 0))
+        shares[r] = np.mean(per_run, axis=0)
+    late = slice(n // 2, None)
+
+    fig, ax = plt.subplots(figsize=(14, 5.5))
+    ax.stackplot(t, *(shares[r] for r in order), colors=[ROUTE_COLORS[r] for r in order],
+                 labels=[f"{'already inside at frame 0' if r == 'initial' else 'came in from ' + r}"
+                         f" — {shares[r][late].mean():.1f}% in the second half" for r in order],
+                 alpha=0.9)
+    ax.set_ylim(0, 100)
+    ax.set_xlim(t[0], t[-1])
+    ax.set_xlabel("time since the first frame (ns)", fontsize=11)
+    ax.set_ylabel("share of the waters in the cavity (%)", fontsize=11)
+    ax.set_title(title, fontsize=13, fontweight="bold")
+    ax.legend(fontsize=9, loc="center right", framealpha=0.9)
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=150)
