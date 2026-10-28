@@ -487,7 +487,8 @@ def main():
 
     elif args.channel_type == "G12" and int(run_number)>20:
         # upper1 = [107, 431, 757, 1082]
-        upper1 = [105, 429, 755, 1080]
+        # upper1 = [105, 429, 755, 1080]   755 is the R after GYGY in subunit C (as in GAT / D173N)
+        upper1 = [105, 429, 754, 1080]  # Y after GYG; assumes the GAT / D173N numbering (no frame checked)
         lower1 = [100, 424, 749, 1075]  #sf_residues
   
         upper2 = [100, 424, 749, 1075]  #sf_residues
@@ -513,8 +514,10 @@ def main():
         lower_gl_residues = [259, 583, 908, 1234 ]
         lower_gl_diagonal_pairs = [(259, 1234 ), (583, 908)]
 
-        sf_low_res_residues = [101, 425, 750, 1076] 
-        sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
+        # sf_low_res_residues = [101, 425, 750, 1076]   the I of TIGYG; G2 and G12 WT use the T
+        # sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
+        sf_low_res_residues = [100, 424, 749, 1075]  # T of TIGYG; assumes the GAT / D173N numbering (no frame checked)
+        sf_low_res_diagonal_pairs = [(100, 1075), (424, 749)]
 
         glu_residues = [98,422,747,1073]
         glu_residues_pairs = [(98,1073), (422,747)]
@@ -637,7 +640,8 @@ def main():
 
     elif args.channel_type == "G12_E141Q":
         # upper1 = [107, 431, 757, 1082]
-        upper1 = [105, 429, 755, 1080]
+        # upper1 = [105, 429, 755, 1080]   755 is the R after GYGY in subunit C (as in GAT / D173N)
+        upper1 = [105, 429, 754, 1080]  # Y after GYG; assumes the GAT / D173N numbering (no frame checked)
         lower1 = [100, 424, 749, 1075]  #sf_residues
   
         upper2 = [100, 424, 749, 1075]  #sf_residues
@@ -668,8 +672,10 @@ def main():
         lower_gl_residues = [259, 583, 908, 1234 ]
         lower_gl_diagonal_pairs = [(259, 1234 ), (583, 908)]
 
-        sf_low_res_residues = [101, 425, 750, 1076] 
-        sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
+        # sf_low_res_residues = [101, 425, 750, 1076]   the I of TIGYG; G2 and G12 WT use the T
+        # sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
+        sf_low_res_residues = [100, 424, 749, 1075]  # T of TIGYG; assumes the GAT / D173N numbering (no frame checked)
+        sf_low_res_diagonal_pairs = [(100, 1075), (424, 749)]
 
         glu_residues = [98,422,747,1073]
         glu_residues_pairs = [(98,1073), (422,747)]
