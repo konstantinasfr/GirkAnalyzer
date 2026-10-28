@@ -38,6 +38,15 @@ What it produces   <output_dir>  (default <base_dir>/water_analysis/cavity_water
                                           with in / out / net waters at every boundary
                                           (mean per run), and the cavity's net gain over
                                           time split by source (mean over runs)
+11. sf_transits_<CH>.png                  full SF transits per run, and net transits
+                                          against K+ permeations
+
+Full SF transits
+----------------
+Waters that enter the SF cylinder at one end and leave at the other (see
+analysis/cavity_water_flux.py). Unlike sf_in / sf_back they exclude waters
+that step in and out of the same end. Runs analysed before this was added
+have no transit data and are left out of these numbers.
 
 Cavity water budget
 -------------------
@@ -74,7 +83,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from analysis.cavity_water_flux import (
-    BOUNDARIES, CROSSINGS, RES_REGIONS, RES_COLORS, describe,
+    BOUNDARIES, CROSSINGS, RES_REGIONS, RES_COLORS, SFTransitTracker, describe,
     _plot_residence_hist, _plot_residence_box,
 )
 
@@ -152,7 +161,34 @@ def run_row(name, d):
         row[f"res_{_slug(r)}_censored"] = st["n_censored"]
         row[f"res_{_slug(r)}_mean_ns"] = st["mean"]
         row[f"res_{_slug(r)}_median_ns"] = st["median"]
+    tr = d.get("sf_transits")
+    if tr is not None:
+        for k in SFTransitTracker.COUNTS:
+            row[f"sf_{k}"] = tr["totals"][k]
+        row["sf_transit_net"] = tr["net"]
+        row["sf_transit_net_per_ns"] = tr["net"] / sim_ns if sim_ns > 0 else np.nan
+        row["sf_transit_net_per_ion"] = (tr["net"] / row["n_permeations"]
+                                         if row["n_permeations"] else np.nan)
     return row
+
+
+def spearman(x, y):
+    """Spearman rho (average ranks for ties); no p-value, to avoid scipy."""
+    def rank(a):
+        a = np.asarray(a, dtype=float)
+        order = a.argsort()
+        r = np.empty(len(a))
+        r[order] = np.arange(len(a))
+        for v in np.unique(a):
+            m = a == v
+            r[m] = r[m].mean()
+        return r
+    if len(x) < 3:
+        return float("nan")
+    rx, ry = rank(x), rank(y)
+    if rx.std() == 0 or ry.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(rx, ry)[0, 1])
 
 
 def _slug(name):
@@ -269,6 +305,24 @@ def run_aggregate_flux(base_dir, output_dir=None, channel_type="G12", runs=None)
         f"{'total cavity gain':<20} {gain:>8}   ({gain / len(rows):.1f} per run, "
         f"last frame - first frame)",
     ]
+    tr_rows = [r for r in rows if "sf_transit_net" in r]
+    if tr_rows:
+        n_ion = sum(r["n_permeations"] for r in tr_rows)
+        lines += [
+            "",
+            f"FULL SF TRANSITS (enter one end, leave by the other; {len(tr_rows)} runs)",
+            "=" * 60,
+        ]
+        for k in SFTransitTracker.COUNTS:
+            lines.append(f"{k:<16} {sum(r['sf_' + k] for r in tr_rows):>8}")
+        net = sum(r["sf_transit_net"] for r in tr_rows)
+        lines += [
+            "-" * 60,
+            f"net transits (down - up) : {net}"
+            + (f"   ({net / n_ion:.2f} per K+ permeation, {n_ion} K+)" if n_ion else ""),
+            f"Spearman rho, net transits vs K+ per run : "
+            f"{spearman([r['n_permeations'] for r in tr_rows], [r['sf_transit_net'] for r in tr_rows]):.2f}",
+        ]
     print("\n".join("  " + s for s in lines))
     (out_dir / f"cavity_water_flux_across_runs_{ch}.txt").write_text("\n".join(lines) + "\n")
 
@@ -293,6 +347,9 @@ def run_aggregate_flux(base_dir, output_dir=None, channel_type="G12", runs=None)
                         f"{ch}: where the cavity's net water gain came from")
     _plot_cavity_overview(rows, data, fd, out_dir / f"cavity_water_overview_{ch}.png",
                           f"{ch}: water in the cavity ({len(rows)} runs)")
+    if tr_rows:
+        _plot_sf_transits(tr_rows, out_dir / f"sf_transits_{ch}.png",
+                          f"{ch}: water crossing the whole SF")
 
     print(f"  ✅ All outputs in: {out_dir}")
     return result
@@ -352,6 +409,51 @@ def _plot_net_per_run(rows, out_path, title):
     ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
     ax.legend(fontsize=9)
 
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  ✅ Saved: {out_path}")
+
+
+def _plot_sf_transits(rows, out_path, title):
+    """Left: transits down / up per run, dot = net. Right: net vs K+ per run."""
+    x = np.arange(len(rows))
+    down = np.array([r["sf_transit_down"] for r in rows])
+    up = np.array([r["sf_transit_up"] for r in rows])
+    jumps = np.array([r["sf_jump_down"] - r["sf_jump_up"] for r in rows])
+    k = np.array([r["n_permeations"] for r in rows])
+
+    fig, (ax, ax2) = plt.subplots(
+        1, 2, figsize=(max(11, 0.6 * len(rows) + 7), 5),
+        gridspec_kw={"width_ratios": [max(2.5, len(rows) / 4), 1.3]})
+    w = 0.38
+    ax.bar(x - w / 2, down, w, color="#1E88E5", label="transits down (top → bottom)")
+    ax.bar(x + w / 2, up, w, color="#90CAF9", label="transits up (bottom → top)")
+    ax.scatter(x, down - up, color="black", zorder=3, s=25, label="net (down − up)")
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_xticks(x, [f"{r['run']}\n({r['n_permeations']} K⁺)" for r in rows], fontsize=9)
+    ax.set_ylabel("waters per run", fontsize=11)
+    ax.set_title("per run", fontsize=11)
+    ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
+    ax.legend(fontsize=9, loc="upper left")
+
+    net = down - up
+    ax2.scatter(k, net, s=45, color="#1E88E5", edgecolor="black", linewidth=0.6, zorder=3)
+    if np.any(jumps):
+        ax2.scatter(k, net + jumps, s=30, marker="x", color="#757575", zorder=3,
+                    label="net incl. unseen jumps")
+        ax2.legend(fontsize=8, loc="upper left")
+    for ki, ni, r in zip(k, net, rows):
+        ax2.annotate(r["run"].replace("RUN", "R"), (ki, ni), xytext=(4, 3),
+                     textcoords="offset points", fontsize=8, color="#555555")
+    ax2.axhline(0, color="black", linewidth=0.8)
+    ax2.set_xlabel("K⁺ permeations in the run", fontsize=11)
+    ax2.set_ylabel("net water transits", fontsize=11)
+    ax2.set_title(f"Spearman ρ = {spearman(k, net):.2f}", fontsize=11)
+    ax2.grid(linestyle=":", linewidth=0.5, alpha=0.6)
+    ax2.margins(0.15)
+
+    fig.suptitle(title, fontsize=13, fontweight="bold")
     plt.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
