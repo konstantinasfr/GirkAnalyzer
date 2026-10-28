@@ -1,9 +1,9 @@
-python3 main.py --channel_type G12_E141Q --run_number 1
-python3 main.py --channel_type G12_E141Q --run_number 2
-python3 main.py --channel_type G12_E141Q --run_number 3
-python3 main.py --channel_type G12_E141Q --run_number 4
-python3 main.py --channel_type G12_E141Q --run_number 5
-python3 main.py --channel_type G12_E141Q --run_number 6
+python3 main.py --channel_type G12_E141Q --run_number 1 
+python3 main.py --channel_type G12_E141Q --run_number 2 
+python3 main.py --channel_type G12_E141Q --run_number 3 
+python3 main.py --channel_type G12_E141Q --run_number 4 
+python3 main.py --channel_type G12_E141Q --run_number 5 
+python3 main.py --channel_type G12_E141Q --run_number 6 
 # python3 main.py --channel_type G12_ML --run_number 7
 # python3 main.py --channel_type G12_ML --run_number 8
 # python3 main.py --channel_type G12_ML --run_number 9

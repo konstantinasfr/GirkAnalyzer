@@ -1,20 +1,20 @@
-python3 main.py --channel_type G12_GAT --run_number 1
-python3 main.py --channel_type G12_GAT --run_number 2
-python3 main.py --channel_type G12_GAT --run_number 3
-python3 main.py --channel_type G12_GAT --run_number 4
-python3 main.py --channel_type G12_GAT --run_number 5
-python3 main.py --channel_type G12_GAT --run_number 6
-python3 main.py --channel_type G12_GAT --run_number 7
-python3 main.py --channel_type G12_GAT --run_number 8
-python3 main.py --channel_type G12_GAT --run_number 9
-python3 main.py --channel_type G12_GAT --run_number 10
-python3 main.py --channel_type G12_GAT --run_number 11
-python3 main.py --channel_type G12_GAT --run_number 12
-python3 main.py --channel_type G12_GAT --run_number 13
-python3 main.py --channel_type G12_GAT --run_number 14
-python3 main.py --channel_type G12_GAT --run_number 15
-python3 main.py --channel_type G12_GAT --run_number 16
-python3 main.py --channel_type G12_GAT --run_number 17
-python3 main.py --channel_type G12_GAT --run_number 18
-python3 main.py --channel_type G12_GAT --run_number 19
-python3 main.py --channel_type G12_GAT --run_number 20
+python3 main.py --channel_type G12_GAT --run_number 1 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 2 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 3 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 4 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 5 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 6 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 7 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 8 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 9 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 10 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 11 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 12 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 13 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 14 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 15 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 16 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 17 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 18 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 19 --force_pkl_generation
+python3 main.py --channel_type G12_GAT --run_number 20 --force_pkl_generation
