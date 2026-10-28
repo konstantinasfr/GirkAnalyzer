@@ -70,8 +70,8 @@ def main():
                         help="print the salt bridge diagnostics and stop")
     parser.add_argument("--force_pkl_generation", action="store_true",
                         help="ignore analyzer_state.pkl and redo the trajectory pass (ion region tracking, "
-                             "permeation events, gate diameters), then rerun the SF-dependent analyses "
-                             "even if their results exist. The old pkl is kept as analyzer_state_old.pkl")
+                             "permeation events, gate diameters); the new state overwrites the pkl. Also "
+                             "reruns the SF-dependent analyses even if their results exist")
     # parser.add_argument("--channel_type", default="G2_FD")
     args = parser.parse_args()
     generate_electric_field_heatmap =  False
@@ -765,10 +765,7 @@ def main():
     # --force_pkl_generation: redo the trajectory pass even if analyzer_state.pkl exists
     # (needed after changing the channel / SF residues, which the saved tracking was built with)
     if args.force_pkl_generation:
-        state_file = Path(results_dir) / "analyzer_state.pkl"
-        if state_file.exists():
-            state_file.replace(Path(results_dir) / "analyzer_state_old.pkl")
-            print(f"--force_pkl_generation: moved {state_file.name} to analyzer_state_old.pkl")
+        print("--force_pkl_generation: ignoring analyzer_state.pkl, it is overwritten after the trajectory pass")
         saved_state = None
     else:
         saved_state = load_analyzer_state(results_dir)
