@@ -190,7 +190,7 @@ if __name__ == "__main__":
 
 
 '''
-python3 aggregate_touch_to_next_stay.py  /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12
+python3 aggregate_touch_to_next_stay.py  /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 --exclude_frame0
 python3 aggregate_touch_to_next_stay.py  /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2
 python3 aggregate_touch_to_next_stay.py  /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q
 python3 aggregate_touch_to_next_stay.py  /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_D173N
