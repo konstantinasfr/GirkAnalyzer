@@ -89,6 +89,7 @@ SHARED = ['ion_id', 'end_1', 'end_2', 'first_touch_residue', 'first_touch_class'
 LOAD_MODES = ('glu', 'above')
 LEAVE_CHUNK = 50                         # frames read at a time while following the ion
 CLASSES = ['ASP', 'ASN']                 # first-touch classes that are plotted
+LOWER = 'ASN/ASP'                        # figure 4: ASP and ASN first touches together
 N_GLU = range(1, 5)                      # 1-4 GLUs occupied (figures 2-3 leave out the 0 case)
 COLOR_MAP = ClosestResidueAnalysis.COLOR_MAP
 TYPE_ORDER = ClosestResidueAnalysis.TYPE_ORDER
@@ -450,9 +451,28 @@ def split_events(sub, column, test):
     return sub[v.notna() & test(v)]
 
 
+def class_events(df, cls):
+    """Events whose first touch is cls; cls = LOWER takes ASP and ASN together."""
+    return df[df['first_touch_class'].isin(CLASSES if cls == LOWER else [cls])]
+
+
+def class_name(cls):
+    """'ASP', 'ASN', or 'ASN or ASP' for LOWER, for titles."""
+    return 'ASN or ASP' if cls == LOWER else cls
+
+
+def class_tag(cls):
+    """'asp', 'asn', or 'asn_asp' for LOWER, for file and folder names."""
+    return 'asn_asp' if cls == LOWER else cls.lower()
+
+
 def figure_by_load(df, cls, kind, labels, types, load_mode, glu_name, head, rule, output_file, single_dir):
-    """Figure 2 / 3 for first touch = cls: one panel per load value (see load_split), plus each panel alone."""
-    sub_cls = df[df['first_touch_class'] == cls]
+    """
+    Figure 2 / 3 / 4 for first touch = cls (ASP, ASN, or LOWER = both): one
+    panel per load value (see load_split), plus each panel alone.
+    """
+    sub_cls = class_events(df, cls)
+    name = class_name(cls)
     column, bins, _, what = load_split(load_mode, glu_name, sub_cls)
     plt.rcParams['font.family'] = 'DejaVu Sans'
     if not bins:                                          # 'above' with no ASP/ASN events at all
@@ -465,8 +485,8 @@ def figure_by_load(df, cls, kind, labels, types, load_mode, glu_name, head, rule
         draw_panel(ax, split_events(sub_cls, column, test), kind, labels, types, title)
     for ax in axes.flat[len(bins):]:
         ax.axis('off')
-    _figure_legend(fig, labels, types, f"First touch = {cls}\nn = {len(sub_cls)} events\n\nNext stay")
-    fig.suptitle(_wrap(f"{head}: next stay after first touch = {cls},\nby {what} when it leaves {cls}\n"
+    _figure_legend(fig, labels, types, f"First touch = {name}\nn = {len(sub_cls)} events\n\nNext stay")
+    fig.suptitle(_wrap(f"{head}: next stay after first touch = {name},\nby {what} when it leaves it\n"
                        f"{rule}\n({kind_text(kind)})", fig, FONT['suptitle']),
                  fontsize=FONT['suptitle'], fontweight='bold')
     _save(fig, output_file)
@@ -475,11 +495,11 @@ def figure_by_load(df, cls, kind, labels, types, load_mode, glu_name, head, rule
     for title, tag, test in bins:
         fig, ax = plt.subplots(figsize=PANEL_SIZE, layout='constrained')
         draw_panel(ax, split_events(sub_cls, column, test), kind, labels, types,
-                   f"{head}: first touch = {cls}, {title}")
+                   f"{head}: first touch = {name}, {title}")
         _figure_legend(fig, labels, types, "Next stay")
         fig.text(0.5, -0.02, _wrap(f"{rule}\n{kind_text(kind)}", fig, FONT['note']), ha='center', va='top',
                  fontsize=FONT['note'])
-        _save(fig, single_dir / f"{cls.lower()}_{tag}_{kind}.png")
+        _save(fig, single_dir / f"{class_tag(cls)}_{tag}_{kind}.png")
 
 
 def frame0_events(df, exclude):
@@ -502,7 +522,8 @@ def write_plots(df, settings, head, output_dir, kinds=('pooled',), exclude_frame
     output_dir: one run (main.py, kinds=('pooled',)) or a group of runs
     (aggregate_touch_to_next_stay.py, pooled and per_run). Figures 2-3 are
     split by settings['load_mode'] (n_glu_occupied, or n_above). G2 (no ASP):
-    ASN only (plotted_classes).
+    ASN only (plotted_classes). Figure 4: figures 2-3 with ASP and ASN first
+    touches together (systems with both classes plotted, so not G2).
     exclude_frame0: True leaves end_1 == 0 events out; None = the caller already decided.
     """
     output_dir = Path(output_dir)
@@ -517,12 +538,12 @@ def write_plots(df, settings, head, output_dir, kinds=('pooled',), exclude_frame
     for kind in kinds:
         figure_overall(df, kind, labels, types, head, rule, output_dir / f"fig1_next_stay_overall_{kind}.png",
                        classes)
-        for fig_no, cls in ((2, 'ASP'), (3, 'ASN')):
-            if cls not in classes:
+        for fig_no, cls in ((2, 'ASP'), (3, 'ASN'), (4, LOWER)):
+            if cls not in classes and not (cls == LOWER and len(classes) > 1):
                 continue
             figure_by_load(df, cls, kind, labels, types, load_mode, glu_name, head, rule,
-                           output_dir / f"fig{fig_no}_{cls.lower()}_by_{folder}_{kind}.png",
-                           output_dir / f"{cls.lower()}_by_{folder}")
+                           output_dir / f"fig{fig_no}_{class_tag(cls)}_by_{folder}_{kind}.png",
+                           output_dir / f"{class_tag(cls)}_by_{folder}")
 
 
 def run_touch_to_next_stay_analysis(universe, permeation_events, asn_residues, glu_residues,
