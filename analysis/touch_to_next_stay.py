@@ -296,10 +296,13 @@ def legend_handles(labels, types):
     return handles
 
 
-# Font sizes (pt) for every plot: large, so they stay readable when shrunk onto slides
-FONT = {'suptitle': 32, 'title': 29, 'axis': 29, 'tick': 25, 'bar': 21, 'legend': 26, 'note': 26}
-PANEL_SIZE = (14, 10.5)                  # inches per panel (grows with FONT so labels never touch)
+# Font sizes (pt) for every plot. They are large compared with the panel size, so the
+# text stays readable when a figure is shrunk onto a slide; 'count' is the smaller (n).
+FONT = {'suptitle': 27, 'title': 26, 'axis': 26, 'tick': 22, 'pct': 18, 'count': 14,
+        'legend': 22, 'note': 20}
+PANEL_SIZE = (9.5, 7)                    # inches per panel
 DPI = 150
+LABEL_PAD = 3                            # points between a bar (or the 100 % line) and its label
 
 
 def n_label(n_events, n_runs):
@@ -308,25 +311,44 @@ def n_label(n_events, n_runs):
             f"{n_runs} run{'' if n_runs == 1 else 's'}")
 
 
+def _stack_labels(ax, x, y, lines):
+    """
+    Labels stacked upwards above data point (x, y), offset in points so their
+    spacing does not depend on the axis; lines = [(text, fontsize, bold)],
+    bottom line first. Returns the height used, in points.
+    """
+    offset = LABEL_PAD
+    for text, size, bold in lines:
+        ax.annotate(text, (x, y), xytext=(0, offset), textcoords='offset points', ha='center',
+                    va='bottom', fontsize=size, fontweight='bold' if bold else 'normal',
+                    annotation_clip=False, zorder=6)
+        offset += size * 1.2
+    return offset
+
+
 def draw_panel(ax, sub, kind, labels, types, title):
     """
-    One panel: the 9 next-stay bars of the events in `sub`, as % (y axis
-    0-100 %) with the number of events in brackets.
-    pooled : % of the panel's events, label "p% (n)"
-    per_run: mean ± SEM of the % in each run, dots = runs, label "m±e (n)"
+    One panel: the 9 next-stay bars of the events in `sub`, as % on a 0-100 %
+    axis, labelled with the % and, smaller, the number of events in brackets.
+    Bars with no events get no label.
+    pooled : % of the panel's events, labels just above each bar
+    per_run: mean ± SEM of the % in each run, dots = runs, labels in a row above 100 %
     """
     x = np.arange(len(labels))
     n_events, n_runs = len(sub), sub['run'].nunique()
     counts = pooled_counts(sub, labels)
     colors = [_color(l, types) for l in labels]
+    label_height = 0
 
     if kind == 'pooled':
         pct = 100.0 * counts / n_events if n_events else np.zeros(len(labels))
         bars = ax.bar(x, pct, color=colors, alpha=0.85, edgecolor='black', linewidth=1.5,
-                      width=0.7, zorder=3)
-        for bar, p, c in zip(bars, pct, counts):
-            ax.text(bar.get_x() + bar.get_width() / 2., p + 2, f"{p:.0f}%\n({c})", ha='center', va='bottom',
-                    fontsize=FONT['bar'], fontweight='bold', zorder=4, linespacing=0.95)
+                      width=0.75, zorder=3)
+        for xi, p, c in zip(x, pct, counts):
+            if c:
+                h = _stack_labels(ax, xi, p, [(f"({c})", FONT['count'], False), (f"{p:.0f}%", FONT['pct'], True)])
+                if p >= 99.5:
+                    label_height = max(label_height, h)
         ax.set_ylabel('% of events', fontsize=FONT['axis'], fontweight='bold')
         n_text = n_label(n_events, n_runs)
     else:
@@ -334,34 +356,34 @@ def draw_panel(ax, sub, kind, labels, types, title):
         means = runs.mean(axis=0).reindex(labels).fillna(0).values
         sems = (runs.std(axis=0, ddof=1) / np.sqrt(len(runs))).reindex(labels).fillna(0).values \
             if len(runs) > 1 else np.zeros(len(labels))
-        bars = ax.bar(x, means, yerr=sems, capsize=7, color=colors, alpha=0.85, edgecolor='black',
-                      linewidth=1.5, width=0.7, zorder=3, error_kw={'elinewidth': 2, 'capthick': 2, 'zorder': 4})
+        bars = ax.bar(x, means, yerr=sems, capsize=6, color=colors, alpha=0.85, edgecolor='black',
+                      linewidth=1.5, width=0.75, zorder=3, error_kw={'elinewidth': 2, 'capthick': 2, 'zorder': 4})
         rng = np.random.default_rng(0)
         for i, l in enumerate(labels):
-            ax.scatter(i + rng.uniform(-0.2, 0.2, len(runs)), runs[l].values, s=45,
+            ax.scatter(i + rng.uniform(-0.2, 0.2, len(runs)), runs[l].values, s=40,
                        color='black', alpha=0.65, zorder=5, linewidths=0)
-        if len(runs):
-            for bar, m, e, c in zip(bars, means, sems, counts):
-                ax.text(bar.get_x() + bar.get_width() / 2., 102, f"{m:.0f}±{e:.0f}\n({c})", ha='center',
-                        va='bottom', fontsize=FONT['bar'] - 2, fontweight='bold', zorder=6, linespacing=0.95)
+        for xi, m, e, c in zip(x, means, sems, counts):
+            if c:
+                label_height = max(label_height, _stack_labels(
+                    ax, xi, 100, [(f"({c})", FONT['count'], False), (f"±{e:.0f}", FONT['count'], False),
+                                  (f"{m:.0f}%", FONT['pct'], True)]))
         ax.set_ylabel('% of events in a run', fontsize=FONT['axis'], fontweight='bold')
         n_text = n_label(n_events, len(runs))
     bars[-1].set_hatch('//')
 
-    # y axis always 0-100 %; the space above 100 holds the labels
-    ax.set_ylim(0, 122)
+    # y axis always 0-100 %; labels above 100 % sit between the axis and the panel title
+    ax.set_ylim(0, 100)
     ax.set_yticks(range(0, 101, 20))
-    ax.spines['left'].set_bounds(0, 100)
     if n_events == 0:
-        ax.text(0.5, 0.45, 'no events', transform=ax.transAxes, ha='center', va='center',
+        ax.text(0.5, 0.5, 'no events', transform=ax.transAxes, ha='center', va='center',
                 fontsize=FONT['title'], fontweight='bold', color='0.4')
     ax.set_xticks(x)
     ax.set_xticklabels([_tick(l, types) for l in labels], fontsize=FONT['tick'], fontweight='bold',
-                       rotation=45, ha='right', rotation_mode='anchor')
+                       rotation=50, ha='right', rotation_mode='anchor')
     ax.set_xlabel('Next stay', fontsize=FONT['axis'], fontweight='bold')
     ax.tick_params(axis='y', labelsize=FONT['tick'])
     ax.tick_params(axis='both', width=1.5, length=6)
-    ax.set_title(f"{title}\n({n_text})", fontsize=FONT['title'], fontweight='bold', pad=10)
+    ax.set_title(f"{title}\n({n_text})", fontsize=FONT['title'], fontweight='bold', pad=8 + label_height)
     _style(ax)
 
 
