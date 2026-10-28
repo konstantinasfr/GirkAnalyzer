@@ -4,7 +4,11 @@ aggregate_touch_to_next_stay.py
 Aggregates analysis/touch_to_next_stay.py over all runs of one or more
 systems: for every permeation event whose first touch after the SF is on the
 lower ring (ASP or ASN), the next residue the ion stays on (or 'out'), split
-by how many GLUs were occupied by other K+ when it left the touched residue.
+by how many GLUs were occupied by other K+ when it left the touched residue
+(results of load_mode='glu'), or by how many K+ were above it in the cavity
+(load_mode='above', <settings>_above folders).
+Events with end_1 == 0 (ion in the SF in the starting structure) are counted
+and kept; --exclude_frame0 leaves them out of the plots and the counts tables.
 
 Every figure is made twice:
     pooled    every event of every run counted once; bars = counts, labels = count (% of the panel)
@@ -18,6 +22,10 @@ Figures (one set per system, 9 bars per panel: the 4 GLU, the 4 ASN/ASP, out):
     asp_by_glu_occupancy/asp_<k>glu_occupied_<kind>.png   each panel on its own
     fig3_asn_by_glu_occupancy_<kind>.png     the same for first touch = ASN
     asn_by_glu_occupancy/asn_<k>glu_occupied_<kind>.png
+  load_mode='above': figures 2-3 split by K+ above the ion in the cavity, one panel per value
+  from 0 to the largest found among the ASP/ASN events of the system:
+    fig2_asp_by_ions_above_<kind>.png, asp_by_ions_above/asp_<k>above_<kind>.png
+    fig3_asn_by_ions_above_<kind>.png, asn_by_ions_above/asn_<k>above_<kind>.png
 Tables:
     events.csv          every event of every run (not_lower events included)
     counts_pooled.csv   one row per panel and bar: count, % of the panel
@@ -26,7 +34,7 @@ Tables:
 Input:  <base>/RUN*/touch_to_next_stay/<settings>/touch_to_next_stay_run*.csv (+ settings_run*.json)
 Output: <base>/aggregated_touch_to_next_stay/<settings>/
 <settings>: t<cutoff>_w<window>_d<min_duration>, e.g. t3.5_wno_d10 (no first-touch window,
-stays >= 10 frames), t3.5_wno_d5, t3.5_w10_d10
+stays >= 10 frames), t3.5_wno_d5, t3.5_w10_d10, t3.5_wno_d10_above
 
 USAGE
 -----
@@ -44,8 +52,8 @@ import numpy as np
 import pandas as pd
 
 from aggregate_duration_results import run_sort_key
-from analysis.touch_to_next_stay import (NOT_LOWER, CLASSES, N_GLU, bar_labels, pooled_counts,
-                                         per_run_pct, write_plots)
+from analysis.touch_to_next_stay import (NOT_LOWER, CLASSES, bar_labels, pooled_counts, per_run_pct,
+                                         write_plots, load_split, split_events, frame0_events)
 
 
 SYSTEM_NAMES = {'G12': 'WT', 'G12_E141Q': 'E141Q', 'G12_D173N': 'D173N', 'G2': 'G2'}
@@ -91,29 +99,31 @@ def load_system(base, subdir):
 # Tables
 # ----------------------------------------------------------------------
 
-def panels(df):
-    """(class, n_glu or 'all', events) of every panel."""
+def panels(df, split):
+    """(class, panel title or 'all', events) of every panel."""
+    column, bins = split[0], split[1]
     for cls in CLASSES:
         sub = df[df['first_touch_class'] == cls]
         yield cls, 'all', sub
-        for k in N_GLU:
-            yield cls, k, sub[sub['n_glu_occupied'] == k]
+        for title, _, test in bins:
+            yield cls, title, split_events(sub, column, test)
 
 
-def write_tables(df, labels, types, output_dir):
-    df.assign(_order=df['run'].map(lambda r: run_sort_key(r)[0])).sort_values(['_order', 'end_2']) \
-      .drop(columns='_order').to_csv(output_dir / "events.csv", index=False)
+def write_tables(all_events, df, labels, types, split, output_dir):
+    """events.csv: every event; counts_pooled.csv / per_run.csv: the plotted events (df)."""
+    all_events.assign(_order=all_events['run'].map(lambda r: run_sort_key(r)[0])) \
+        .sort_values(['_order', 'end_2']).drop(columns='_order').to_csv(output_dir / "events.csv", index=False)
     pooled, per_run = [], []
-    for cls, k, sub in panels(df):
+    for cls, k, sub in panels(df, split):
         for l, c in zip(labels, pooled_counts(sub, labels)):
-            pooled.append({'first_touch_class': cls, 'n_glu_occupied': k, 'next_stay': l,
+            pooled.append({'first_touch_class': cls, 'panel': k, 'next_stay': l,
                            'next_stay_type': types[l], 'count': c, 'n_events': len(sub),
                            'pct': 100.0 * c / len(sub) if len(sub) else np.nan})
         pct = per_run_pct(sub, labels)
         n_run = sub.groupby('run').size()
         for run, row in pct.iterrows():
             for l in labels:
-                per_run.append({'run': run, 'first_touch_class': cls, 'n_glu_occupied': k, 'next_stay': l,
+                per_run.append({'run': run, 'first_touch_class': cls, 'panel': k, 'next_stay': l,
                                 'count': int((sub[sub['run'] == run]['next_stay_residue'] == l).sum()),
                                 'n_events_run': int(n_run[run]), 'pct': row[l]})
     pd.DataFrame(pooled).to_csv(output_dir / "counts_pooled.csv", index=False)
@@ -123,7 +133,7 @@ def write_tables(df, labels, types, output_dir):
 
 # ----------------------------------------------------------------------
 
-def aggregate(base, subdir, channel_type=None, output_dir=None):
+def aggregate(base, subdir, channel_type=None, output_dir=None, exclude_frame0=False):
     base = Path(base)
     name = channel_type or base.name
     head = SYSTEM_NAMES.get(name, name)
@@ -135,19 +145,22 @@ def aggregate(base, subdir, channel_type=None, output_dir=None):
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"\n=== {head} ({base}){' ' + subdir if subdir else ''}: {df['run'].nunique()} runs, "
           f"{len(df)} events -> {output_dir}")
+    all_events = df
+    df = frame0_events(df, exclude_frame0)
     counts = df['first_touch_class'].value_counts()
     print("  First touch: " + ", ".join(f"{c}: {counts.get(c, 0)}" for c in CLASSES + [NOT_LOWER]))
+    labels, types, glu_name = bar_labels(settings)
+    split = load_split(settings.get('load_mode', 'glu'), glu_name, df)
     for cls in CLASSES:
         sub = df[df['first_touch_class'] == cls]
-        occ = sub['n_glu_occupied'].value_counts()
-        print(f"  {cls} by GLUs occupied: " + ", ".join(f"{k}: {occ.get(k, 0)}" for k in N_GLU))
+        print(f"  {cls} by {split[0]}: " + ", ".join(f"{title}: {len(split_events(sub, split[0], test))}"
+                                                 for title, _, test in split[1]))
 
-    labels, types, _ = bar_labels(settings)
     unknown = set(df.loc[df['first_touch_class'].isin(CLASSES), 'next_stay_residue']) - set(labels)
     if unknown:
         print(f"  ⚠ next stays not on the 9 bars (left out of the plots): {sorted(unknown)}")
-    write_plots(df, settings, head, output_dir, KINDS)
-    write_tables(df, labels, types, output_dir)
+    write_plots(df, settings, head, output_dir, KINDS, exclude_frame0=None)   # already handled above
+    write_tables(all_events, df, labels, types, split, output_dir)
 
 
 def main():
@@ -156,6 +169,8 @@ def main():
                         help="System folders containing RUN* (e.g. .../G12 .../G12_E141Q .../G12_D173N .../G2)")
     parser.add_argument("--settings", default=None,
                         help="Only this settings folder (e.g. t3.5_wno_d10); default: every one found")
+    parser.add_argument("--exclude_frame0", action="store_true",
+                        help="Leave events with end_1 == 0 (starting structure) out of the plots and counts")
     parser.add_argument("--channel_type", default=None,
                         help="Name for the titles when only one folder is given (default: folder name)")
     args = parser.parse_args()
@@ -164,7 +179,8 @@ def main():
         if not subdirs:
             print(f"\n{base}: no RUN*/touch_to_next_stay/t*_w*_d*/ results")
         for subdir in subdirs:
-            aggregate(base, subdir, args.channel_type if len(args.base_directories) == 1 else None)
+            aggregate(base, subdir, args.channel_type if len(args.base_directories) == 1 else None,
+                      exclude_frame0=args.exclude_frame0)
 
 
 if __name__ == "__main__":
