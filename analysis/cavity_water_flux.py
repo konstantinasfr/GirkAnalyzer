@@ -48,6 +48,43 @@ other. A visit still running at the last frame has no exit, so its true
 length is unknown: it is saved with censored = 1 but left out of the
 mean / median / histograms / boxplots.
 
+Full SF transits
+----------------
+The sf_in / sf_back counts include every water stepping in and out of the
+SF's ends. A FULL TRANSIT is stricter and is counted with two planes across
+the SF axis: the TOP plane through the upper1 CA ring and the BOTTOM plane
+through the lower1 CA ring (both recomputed every frame). Along that axis
+each water is in one of four zones:
+
+    ABOVE    up to zone_reach above the top plane, within zone_radius of the axis
+    INSIDE   between the planes, within tube_radius of the axis
+    BELOW    up to zone_reach below the bottom plane, within zone_radius
+    OUT      anywhere else
+
+A water's path only counts while it stays in ABOVE / INSIDE / BELOW; going
+OUT (leaving the pore sideways, or wandering off into the bulk) forgets where
+it came from. Then
+
+    transit_down    seen ABOVE, later BELOW, never back ABOVE or OUT in between,
+                    and seen INSIDE at least once
+    transit_up      the same from BELOW to ABOVE
+    jump_down/up    the same, but never seen INSIDE: it crossed the whole SF
+                    between two saved frames. Counted separately.
+    return_top      went from ABOVE to INSIDE and came back ABOVE (boundary play)
+    return_bottom   went from BELOW to INSIDE and came back BELOW
+
+Because the zones are local to the SF, a water crossing the periodic box edge
+cannot look like a transit. A water inside the SF at the first frame has no
+known starting end and only starts counting once it reaches one.
+
+Where cavity water comes from
+-----------------------------
+Every water entering the cavity (GLU/HBC) is tagged with the way it came in,
+from its label the frame before: SF (1), below the HBC (4) or the sides (0).
+Waters already inside at the first frame are tagged "initial". Each frame the
+cavity's waters are counted by tag, which gives the share of the cavity's
+water that came in through each route.
+
 Caveats
 -------
 - No commit rule: a water flickering across a boundary is counted every
@@ -72,6 +109,12 @@ What it produces   <results_dir>/water_analysis/cavity_water_flux/
 8. cavity_water_flux_timeseries.png       net flux per ns in time bins
 9. cavity_water_residence_hist.png        histogram per region, mean + median marked
 10. cavity_water_residence_box.png        boxplot per region
+11. cavity_water_sf_transits.csv          every full SF transit: water, direction, frames,
+                                          seen inside or jump
+12. cavity_water_sf_transits.png          cumulative SF transits next to cumulative K+
+                                          permeations (end_1)
+13. cavity_water_composition.png          cavity waters over time, coloured by the way
+                                          they came in
 
 How to call it from main.py
 ----------------------------
@@ -211,6 +254,108 @@ class ResidenceTracker:
                 "n_frames": e - s + 1, "censored": c}
 
 
+class SFTransitTracker:
+    """
+    Two-plane counting of waters crossing the whole SF (see module docstring).
+
+    The axis runs from the top plane (upper1 CA ring) to the bottom plane
+    (lower1 CA ring); s is the distance along it from the top plane.
+    """
+
+    OUT, ABOVE, INSIDE, BELOW = 0, 1, 2, 3
+    COUNTS = ("transit_down", "transit_up", "jump_down", "jump_up",
+              "return_top", "return_bottom")
+
+    def __init__(self, n_waters, tube_radius=4.0, zone_reach=10.0, zone_radius=10.0):
+        self.tube_r2 = tube_radius ** 2
+        self.zone_r2 = zone_radius ** 2
+        self.reach = zone_reach
+        self.params = {"tube_radius": tube_radius, "zone_reach": zone_reach,
+                       "zone_radius": zone_radius}
+        self.last_end = np.zeros(n_waters, dtype=np.int8)        # -1 above, 1 below, 0 none
+        self.seen_inside = np.zeros(n_waters, dtype=bool)
+        self.end_frame = np.full(n_waters, -1, dtype=np.int64)    # last frame at that end
+        self.events = []        # (water_i, start, end, direction, seen_inside)
+        self.sf_length = []
+
+    def zones(self, pos, ch1):
+        top = ch1._upper_atoms.center_of_mass()
+        axis = ch1._lower_atoms.center_of_mass() - top
+        length = float(np.linalg.norm(axis))
+        axis = axis / length
+        rel = pos - top
+        s = rel @ axis
+        r2 = np.einsum("ij,ij->i", rel, rel) - s * s
+        z = np.full(len(pos), self.OUT, dtype=np.int8)
+        z[(s >= -self.reach) & (s < 0) & (r2 <= self.zone_r2)] = self.ABOVE
+        z[(s >= 0) & (s <= length) & (r2 <= self.tube_r2)] = self.INSIDE
+        z[(s > length) & (s <= length + self.reach) & (r2 <= self.zone_r2)] = self.BELOW
+        return z, length
+
+    def update(self, pos, ch1, frame):
+        z, length = self.zones(pos, ch1)
+        self.sf_length.append(length)
+        above, inside = z == self.ABOVE, z == self.INSIDE
+        below, gone = z == self.BELOW, z == self.OUT
+        from_top, from_bot = self.last_end == -1, self.last_end == 1
+        seen = self.seen_inside
+
+        down = below & from_top
+        up = above & from_bot
+        out = {
+            "transit_down": int(np.sum(down & seen)),
+            "transit_up": int(np.sum(up & seen)),
+            "jump_down": int(np.sum(down & ~seen)),
+            "jump_up": int(np.sum(up & ~seen)),
+            "return_top": int(np.sum(above & from_top & seen)),
+            "return_bottom": int(np.sum(below & from_bot & seen)),
+        }
+        for mask, direction in ((down, 1), (up, -1)):
+            idx = np.nonzero(mask)[0]
+            if len(idx):
+                self.events.append((idx, self.end_frame[idx], np.full(len(idx), frame),
+                                    np.full(len(idx), direction), seen[idx].copy()))
+
+        self.last_end[above] = -1
+        self.last_end[below] = 1
+        self.last_end[gone] = 0
+        self.seen_inside[above | below | gone] = False
+        self.seen_inside[inside & (self.last_end != 0)] = True
+        self.end_frame[above | below] = frame
+        return out
+
+    def result(self):
+        if not self.events:
+            empty = np.zeros(0, dtype=np.int64)
+            return {"water_i": empty, "start": empty, "end": empty, "direction": empty,
+                    "seen_inside": np.zeros(0, dtype=bool), "n_frames": empty}
+        w, a, e, d, v = (np.concatenate(x) for x in zip(*self.events))
+        order = np.argsort(e, kind="stable")
+        w, a, e, d, v = w[order], a[order], e[order], d[order], v[order]
+        return {"water_i": w, "start": a, "end": e, "direction": d,
+                "seen_inside": v, "n_frames": e - a}
+
+
+# cavity entry route -> code; "initial" = already inside at the first frame
+ROUTES = {"initial": 0, "SF": 1, "below": 2, "sides": 3}
+ROUTE_COLORS = {"initial": "#BDBDBD", "SF": "#1E88E5", "below": "#43A047",
+                "sides": "#8D6E63"}
+
+
+def entry_routes(prev, cur, route):
+    """Update each water's cavity entry route in place (-1 = not in the cavity)."""
+    now_cav = (cur == 2) | (cur == 3)
+    if prev is None:
+        route[now_cav] = ROUTES["initial"]
+        return
+    was_cav = (prev == 2) | (prev == 3)
+    came = now_cav & ~was_cav
+    route[came & (prev == 1)] = ROUTES["SF"]
+    route[came & (prev == 4)] = ROUTES["below"]
+    route[came & (prev == 0)] = ROUTES["sides"]
+    route[was_cav & ~now_cav] = -1
+
+
 def describe(values):
     """n, mean, median, std, min, max, q1, q3 of a 1-D array (nan if empty)."""
     v = np.asarray(values, dtype=float)
@@ -232,6 +377,9 @@ def run_cavity_water_flux(
     frame_duration=0.075,
     water_selection=_WATER_SEL,
     flux_bin_ns=5.0,
+    sf_tube_radius=4.0,
+    sf_zone_reach=10.0,
+    sf_zone_radius=10.0,
 ):
     """
     Main entry point — water crossings and residence, save results & plots.
@@ -247,6 +395,9 @@ def run_cavity_water_flux(
     frame_duration    : float  ns per frame (0.075 G12, 0.4 G2)
     water_selection   : str  MDAnalysis selection for water oxygens
     flux_bin_ns       : float  bin width (ns) of the flux time-series plot
+    sf_tube_radius    : float  radius (A) of the pore tube between the SF planes
+    sf_zone_reach     : float  how far (A) above / below the SF the end zones reach
+    sf_zone_radius    : float  radius (A) of the end zones around the SF axis
     """
     out_dir = Path(results_dir) / "water_analysis" / "cavity_water_flux"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -274,6 +425,10 @@ def run_cavity_water_flux(
     n_in = {r: np.zeros(n_frames, dtype=int) for r in RES_REGIONS}
     counts = {k: np.zeros(n_frames, dtype=int) for k in CROSSINGS}
     trackers = {r: ResidenceTracker(len(waters), labs) for r, labs in RES_REGIONS.items()}
+    sf_tracker = SFTransitTracker(len(waters), sf_tube_radius, sf_zone_reach, sf_zone_radius)
+    sf_counts = {k: np.zeros(n_frames, dtype=int) for k in SFTransitTracker.COUNTS}
+    route = np.full(len(waters), -1, dtype=np.int8)
+    by_route = {r: np.zeros(n_frames, dtype=int) for r in ROUTES}
     prev = None
 
     for fi, ts in enumerate(tqdm(u.trajectory[start_frame: end_frame + 1],
@@ -282,7 +437,13 @@ def run_cavity_water_flux(
         for num, ch in enumerate(channels, start=1):
             ch.compute_geometry(num)
 
-        cur = label_regions(waters.positions, channels)
+        pos = waters.positions
+        cur = label_regions(pos, channels)
+        for k, v in sf_tracker.update(pos, channels[0], ts.frame).items():
+            sf_counts[k][fi] = v
+        entry_routes(prev, cur, route)
+        for r, code in ROUTES.items():
+            by_route[r][fi] = int(np.sum(route == code))
         for r, tr in trackers.items():
             tr.update(cur, ts.frame)
             n_in[r][fi] = int(np.sum(tr.entry >= 0))
@@ -355,6 +516,57 @@ def run_cavity_water_flux(
                      f"{st['median']:>8.3f} {st['std']:>8.3f} {st['q1']:>7.3f} "
                      f"{st['q3']:>7.3f} {st['max']:>8.3f}")
     lines.append(f"(one frame = {frame_duration} ns, the shortest possible residence)")
+
+    sf_tot = {k: int(v.sum()) for k, v in sf_counts.items()}
+    sf_events = sf_tracker.result()
+    net_transit = sf_tot["transit_down"] - sf_tot["transit_up"]
+    net_jump = sf_tot["jump_down"] - sf_tot["jump_up"]
+    seen_t = sf_events["n_frames"][sf_events["seen_inside"]] * frame_duration
+    lines += [
+        "",
+        "FULL SF TRANSITS (two planes: upper1 and lower1 CA rings)",
+        f"tube radius {sf_tube_radius} A, end zones {sf_zone_reach} A deep x "
+        f"{sf_zone_radius} A wide, mean SF length {np.mean(sf_tracker.sf_length):.1f} A",
+        "=" * 60,
+        f"{'':<16} {'total':>8} {'per ns':>10} {'per ion':>10}",
+        "-" * 60,
+    ]
+    for k in SFTransitTracker.COUNTS:
+        per_ns = sf_tot[k] / sim_ns if sim_ns > 0 else float("nan")
+        per_ion = sf_tot[k] / n_perm if n_perm else float("nan")
+        lines.append(f"{k:<16} {sf_tot[k]:>8} {per_ns:>10.4f} {per_ion:>10.2f}")
+    lines += [
+        "-" * 60,
+        f"net transits (down - up)          : {net_transit}"
+        + (f"   ({net_transit / n_perm:.2f} per K+ permeation)" if n_perm else ""),
+        f"net incl. jumps                   : {net_transit + net_jump}"
+        + (f"   ({(net_transit + net_jump) / n_perm:.2f} per K+ permeation)" if n_perm else ""),
+        f"time from one end to the other    : median "
+        f"{np.median(seen_t) if seen_t.size else float('nan'):.2f} ns, mean "
+        f"{seen_t.mean() if seen_t.size else float('nan'):.2f} ns",
+    ]
+
+    entries = {"below": totals["hbc_back"], "sides": totals["side_in"], "SF": totals["sf_in"]}
+    exits = {"below": totals["hbc_out"], "sides": totals["side_out"], "SF": totals["sf_back"]}
+    n_ent, n_ext = sum(entries.values()), sum(exits.values())
+    cav_mean = n_in["GLU/HBC"].mean()
+    lines += [
+        "",
+        "WHERE CAVITY (GLU/HBC) WATER COMES FROM",
+        "=" * 60,
+        f"{'route':<8} {'entries':>9} {'share':>7} {'exits':>9} {'share':>7} {'in cavity':>10}",
+        "-" * 60,
+    ]
+    for r in ("below", "sides", "SF"):
+        lines.append(f"{r:<8} {entries[r]:>9} {100 * entries[r] / max(n_ent, 1):>6.1f}% "
+                     f"{exits[r]:>9} {100 * exits[r] / max(n_ext, 1):>6.1f}% "
+                     f"{100 * by_route[r].mean() / max(cav_mean, 1e-9):>9.1f}%")
+    lines += [
+        f"{'initial':<8} {'':>9} {'':>7} {'':>9} {'':>7} "
+        f"{100 * by_route['initial'].mean() / max(cav_mean, 1e-9):>9.1f}%",
+        "(in cavity = share of the cavity's waters, averaged over all frames, by the",
+        " way they came in; initial = already inside at the first frame)",
+    ]
     print("\n".join("  " + s for s in lines))
 
     (out_dir / "cavity_water_flux_summary.txt").write_text("\n".join(lines) + "\n")
@@ -362,11 +574,14 @@ def run_cavity_water_flux(
     # ── csv ───────────────────────────────────────────────────────────────────
     with open(out_dir / "cavity_water_flux_per_frame.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["frame", "time_ns", *(f"n_{r}" for r in RES_REGIONS), *CROSSINGS])
+        w.writerow(["frame", "time_ns", *(f"n_{r}" for r in RES_REGIONS), *CROSSINGS,
+                    *(f"cavity_from_{r}" for r in ROUTES), *(f"sf_{k}" for k in sf_counts)])
         for i, fr in enumerate(frame_indices):
             w.writerow([fr, round(fr * frame_duration, 4),
                         *(n_in[r][i] for r in RES_REGIONS),
-                        *(counts[k][i] for k in CROSSINGS)])
+                        *(counts[k][i] for k in CROSSINGS),
+                        *(by_route[r][i] for r in ROUTES),
+                        *(sf_counts[k][i] for k in sf_counts)])
 
     water_index = waters.indices
     with open(out_dir / "cavity_water_residence_visits.csv", "w", newline="") as f:
@@ -393,6 +608,18 @@ def run_cavity_water_flux(
                             round(done.mean(), 4) if done.size else "",
                             round(t.max(), 4)])
 
+    with open(out_dir / "cavity_water_sf_transits.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["water_atom_index", "water_resid", "direction", "kind",
+                    "last_frame_at_start_end", "first_frame_at_far_end", "n_frames",
+                    "time_ns"])
+        for wi, a, e, d, v, n in zip(sf_events["water_i"], sf_events["start"],
+                                     sf_events["end"], sf_events["direction"],
+                                     sf_events["seen_inside"], sf_events["n_frames"]):
+            w.writerow([water_index[wi], waters.resids[wi], "down" if d > 0 else "up",
+                        "transit" if v else "jump", a, e, n,
+                        round(n * frame_duration, 4)])
+
     pkl_data = {
         "start_frame": start_frame,
         "end_frame": end_frame,
@@ -405,6 +632,11 @@ def run_cavity_water_flux(
         "n_permeation_events": n_perm,
         "end2_frames": end2,
         "end3_frames": end3,
+        "sf_transits": {"counts": sf_counts, "totals": sf_tot, "events": sf_events,
+                        "net": net_transit, "net_jumps": net_jump,
+                        "params": sf_tracker.params,
+                        "mean_sf_length": float(np.mean(sf_tracker.sf_length))},
+        "cavity_by_route": by_route,
         "residence_visits": visits,
         "residence_stats": res_stats,
         "water_atom_indices": water_index,
@@ -418,6 +650,13 @@ def run_cavity_water_flux(
     _plot_cumulative(frame_indices, counts, end2, end3,
                      out_dir / "cavity_water_flux_cumulative.png")
     _plot_rates(totals, sim_ns, out_dir / "cavity_water_flux_rates.png")
+    end1 = sorted(int(ev["end_1"]) for ev in permeation_events
+                  if ev.get("end_1") is not None
+                  and start_frame <= int(ev["end_1"]) <= end_frame)
+    _plot_sf_transits(frame_indices, sf_counts, end1, frame_duration,
+                      out_dir / "cavity_water_sf_transits.png")
+    _plot_composition(frame_indices, by_route, frame_duration,
+                      out_dir / "cavity_water_composition.png")
     _plot_flux_timeseries(frame_indices, counts, frame_duration, flux_bin_ns,
                           end2, end3, out_dir / "cavity_water_flux_timeseries.png")
     complete = {r: v["n_frames"][~v["censored"]] * frame_duration
@@ -461,6 +700,63 @@ def _plot_cumulative(frame_indices, counts, end2, end3, out_path):
     axes[-1].set_xlabel("Frame   (red dashed = K⁺ end_2, purple dashed = K⁺ end_3)",
                         fontsize=11)
     axes[-1].set_xlim(frame_indices[0], frame_indices[-1])
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  ✅ Saved: {out_path}")
+
+
+def _plot_sf_transits(frame_indices, sf_counts, end1, frame_duration, out_path):
+    """Cumulative full SF transits next to cumulative K+ leaving the SF (end_1)."""
+    t = frame_indices * frame_duration
+    down = np.cumsum(sf_counts["transit_down"])
+    up = np.cumsum(sf_counts["transit_up"])
+    jumps = np.cumsum(sf_counts["jump_down"] - sf_counts["jump_up"])
+    ions = np.searchsorted(np.asarray(end1), frame_indices, side="right")
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.plot(t, down, color="#1E88E5", linewidth=1.6, label="water transits down")
+    ax.plot(t, up, color="#1E88E5", linewidth=1.2, linestyle=":", label="water transits up")
+    ax.plot(t, down - up, color="black", linewidth=1.6, label="net water transits")
+    if jumps.any():
+        ax.plot(t, down - up + jumps, color="#757575", linewidth=1.2, linestyle="--",
+                label="net incl. jumps (never seen inside)")
+    ax.plot(t, ions, color="#E53935", linewidth=1.6, drawstyle="steps-post",
+            label="K⁺ permeations (end_1)")
+    ax.set_xlabel("Time (ns)", fontsize=11)
+    ax.set_ylabel("cumulative count", fontsize=11)
+    ax.set_title("Waters crossing the whole SF, next to K⁺ crossing it",
+                 fontsize=13, fontweight="bold")
+    ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
+    ax.legend(fontsize=9, loc="upper left")
+    ax.set_xlim(t[0], t[-1])
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  ✅ Saved: {out_path}")
+
+
+def _plot_composition(frame_indices, by_route, frame_duration, out_path):
+    """Cavity waters over time, stacked by the way each one came in."""
+    t = frame_indices * frame_duration
+    order = ("initial", "below", "sides", "SF")
+    total = sum(by_route[r] for r in order).astype(float)
+    mean_share = {r: 100 * by_route[r].mean() / max(total.mean(), 1e-9) for r in order}
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.stackplot(t, *(by_route[r] for r in order), colors=[ROUTE_COLORS[r] for r in order],
+                 labels=[f"came in {'from ' if r != 'initial' else ''}{r}"
+                         f"{' (already inside at frame 0)' if r == 'initial' else ''}"
+                         f" — {mean_share[r]:.1f}% on average" for r in order],
+                 alpha=0.9)
+    ax.set_xlabel("Time (ns)", fontsize=11)
+    ax.set_ylabel("waters in the cavity (GLU/HBC)", fontsize=11)
+    ax.set_title("Where the waters in the cavity came in from", fontsize=13,
+                 fontweight="bold")
+    ax.set_xlim(t[0], t[-1])
+    ax.legend(fontsize=9, loc="lower right", framealpha=0.9)
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=150)
