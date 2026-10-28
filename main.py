@@ -985,16 +985,16 @@ def main():
     #     frame_duration      = frame_duration,
     # )
 
-    from analysis.cavity_refilling_analysis import run_cavity_refilling_analysis
+    # from analysis.cavity_refilling_analysis import run_cavity_refilling_analysis
 
-    run_cavity_refilling_analysis(
-        permeation_events = analyzer.permeation_events,
-        results_dir       = results_dir,
-        channel_type      = args.channel_type,
-        frame_duration    = frame_duration,
-        end_frame         = end_frame,   # ← add this
-        force_rerun       = True,
-    )
+    # run_cavity_refilling_analysis(
+    #     permeation_events = analyzer.permeation_events,
+    #     results_dir       = results_dir,
+    #     channel_type      = args.channel_type,
+    #     frame_duration    = frame_duration,
+    #     end_frame         = end_frame,   # ← add this
+    #     force_rerun       = True,
+    # )
 
     # # only these channel types have a bound ligand
     # # only these channel types have a bound ligand — each may use a different resname
@@ -1477,16 +1477,16 @@ def main():
     #     force_rerun=True,
     # )
 
-    from analysis.cavity_occupancy_analysis import run_cavity_occupancy_analysis
-    run_cavity_occupancy_analysis(
-        u, ch2, analyzer.permeation_events,
-        asn_residues, glu_residues, subunit_groups,
-        channel_type=args.channel_type,
-        results_dir=results_dir,   # base RUN*/ dir — subfolder created automatically
-        start_frame=start_frame, end_frame=end_frame, frame_duration=frame_duration,
-        channel3=ch3, hbc_residues=hbc_residues,
-        channel1=ch1, sf_residues=sf_residues,
-    )
+    # from analysis.cavity_occupancy_analysis import run_cavity_occupancy_analysis
+    # run_cavity_occupancy_analysis(
+    #     u, ch2, analyzer.permeation_events,
+    #     asn_residues, glu_residues, subunit_groups,
+    #     channel_type=args.channel_type,
+    #     results_dir=results_dir,   # base RUN*/ dir — subfolder created automatically
+    #     start_frame=start_frame, end_frame=end_frame, frame_duration=frame_duration,
+    #     channel3=ch3, hbc_residues=hbc_residues,
+    #     channel1=ch1, sf_residues=sf_residues,
+    # )
 
     # # from analysis.permeation_stage_times import run_permeation_stage_times_analysis
     # # run_permeation_stage_times_analysis(
