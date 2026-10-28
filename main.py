@@ -68,6 +68,10 @@ def main():
                         help="scan only the first N frames (quick check)")
     parser.add_argument("--salt_bridge_diagnostics_only", action="store_true",
                         help="print the salt bridge diagnostics and stop")
+    parser.add_argument("--force_pkl_generation", action="store_true",
+                        help="ignore analyzer_state.pkl and redo the trajectory pass (ion region tracking, "
+                             "permeation events, gate diameters), then rerun the SF-dependent analyses "
+                             "even if their results exist. The old pkl is kept as analyzer_state_old.pkl")
     # parser.add_argument("--channel_type", default="G2_FD")
     args = parser.parse_args()
     generate_electric_field_heatmap =  False
@@ -437,8 +441,10 @@ def main():
         lower_gl_residues = [259, 583, 908, 1234 ]
         lower_gl_diagonal_pairs = [(259, 1234 ), (583, 908)]
 
-        sf_low_res_residues = [101, 425, 750, 1076] 
-        sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
+        # sf_low_res_residues = [101, 425, 750, 1076]   the I of TIGYG; G2 and G12 WT use the T
+        # sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
+        sf_low_res_residues = [100, 424, 749, 1075]  # T of TIGYG in every subunit (checked on a frame PDB)
+        sf_low_res_diagonal_pairs = [(100, 1075), (424, 749)]
 
         glu_residues = [98,422,747,1073]
         glu_residues_pairs = [(98,1073), (422,747)]
@@ -584,8 +590,10 @@ def main():
         lower_gl_residues = [259, 583, 908, 1234 ]
         lower_gl_diagonal_pairs = [(259, 1234 ), (583, 908)]
 
-        sf_low_res_residues = [101, 425, 750, 1076] 
-        sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
+        # sf_low_res_residues = [101, 425, 750, 1076]   the I of TIGYG; G2 and G12 WT use the T
+        # sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
+        sf_low_res_residues = [100, 424, 749, 1075]  # T of TIGYG in every subunit (checked on a frame PDB)
+        sf_low_res_diagonal_pairs = [(100, 1075), (424, 749)]
 
         glu_residues = [98,422,747,1073]
         glu_residues_pairs = [(98,1073), (422,747)]
@@ -748,7 +756,16 @@ def main():
     ch4 = Channel(u, upper4, lower4, num=4, radius=10.0)
 
  # ========== TRY TO LOAD SAVED STATE ==========
-    saved_state = load_analyzer_state(results_dir)
+    # --force_pkl_generation: redo the trajectory pass even if analyzer_state.pkl exists
+    # (needed after changing the channel / SF residues, which the saved tracking was built with)
+    if args.force_pkl_generation:
+        state_file = Path(results_dir) / "analyzer_state.pkl"
+        if state_file.exists():
+            state_file.replace(Path(results_dir) / "analyzer_state_old.pkl")
+            print(f"--force_pkl_generation: moved {state_file.name} to analyzer_state_old.pkl")
+        saved_state = None
+    else:
+        saved_state = load_analyzer_state(results_dir)
     
     if saved_state is not None:
         # Use saved state - SKIP trajectory analysis
@@ -1449,18 +1466,19 @@ def main():
     #     frame_duration = frame_duration,
     # )
 
-    # from analysis.ion_ion_permeation_analysis import run_ion_ion_permeation_analysis
+    # (uses the SF cylinder ch1: rerun after an SF residue fix, e.g. with --force_pkl_generation)
+    from analysis.ion_ion_permeation_analysis import run_ion_ion_permeation_analysis
 
-    # run_ion_ion_permeation_analysis(
-    #     u                   = u,
-    #     permeation_events   = analyzer.permeation_events,
-    #     channel1            = ch1,
-    #     channel2            = ch2,
-    #     sf_low_res_residues = sf_low_res_residues,
-    #     hbc_residues        = hbc_residues,
-    #     results_dir         = results_dir,
-    #     channel_type        = args.channel_type,
-    # )
+    run_ion_ion_permeation_analysis(
+        u                   = u,
+        permeation_events   = analyzer.permeation_events,
+        channel1            = ch1,
+        channel2            = ch2,
+        sf_low_res_residues = sf_low_res_residues,
+        hbc_residues        = hbc_residues,
+        results_dir         = results_dir,
+        channel_type        = args.channel_type,
+    )
 
     # from analysis.cavity_occupancy_analysis import run_cavity_occupancy_analysis
 
@@ -1479,16 +1497,18 @@ def main():
     #     force_rerun=True,
     # )
 
-    # from analysis.cavity_occupancy_analysis import run_cavity_occupancy_analysis
-    # run_cavity_occupancy_analysis(
-    #     u, ch2, analyzer.permeation_events,
-    #     asn_residues, glu_residues, subunit_groups,
-    #     channel_type=args.channel_type,
-    #     results_dir=results_dir,   # base RUN*/ dir — subfolder created automatically
-    #     start_frame=start_frame, end_frame=end_frame, frame_duration=frame_duration,
-    #     channel3=ch3, hbc_residues=hbc_residues,
-    #     channel1=ch1, sf_residues=sf_residues,
-    # )
+    # (uses the SF cylinder ch1: rerun after an SF residue fix, e.g. with --force_pkl_generation)
+    from analysis.cavity_occupancy_analysis import run_cavity_occupancy_analysis
+    run_cavity_occupancy_analysis(
+        u, ch2, analyzer.permeation_events,
+        asn_residues, glu_residues, subunit_groups,
+        channel_type=args.channel_type,
+        results_dir=results_dir,   # base RUN*/ dir — subfolder created automatically
+        start_frame=start_frame, end_frame=end_frame, frame_duration=frame_duration,
+        channel3=ch3, hbc_residues=hbc_residues,
+        channel1=ch1, sf_residues=sf_residues,
+        force_rerun=args.force_pkl_generation,
+    )
 
     # # from analysis.permeation_stage_times import run_permeation_stage_times_analysis
     # # run_permeation_stage_times_analysis(
@@ -1566,14 +1586,15 @@ def main():
     #                   use_ca=False)
 
 
-    # from analysis.ion_force_correlation_analysis import run_force_correlation_analysis
+    # (uses the SF cylinder ch1: rerun after an SF residue fix, e.g. with --force_pkl_generation)
+    from analysis.ion_force_correlation_analysis import run_force_correlation_analysis
 
-    # force_analyzer = run_force_correlation_analysis(
-    #     universe=u, channel1=ch1, channel2=ch2,
-    #     permeation_events=analyzer.permeation_events,
-    #     asn_residues=asn_residues, glu_residues=glu_residues,
-    #     results_dir=results_dir / "force_correlation_analysis"
-    # )
+    force_analyzer = run_force_correlation_analysis(
+        universe=u, channel1=ch1, channel2=ch2,
+        permeation_events=analyzer.permeation_events,
+        asn_residues=asn_residues, glu_residues=glu_residues,
+        results_dir=results_dir / "force_correlation_analysis"
+    )
 
     # from analysis.dihedral_analysis_module import run_dihedral_analysis
 
@@ -1663,42 +1684,44 @@ def main():
     
 #     print("\n✓ Statistical significance analysis complete!")
 
-#     from analysis.occupancy_alignment import run_comprehensive_end2_analysis
+    # (uses the SF cylinder ch1: rerun after an SF residue fix, e.g. with --force_pkl_generation)
+    from analysis.occupancy_alignment import run_comprehensive_end2_analysis
 
-#         # ============= COMPREHENSIVE END_2 ANALYSIS =============
-#     if len(analyzer.permeation_events) > 0:
-#         print("\n" + "="*80)
-#         print("Running Comprehensive end_2 Analysis...")
-#         print("="*80)
+    # ============= COMPREHENSIVE END_2 ANALYSIS =============
+    if len(analyzer.permeation_events) > 0:
+        print("\n" + "="*80)
+        print("Running Comprehensive end_2 Analysis...")
+        print("="*80)
 
-#         threshold=3
-#         comp_analyzer = run_comprehensive_end2_analysis(
-#             universe=u,
-#             channel1=ch1,
-#             channel2=ch2,
-#             permeation_events=analyzer.permeation_events,
-#             asn_residues=asn_residues,
-#             glu_residues=glu_residues,
-#             subunit_groups=subunit_groups,
-#             channel_type=channel_type,
-#             threshold=threshold,  # Distance threshold for "close to residue"
-#             results_dir=f"{results_dir}/occupancy_alignment/{threshold}"  # <-- Separate folder
-#         )
-        
-#         print("\nComprehensive end_2 Analysis Complete!")
+        threshold=3
+        comp_analyzer = run_comprehensive_end2_analysis(
+            universe=u,
+            channel1=ch1,
+            channel2=ch2,
+            permeation_events=analyzer.permeation_events,
+            asn_residues=asn_residues,
+            glu_residues=glu_residues,
+            subunit_groups=subunit_groups,
+            channel_type=channel_type,
+            threshold=threshold,  # Distance threshold for "close to residue"
+            results_dir=f"{results_dir}/occupancy_alignment/{threshold}"  # <-- Separate folder
+        )
+
+        print("\nComprehensive end_2 Analysis Complete!")
 
 
 
-#     if analyzer.count_ions and len(analyzer.permeation_events) > 0:
-#        sf_analyzer = run_sf_alignment_analysis(
-#            universe=u,
-#            channel1=ch1,
-#            channel2=ch2,
-#            permeation_events=analyzer.permeation_events,
-#            asn_residues=asn_residues,
-#            glu_residues=glu_residues,
-#            results_dir=results_dir
-#        )
+    # (uses the SF cylinder ch1: rerun after an SF residue fix, e.g. with --force_pkl_generation)
+    if len(analyzer.permeation_events) > 0:
+        sf_analyzer = run_sf_alignment_analysis(
+            universe=u,
+            channel1=ch1,
+            channel2=ch2,
+            permeation_events=analyzer.permeation_events,
+            asn_residues=asn_residues,
+            glu_residues=glu_residues,
+            results_dir=results_dir
+        )
 
 
     # from analysis.closest_residue_analysis import run_closest_residue_analysis
@@ -1845,7 +1868,7 @@ def main():
         run=run_number,
         results_dir=results_dir,
         frame_duration=frame_duration,
-        force_rerun=False
+        force_rerun=args.force_pkl_generation
     )
 
     # TOUCH -> NEXT STAY: first touch on the ASN/ASP ring, the next residue the ion stays on
@@ -1876,7 +1899,7 @@ def main():
             load_mode=load_mode,
             channel1=ch1,
             channel2=ch2,
-            force_rerun=False
+            force_rerun=args.force_pkl_generation   # n_sf uses the SF cylinder ch1
         )
 
 #     #  NEW: Add proximity analysis
