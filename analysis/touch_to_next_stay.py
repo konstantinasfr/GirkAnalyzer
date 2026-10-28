@@ -26,19 +26,35 @@ Per permeation event:
     2. leave_frame: from touch_frame, the ion is followed forward (never past
        end_2) while the touched residue stays the closest residue within the
        cutoff (_closest_from_row); the last such frame
-    3. n_glu_occupied (0-4) at leave_frame
+    3. load at leave_frame (load_mode picks which one splits figures 2-3; all are stored):
+         n_glu_occupied  GLUs (0-4) with another K+ <= cutoff        (load_mode='glu', default)
+         n_above         other K+ inside region 2 (the cavity, main.py's ch2 cylinder)
+                         further toward the SF than the permeating ion along the
+                         ch2 axis                                    (load_mode='above')
+         n_below         other K+ inside region 2 further from the SF than the ion
+         n_sf            other K+ inside region 1 (the SF, main.py's ch1 cylinder)
+       Regions: Channel.compute_geometry + is_within_cylinder every frame, as in
+       ion_state_sequence.py. "Toward the SF" is the sign of the ch2 axis that
+       points from the cavity centre to the SF centre, found every frame.
     4. next stay: the earliest stay with end_frame >= touch_frame (may be the
        touched residue itself), or 'out' if there is none
+
+Events with end_1 == 0 (the ion was in the SF in the starting structure) are
+flagged starts_at_frame0; they stay in the plots unless exclude_frame0=True.
 
 window and min_duration default to 2 frames for G2 and 10 frames for G12
 systems (default_frames).
 
 Results (results_dir/touch_to_next_stay/<settings_folder>/, e.g. t3.5_wno_d10 = cutoff 3.5 Å,
-no first-touch window, stays >= 10 frames; t3.5_w10_d10 with a 10-frame window):
+no first-touch window, stays >= 10 frames; t3.5_w10_d10 with a 10-frame window;
+<settings_folder>_above/ with load_mode='above'):
     touch_to_next_stay_run<run>.csv   one row per event
     settings_run<run>.json            cutoff, window, min_duration, frame_duration,
                                       ring residues and the first-touch count check
     plots/                            figures 1-3 of this run (pooled counts and %), see write_plots
+With load_mode='above' the run also checks that every column but the n_above /
+n_below / n_sf split matches the load_mode='glu' CSV of the same settings, if
+that exists, and prints the n_above / n_below / n_sf distributions.
 Plots over runs: aggregate_touch_to_next_stay.py (repo root).
 """
 
@@ -61,9 +77,16 @@ from analysis.converter import convert_to_pdb_numbering
 
 OUT = 'out'
 NOT_LOWER = 'not_lower'
-COLUMNS = ['run', 'ion_id', 'end_1', 'end_2', 'first_touch_residue', 'first_touch_class',
-           'touch_frame', 'leave_frame', 'n_glu_occupied', 'next_stay_residue',
-           'next_stay_type', 'next_stay_start', 'next_stay_frames']
+COLUMNS = ['run', 'ion_id', 'end_1', 'end_2', 'starts_at_frame0', 'first_touch_residue',
+           'first_touch_class', 'touch_frame', 'leave_frame', 'n_glu_occupied', 'n_above',
+           'n_below', 'n_sf', 'next_stay_residue', 'next_stay_type', 'next_stay_start',
+           'next_stay_frames']
+INT_COLUMNS = ['touch_frame', 'leave_frame', 'n_glu_occupied', 'n_above', 'n_below', 'n_sf',
+               'next_stay_start', 'next_stay_frames']
+# columns that must be the same in both load modes (the check in load_mode='above')
+SHARED = ['ion_id', 'end_1', 'end_2', 'first_touch_residue', 'first_touch_class', 'touch_frame',
+          'leave_frame', 'n_glu_occupied', 'next_stay_residue', 'next_stay_start', 'next_stay_frames']
+LOAD_MODES = ('glu', 'above')
 LEAVE_CHUNK = 50                         # frames read at a time while following the ion
 CLASSES = ['ASP', 'ASN']                 # first-touch classes that are plotted
 N_GLU = range(5)                         # 0-4 GLUs occupied
@@ -77,9 +100,11 @@ def default_frames(channel_type):
     return 2 if str(channel_type).upper().startswith('G2') else 10
 
 
-def settings_folder(cutoff, window, min_duration):
-    """'t3.5_wno_d10': cutoff, first-touch window (no = none) and minimum stay in frames."""
-    return f"t{cutoff:g}_w{'no' if window is None else window}_d{min_duration}"
+def settings_folder(cutoff, window, min_duration, load_mode='glu'):
+    """'t3.5_wno_d10': cutoff, first-touch window (no = none) and minimum stay in frames;
+    '_above' appended for load_mode='above'."""
+    return (f"t{cutoff:g}_w{'no' if window is None else window}_d{min_duration}"
+            + ('_above' if load_mode == 'above' else ''))
 
 
 def csv_name(run):
@@ -109,6 +134,52 @@ def next_stay(stays, touch_frame):
     """The earliest stay with end_frame >= touch_frame, or None."""
     later = [s for s in stays if s['end_frame'] >= touch_frame]
     return min(later, key=lambda s: s['start_frame']) if later else None
+
+
+def ions_along_pore(ions, ion_id, channel1, channel2):
+    """
+    At the current frame: other K+ in the cavity (region 2) above / below the
+    permeating ion along the ch2 axis, and other K+ in the SF (region 1).
+    Both regions are recomputed with compute_geometry and tested with
+    is_within_cylinder, as in ion_state_sequence.py. "Above" = toward the SF:
+    the sign of the ch2 axis that points from the cavity centre to the SF
+    centre. Returns ({'n_above', 'n_below', 'n_sf'}, toward-SF unit vector).
+    """
+    channel1.compute_geometry(1)
+    channel2.compute_geometry(2)
+    axis = channel2.channel_axis
+    to_sf = axis if np.dot(channel1.channel_center - channel2.channel_center, axis) > 0 else -axis
+    pos = ions.positions
+    other = ions.resids != int(ion_id)
+    t = (pos - channel2.channel_center) @ to_sf          # position along the pore, + = toward the SF
+    t_ion = t[~other][0]
+    in_cav = np.array([channel2.is_within_cylinder(p) for p in pos], dtype=bool)
+    in_sf = np.array([channel1.is_within_cylinder(p) for p in pos], dtype=bool)
+    return {'n_above': int((other & in_cav & (t > t_ion)).sum()),
+            'n_below': int((other & in_cav & (t < t_ion)).sum()),
+            'n_sf': int((other & in_sf).sum())}, to_sf
+
+
+def check_modes(df, glu_csv):
+    """
+    load_mode='above' check: every SHARED column equals the load_mode='glu'
+    CSV of the same settings. Returns a dict for settings_run<run>.json.
+    """
+    if not glu_csv.exists():
+        print(f"  Load-mode check: no load_mode='glu' results at {glu_csv} - not compared")
+        return {'compared_with': None}
+    glu = pd.read_csv(glu_csv)
+    cols = [c for c in SHARED if c in glu.columns]
+    a, b = df[cols].reset_index(drop=True), glu[cols].reset_index(drop=True)
+    same_shape = len(a) == len(b)
+    # two missing values (no touch, no stay) count as equal
+    differ = {c: int((~((a[c] == b[c]) | (a[c].isna() & b[c].isna()))).sum()) for c in cols} if same_shape else {}
+    ok = same_shape and not any(differ.values())
+    print(f"  Load-mode check vs {glu_csv}: "
+          + (f"identical ({len(a)} events; {', '.join(cols)})" if ok else
+             f"{len(a)} events here vs {len(b)} there" if not same_shape else
+             "DIFFERENT in " + ", ".join(f"{c} ({n} events)" for c, n in differ.items() if n)))
+    return {'compared_with': str(glu_csv), 'identical': ok, 'columns': cols, 'n_differ': differ}
 
 
 def check_first_touch(touch_results, results_dir, cutoff, window):
@@ -310,65 +381,114 @@ def figure_overall(df, kind, labels, types, head, rule, output_file):
     _save(fig, output_file)
 
 
-def figure_by_occupancy(df, cls, kind, labels, types, glu_name, head, rule, output_file, single_dir):
+def load_split(load_mode, glu_name, df=None):
+    """
+    How figures 2-3 split the events: (column, [(panel title, file tag, value
+    test)] one per panel, sub-folder tag, how the suptitle names it).
+    'glu': 0-4 GLUs occupied. 'above': one panel per value from 0 to the
+    largest n_above of the ASP/ASN events in df.
+    """
+    if load_mode == 'above':
+        lower = df[df['first_touch_class'].isin(CLASSES)] if df is not None else None
+        values = pd.to_numeric(lower['n_above'], errors='coerce').dropna() if lower is not None else []
+        largest = int(values.max()) if len(values) else 0
+        bins = [(f"{k} ions above", f"{k}above", lambda v, k=k: v == k) for k in range(largest + 1)]
+        return 'n_above', bins, 'ions_above', "the number of K+ above the ion in the cavity"
+    bins = [(f"{k} {glu_name} occupied", f"{k}glu_occupied", lambda v, k=k: v == k) for k in N_GLU]
+    return 'n_glu_occupied', bins, 'glu_occupancy', f"{glu_name} occupied"
+
+
+def split_events(sub, column, test):
+    """Events of `sub` whose `column` passes `test` (missing values never do)."""
+    v = pd.to_numeric(sub[column], errors='coerce')
+    return sub[v.notna() & test(v)]
+
+
+def figure_by_load(df, cls, kind, labels, types, split, head, rule, output_file, single_dir):
+    column, bins, _, what = split
     sub_cls = df[df['first_touch_class'] == cls]
     plt.rcParams['font.family'] = 'DejaVu Sans'
-    fig, axes = plt.subplots(2, 3, figsize=(24, 13))
-    for k, ax in zip(N_GLU, axes.flat):
-        draw_panel(ax, sub_cls[sub_cls['n_glu_occupied'] == k], kind, labels, types,
-                   f"{k} {glu_name} occupied", small=True)
-    legend_ax = axes.flat[-1]
-    legend_ax.axis('off')
+    nrows = -(-(len(bins) + 1) // 3)                     # one slot per panel + the legend, 3 per row
+    fig, axes = plt.subplots(nrows, 3, figsize=(24, 6.5 * nrows), squeeze=False)
+    for (title, _, test), ax in zip(bins, axes.flat):
+        draw_panel(ax, split_events(sub_cls, column, test), kind, labels, types, title, small=True)
+    for ax in axes.flat[len(bins):]:
+        ax.axis('off')
+    legend_ax = axes.flat[len(bins)]
     legend_ax.legend(handles=legend_handles(labels, types), loc='center', fontsize=14, frameon=True,
                      title=f"First touch = {cls}\nn = {len(sub_cls)} events\n\nNext stay",
                      title_fontsize=14)
-    fig.suptitle(f"{head}: next stay after first touch = {cls}, by {glu_name} occupied "
-                 f"when the ion leaves {cls} ({kind_text(kind)})\n{rule}",
+    fig.suptitle(f"{head}: next stay after first touch = {cls}, by {what} "
+                 f"when it leaves {cls} ({kind_text(kind)})\n{rule}",
                  fontsize=17, fontweight='bold')
-    plt.tight_layout()
+    plt.tight_layout(rect=(0, 0, 1, 1 - 0.6 / (6.5 * nrows)))   # ~0.6 in of headroom for the suptitle
     _save(fig, output_file)
 
     single_dir.mkdir(parents=True, exist_ok=True)
-    for k in N_GLU:
+    for title, tag, test in bins:
         fig, ax = plt.subplots(figsize=(11, 7))
-        draw_panel(ax, sub_cls[sub_cls['n_glu_occupied'] == k], kind, labels, types,
-                   f"{head}: first touch = {cls}, {k} {glu_name} occupied at leaving\n"
+        draw_panel(ax, split_events(sub_cls, column, test), kind, labels, types,
+                   f"{head}: first touch = {cls}, {title} at leaving\n"
                    f"{rule}\n{kind_text(kind)}")
         ax.legend(handles=legend_handles(labels, types), loc='upper left', bbox_to_anchor=(1.01, 1.0),
                   fontsize=12, frameon=True, framealpha=0.9)
         plt.tight_layout()
-        _save(fig, single_dir / f"{cls.lower()}_{k}glu_occupied_{kind}.png")
+        _save(fig, single_dir / f"{cls.lower()}_{tag}_{kind}.png")
 
 
-def write_plots(df, settings, head, output_dir, kinds=('pooled',)):
+def frame0_events(df, exclude):
     """
-    Figures 1-3 (and the single occupancy panels) for the events in df, in
+    Prints how many starting-structure events (end_1 == 0) there are per run;
+    returns df without them when exclude, else df unchanged.
+    """
+    frame0 = pd.to_numeric(df['end_1'], errors='coerce') == 0
+    per_run = df.loc[frame0, 'run'].value_counts()
+    print(f"  Starting-structure events (end_1 == 0): {int(frame0.sum())}"
+          + (" (" + ", ".join(f"{r}: {n}" for r, n in sorted(per_run.items(), key=lambda x: str(x[0]))) + ")"
+             if len(per_run) else "")
+          + (" - left out of the plots" if exclude else " - kept in the plots"))
+    return df[~frame0] if exclude else df
+
+
+def write_plots(df, settings, head, output_dir, kinds=('pooled',), exclude_frame0=False):
+    """
+    Figures 1-3 (and the single panels of 2-3) for the events in df, in
     output_dir: one run (main.py, kinds=('pooled',)) or a group of runs
-    (aggregate_touch_to_next_stay.py, pooled and per_run).
+    (aggregate_touch_to_next_stay.py, pooled and per_run). Figures 2-3 are
+    split by settings['load_mode'] (n_glu_occupied, or n_above).
+    exclude_frame0: True leaves end_1 == 0 events out; None = the caller already decided.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    if exclude_frame0 is not None:
+        df = frame0_events(df, exclude_frame0)
     labels, types, glu_name = bar_labels(settings)
     rule = rule_text(settings)
+    split = load_split(settings.get('load_mode', 'glu'), glu_name, df)
     for kind in kinds:
         figure_overall(df, kind, labels, types, head, rule, output_dir / f"fig1_next_stay_overall_{kind}.png")
         for fig_no, cls in ((2, 'ASP'), (3, 'ASN')):
-            figure_by_occupancy(df, cls, kind, labels, types, glu_name, head, rule,
-                                output_dir / f"fig{fig_no}_{cls.lower()}_by_glu_occupancy_{kind}.png",
-                                output_dir / f"{cls.lower()}_by_glu_occupancy")
+            figure_by_load(df, cls, kind, labels, types, split, head, rule,
+                           output_dir / f"fig{fig_no}_{cls.lower()}_by_{split[2]}_{kind}.png",
+                           output_dir / f"{cls.lower()}_by_{split[2]}")
 
 
 def run_touch_to_next_stay_analysis(universe, permeation_events, asn_residues, glu_residues,
                                     channel_type="G12", run=1, results_dir=".", frame_duration=0.075,
                                     cutoff=3.5, window=None, min_duration=None,
                                     analysis_start_frame=0, ion_selection=ION_SELECTION,
-                                    no_window=False, force_rerun=False):
+                                    no_window=False, load_mode='glu', channel1=None, channel2=None,
+                                    exclude_frame0=False, force_rerun=False):
     """
     First touch on the lower ring -> next stay, with the number of occupied
     GLUs when the ion leaves the touched residue. See the module docstring.
 
     window / min_duration : frames; None = default_frames(channel_type)
     no_window             : first touch anywhere from end_1 to end_2 (window ignored)
+    load_mode             : 'glu' (figures 2-3 split by n_glu_occupied) or 'above' (by n_above);
+                            n_glu_occupied, n_above, n_below and n_sf are stored in both
+    channel1, channel2    : main.py's ch1 (SF, region 1) and ch2 (cavity, region 2) Channel objects
+    exclude_frame0        : True: leave events with end_1 == 0 out of the plots (always kept in the CSV)
     Results go to results_dir/touch_to_next_stay/<settings_folder(cutoff, window, min_duration)>/
     (plots of the run in plots/; a run skipped because its CSV exists still gets them if missing)
     results_dir           : the run's results folder (RUN<run>/)
@@ -376,12 +496,15 @@ def run_touch_to_next_stay_analysis(universe, permeation_events, asn_residues, g
     Call from main.py:
         from analysis.touch_to_next_stay import run_touch_to_next_stay_analysis
         run_touch_to_next_stay_analysis(u, analyzer.permeation_events, asn_residues, glu_residues,
-                                        channel_type, run_number, results_dir, frame_duration)
+                                        channel_type, run_number, results_dir, frame_duration,
+                                        channel1=ch1, channel2=ch2)
     """
+    if load_mode not in LOAD_MODES:
+        raise ValueError(f"load_mode must be one of {LOAD_MODES}, not {load_mode!r}")
     window = None if no_window else default_frames(channel_type) if window is None else int(window)
     min_duration = default_frames(channel_type) if min_duration is None else int(min_duration)
     results_dir = Path(results_dir)
-    output_dir = results_dir / "touch_to_next_stay" / settings_folder(cutoff, window, min_duration)
+    output_dir = results_dir / "touch_to_next_stay" / settings_folder(cutoff, window, min_duration, load_mode)
     out_csv = output_dir / csv_name(run)
     if out_csv.exists() and not force_rerun:
         print(f"  {out_csv} already exists - skipping (use force_rerun=True to overwrite).")
@@ -389,14 +512,18 @@ def run_touch_to_next_stay_analysis(universe, permeation_events, asn_residues, g
         settings_file = output_dir / f"settings_run{run}.json"
         if not (output_dir / "plots").exists() and settings_file.exists():
             with open(settings_file) as f:
-                write_plots(df, json.load(f), f"{channel_type} RUN{run}", output_dir / "plots")
+                write_plots(df, json.load(f), f"{channel_type} RUN{run}", output_dir / "plots",
+                            exclude_frame0=exclude_frame0)
         return df
+    if channel1 is None or channel2 is None:
+        raise ValueError("run_touch_to_next_stay_analysis needs channel1=ch1 and channel2=ch2 "
+                         "(main.py's region-1 and region-2 Channel objects) for n_above / n_below / n_sf")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n" + "=" * 80)
     print(f"TOUCH -> NEXT STAY (cutoff {cutoff} Å, "
           + ("first touch anywhere end_1 -> end_2" if no_window else f"first-touch window {window} fr")
-          + f", stay >= {min_duration} fr)")
+          + f", stay >= {min_duration} fr, load_mode='{load_mode}')")
     print("=" * 80)
 
     # 1. first touch: the existing analysis, residue mode, both rings compete.
@@ -421,12 +548,12 @@ def run_touch_to_next_stay_analysis(universe, permeation_events, asn_residues, g
                                            ion_selection=ion_selection, results_dir=output_dir)
 
     lower = {int(r) for r in asn_residues}
-    rows = []
+    rows, to_sf_z = [], []
     for t in touch.results:
         ion_id, end_1, end_2 = t['ion_id'], t['end_1_frame'], t['end_2_frame']
         info = t['touch_residues'][0] if t['touch_residues'] else None
         row = dict.fromkeys(COLUMNS)
-        row.update(run=run, ion_id=ion_id, end_1=end_1, end_2=end_2,
+        row.update(run=run, ion_id=ion_id, end_1=end_1, end_2=end_2, starts_at_frame0=end_1 == 0,
                    first_touch_residue=info['residue_pdb'] if info else None)
         if not info or info['residue_id'] not in lower:
             row['first_touch_class'] = NOT_LOWER
@@ -437,6 +564,15 @@ def run_touch_to_next_stay_analysis(universe, permeation_events, asn_residues, g
         row['touch_frame'] = t['touch_frame']
         row['leave_frame'] = leave_frame(touch, ion_id, info['residue_id'], t['touch_frame'], end_2)
         row['n_glu_occupied'] = occupancy.occupancy(row['leave_frame'], ion_id)['n_glu_occupied']
+        universe.trajectory[row['leave_frame']]
+        along, to_sf = ions_along_pore(occupancy.ions, ion_id, channel1, channel2)
+        row.update(along)
+        if not to_sf_z:
+            print(f"  Toward the SF (from the region centres, frame {row['leave_frame']}): "
+                  f"({to_sf[0]:+.2f}, {to_sf[1]:+.2f}, {to_sf[2]:+.2f}) = "
+                  f"{'-' if np.dot(to_sf, channel2.channel_axis) < 0 else '+'}ch2 axis; "
+                  f"SF {'above' if to_sf[2] > 0 else 'below'} the cavity in z")
+        to_sf_z.append(float(to_sf[2]))
         stay = next_stay(stays.find_last_and_longest_duration(ion_id, end_2, end_1)['all_durations'],
                          t['touch_frame'])
         if stay is None:
@@ -448,15 +584,26 @@ def run_touch_to_next_stay_analysis(universe, permeation_events, asn_residues, g
         rows.append(row)
         print(f"Ion {ion_id}: first touch {row['first_touch_class']} {row['first_touch_residue']} "
               f"at {row['touch_frame']}, leaves at {row['leave_frame']} "
-              f"({row['n_glu_occupied']} GLU occupied) -> next stay {row['next_stay_residue']}")
+              f"({row['n_glu_occupied']} GLU occupied, {row['n_above']} K+ above, {row['n_below']} below, "
+              f"{row['n_sf']} in SF) -> next stay {row['next_stay_residue']}")
 
     df = pd.DataFrame(rows, columns=COLUMNS)
-    for col in ['touch_frame', 'leave_frame', 'n_glu_occupied', 'next_stay_start', 'next_stay_frames']:
+    for col in INT_COLUMNS:
         df[col] = df[col].astype('Int64')
     df.to_csv(out_csv, index=False)
     print(f"\n✓ {len(df)} events saved to: {out_csv}")
     counts = df['first_touch_class'].value_counts().to_dict()
     print("  First touch: " + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
+    flips = sum(1 for z in to_sf_z if np.sign(z) != np.sign(to_sf_z[0])) if to_sf_z else 0
+    if flips:
+        print(f"  ⚠ the toward-SF direction changes sign in z in {flips} of {len(to_sf_z)} leaving frames")
+    lower_rows = df[df['first_touch_class'] != NOT_LOWER]
+    for col in ('n_above', 'n_below', 'n_sf'):
+        dist = lower_rows[col].value_counts().sort_index()
+        print(f"  {col} at leave_frame ({len(lower_rows)} lower-ring events): "
+              + (", ".join(f"{int(k)}: {v}" for k, v in dist.items()) or "-"))
+    mode_check = (check_modes(pd.read_csv(out_csv), results_dir / "touch_to_next_stay" / settings_folder(cutoff, window, min_duration)
+                              / csv_name(run)) if load_mode == 'above' else None)
 
     # Ring residues (in the order of the lists) so the aggregator draws every bar, also empty ones
     ring_residues = [{'pdb': convert_to_pdb_numbering(r, channel_type), 'resid': int(r), 'ring': ring,
@@ -464,12 +611,14 @@ def run_touch_to_next_stay_analysis(universe, permeation_events, asn_residues, g
                      for ring, resids in (('GLU', glu_residues), ('ASN', asn_residues)) for r in resids]
     settings = {
         'channel_type': channel_type, 'run': run, 'cutoff': cutoff, 'window': window,
-        'min_duration': min_duration, 'frame_duration': frame_duration,
+        'min_duration': min_duration, 'frame_duration': frame_duration, 'load_mode': load_mode,
+        'exclude_frame0': exclude_frame0, 'n_starts_at_frame0': int(df['starts_at_frame0'].sum()),
+        'to_sf_z_flips': flips, 'load_mode_check': mode_check,
         'ion_selection': ion_selection, 'ring_residues': ring_residues,
         'first_touch_counts': counts,
         'first_touch_check': check_first_touch(touch.results, results_dir, cutoff, window),
     }
     with open(output_dir / f"settings_run{run}.json", 'w') as f:
         json.dump(settings, f, indent=2)
-    write_plots(df, settings, f"{channel_type} RUN{run}", output_dir / "plots")
+    write_plots(df, settings, f"{channel_type} RUN{run}", output_dir / "plots", exclude_frame0=exclude_frame0)
     return df

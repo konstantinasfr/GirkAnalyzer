@@ -1834,10 +1834,13 @@ def main():
     # touched residue. First touch anywhere from end_1 to end_2 (no_window=True; False: first
     # 2 frames for G2, 10 for G12). Stays >= 2 frames for G2, 10 for G12 systems.
     # -> touch_to_next_stay/t3.5_wno_d10/ (G2: t3.5_wno_d2/); G12 systems also with stays >= 5 frames
-    # -> touch_to_next_stay/t3.5_wno_d5/
+    # -> touch_to_next_stay/t3.5_wno_d5/. Needs ch1 / ch2 (regions 1 and 2) for the K+ above / below.
     # (needs analyzer.permeation_events: the saved-state / IonPermeationAnalysis block above)
     from analysis.touch_to_next_stay import run_touch_to_next_stay_analysis
-    for min_duration in [None] + ([5] if channel_type.startswith("G12") else []):   # None: 10 G12, 2 G2
+    # load_mode 'glu': figures 2-3 split by GLUs occupied; 'above': by K+ above the ion in the
+    # cavity (ch2), in <settings>_above/. Both store n_glu_occupied, n_above, n_below, n_sf.
+    stay_settings = [None] + ([5] if channel_type.startswith("G12") else [])   # None: 10 G12, 2 G2
+    for load_mode, min_duration in [(m, d) for m in ('glu', 'above') for d in stay_settings]:
         run_touch_to_next_stay_analysis(
             universe=u,
             permeation_events=analyzer.permeation_events,
@@ -1851,6 +1854,9 @@ def main():
             min_duration=min_duration,
             analysis_start_frame=start_frame,
             no_window=True,
+            load_mode=load_mode,
+            channel1=ch1,
+            channel2=ch2,
             force_rerun=False
         )
 
