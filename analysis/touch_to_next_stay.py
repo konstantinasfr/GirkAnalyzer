@@ -67,7 +67,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
-from matplotlib.ticker import MaxNLocator
 
 from analysis.longest_duration_analysis import LastAndLongestDurationAnalysis, FirstTouchAnalysis
 from analysis.glu_occupancy_at_exit import GluOccupancyAtExitAnalysis, ION_SELECTION
@@ -296,64 +295,72 @@ def legend_handles(labels, types):
     return handles
 
 
+# Font sizes (pt) for every plot: large, so they stay readable when shrunk onto slides
+FONT = {'suptitle': 26, 'title': 23, 'axis': 23, 'tick': 20, 'bar': 17, 'legend': 20, 'note': 22}
+PANEL_SIZE = (11, 8.5)                   # inches per panel
+DPI = 150
+
+
 def n_label(n_events, n_runs):
     """'n = 5 events, 2 runs' (singular for 1)."""
     return (f"n = {n_events} event{'' if n_events == 1 else 's'}, "
             f"{n_runs} run{'' if n_runs == 1 else 's'}")
 
 
-def draw_panel(ax, sub, kind, labels, types, title, small=False):
-    """One panel: the 9 next-stay bars of the events in `sub`."""
-    fs = {'text': 10 if small else 13, 'tick': 12 if small else 16, 'axis': 13 if small else 18,
-          'title': 13 if small else 16}
+def draw_panel(ax, sub, kind, labels, types, title):
+    """
+    One panel: the 9 next-stay bars of the events in `sub`, as % (y axis
+    0-100 %) with the number of events in brackets.
+    pooled : % of the panel's events, label "p% (n)"
+    per_run: mean ± SEM of the % in each run, dots = runs, label "m±e (n)"
+    """
     x = np.arange(len(labels))
     n_events, n_runs = len(sub), sub['run'].nunique()
+    counts = pooled_counts(sub, labels)
     colors = [_color(l, types) for l in labels]
 
     if kind == 'pooled':
-        counts = pooled_counts(sub, labels)
-        bars = ax.bar(x, counts, color=colors, alpha=0.85, edgecolor='black', linewidth=1.2,
-                      width=0.65, zorder=3)
-        top = max(int(counts.max()), 1)
-        ax.set_ylim(0, top * 1.35)
-        for bar, c in zip(bars, counts):
-            text = f"{c}\n({100.0 * c / n_events:.0f}%)" if n_events else "0"
-            ax.text(bar.get_x() + bar.get_width() / 2., c + top * 0.03, text, ha='center', va='bottom',
-                    fontsize=fs['text'], fontweight='bold', zorder=4)
-        ax.set_ylabel('Number of events', fontsize=fs['axis'], fontweight='bold')
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+        pct = 100.0 * counts / n_events if n_events else np.zeros(len(labels))
+        bars = ax.bar(x, pct, color=colors, alpha=0.85, edgecolor='black', linewidth=1.5,
+                      width=0.7, zorder=3)
+        for bar, p, c in zip(bars, pct, counts):
+            ax.text(bar.get_x() + bar.get_width() / 2., p + 2, f"{p:.0f}%\n({c})", ha='center', va='bottom',
+                    fontsize=FONT['bar'], fontweight='bold', zorder=4, linespacing=0.95)
+        ax.set_ylabel('% of events', fontsize=FONT['axis'], fontweight='bold')
         n_text = n_label(n_events, n_runs)
     else:
-        pct = per_run_pct(sub, labels)
-        means = pct.mean(axis=0).reindex(labels).fillna(0).values
-        sems = (pct.std(axis=0, ddof=1) / np.sqrt(len(pct))).reindex(labels).fillna(0).values \
-            if len(pct) > 1 else np.zeros(len(labels))
-        bars = ax.bar(x, means, yerr=sems, capsize=5 if small else 6, color=colors, alpha=0.85,
-                      edgecolor='black', linewidth=1.2, width=0.65, zorder=3,
-                      error_kw={'elinewidth': 1.4, 'zorder': 4})
+        runs = per_run_pct(sub, labels)
+        means = runs.mean(axis=0).reindex(labels).fillna(0).values
+        sems = (runs.std(axis=0, ddof=1) / np.sqrt(len(runs))).reindex(labels).fillna(0).values \
+            if len(runs) > 1 else np.zeros(len(labels))
+        bars = ax.bar(x, means, yerr=sems, capsize=7, color=colors, alpha=0.85, edgecolor='black',
+                      linewidth=1.5, width=0.7, zorder=3, error_kw={'elinewidth': 2, 'capthick': 2, 'zorder': 4})
         rng = np.random.default_rng(0)
         for i, l in enumerate(labels):
-            ax.scatter(i + rng.uniform(-0.18, 0.18, len(pct)), pct[l].values, s=18 if small else 26,
+            ax.scatter(i + rng.uniform(-0.2, 0.2, len(runs)), runs[l].values, s=45,
                        color='black', alpha=0.65, zorder=5, linewidths=0)
-        top = max(float(pct.values.max()) if len(pct) else 0.0, 1.0)
-        ax.set_ylim(0, top * 1.25)
-        for bar, m, e in zip(bars, means, sems):
-            if len(pct):
-                ax.text(bar.get_x() + bar.get_width() / 2., top * 1.22, f"{m:.0f}±{e:.0f}",
-                        ha='center', va='top', fontsize=fs['text'] - 1, fontweight='bold', zorder=6)
-        ax.set_ylabel('% of events in a run', fontsize=fs['axis'], fontweight='bold')
-        n_text = n_label(n_events, len(pct))
+        if len(runs):
+            for bar, m, e, c in zip(bars, means, sems, counts):
+                ax.text(bar.get_x() + bar.get_width() / 2., 102, f"{m:.0f}±{e:.0f}\n({c})", ha='center',
+                        va='bottom', fontsize=FONT['bar'] - 2, fontweight='bold', zorder=6, linespacing=0.95)
+        ax.set_ylabel('% of events in a run', fontsize=FONT['axis'], fontweight='bold')
+        n_text = n_label(n_events, len(runs))
     bars[-1].set_hatch('//')
 
+    # y axis always 0-100 %; the space above 100 holds the labels
+    ax.set_ylim(0, 122)
+    ax.set_yticks(range(0, 101, 20))
+    ax.spines['left'].set_bounds(0, 100)
     if n_events == 0:
-        ax.text(0.5, 0.5, 'no events', transform=ax.transAxes, ha='center', va='center',
-                fontsize=fs['title'], fontweight='bold', color='0.4')
+        ax.text(0.5, 0.45, 'no events', transform=ax.transAxes, ha='center', va='center',
+                fontsize=FONT['title'], fontweight='bold', color='0.4')
     ax.set_xticks(x)
-    ax.set_xticklabels([_tick(l, types) for l in labels], fontsize=fs['tick'], fontweight='bold',
-                       rotation=40, ha='right')
-    ax.set_xlabel('Next stay', fontsize=fs['axis'], fontweight='bold')
-    ax.tick_params(axis='y', labelsize=fs['tick'] - 2)
-    ax.set_title(f"{title}\n({n_text})", fontsize=fs['title'], fontweight='bold', pad=12)
+    ax.set_xticklabels([_tick(l, types) for l in labels], fontsize=FONT['tick'], fontweight='bold',
+                       rotation=45, ha='right', rotation_mode='anchor')
+    ax.set_xlabel('Next stay', fontsize=FONT['axis'], fontweight='bold')
+    ax.tick_params(axis='y', labelsize=FONT['tick'])
+    ax.tick_params(axis='both', width=1.5, length=6)
+    ax.set_title(f"{title}\n({n_text})", fontsize=FONT['title'], fontweight='bold', pad=10)
     _style(ax)
 
 
@@ -363,21 +370,25 @@ def kind_text(kind):
 
 
 def _save(fig, output_file):
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    plt.savefig(output_file, dpi=DPI, bbox_inches='tight')
     plt.close(fig)
     print(f"✓ Plot saved: {output_file}")
 
 
+def _figure_legend(fig, labels, types, title=None):
+    """Legend outside the panels, on the right of the figure."""
+    fig.legend(handles=legend_handles(labels, types), loc='center left', bbox_to_anchor=(1.0, 0.5),
+               fontsize=FONT['legend'], title=title, title_fontsize=FONT['legend'], frameon=True)
+
+
 def figure_overall(df, kind, labels, types, head, rule, output_file):
     plt.rcParams['font.family'] = 'DejaVu Sans'
-    fig, axes = plt.subplots(1, 2, figsize=(22, 7.5))
+    fig, axes = plt.subplots(1, 2, figsize=(2 * PANEL_SIZE[0], PANEL_SIZE[1] + 1.5), layout='constrained')
     for ax, cls in zip(axes, CLASSES):
         draw_panel(ax, df[df['first_touch_class'] == cls], kind, labels, types, f"First touch = {cls}")
-    axes[-1].legend(handles=legend_handles(labels, types), loc='upper left', bbox_to_anchor=(1.01, 1.0),
-                    fontsize=13, frameon=True, framealpha=0.9)
-    fig.suptitle(f"{head}: next stay after the first touch on the lower ring ({kind_text(kind)})\n{rule}",
-                 fontsize=18, fontweight='bold')
-    plt.tight_layout()
+    _figure_legend(fig, labels, types, "Next stay")
+    fig.suptitle(f"{head}: next stay after the first touch on the lower ring\n{rule}\n({kind_text(kind)})",
+                 fontsize=FONT['suptitle'], fontweight='bold')
     _save(fig, output_file)
 
 
@@ -385,14 +396,13 @@ def load_split(load_mode, glu_name, df=None):
     """
     How figures 2-3 split the events: (column, [(panel title, file tag, value
     test)] one per panel, sub-folder tag, how the suptitle names it).
-    'glu': 0-4 GLUs occupied. 'above': one panel per value from 0 to the
-    largest n_above of the ASP/ASN events in df.
+    'glu': 0-4 GLUs occupied. 'above': one panel per value of n_above that
+    occurs among the events in df (values with no event get no panel).
     """
     if load_mode == 'above':
-        lower = df[df['first_touch_class'].isin(CLASSES)] if df is not None else None
-        values = pd.to_numeric(lower['n_above'], errors='coerce').dropna() if lower is not None else []
-        largest = int(values.max()) if len(values) else 0
-        bins = [(f"{k} ions above", f"{k}above", lambda v, k=k: v == k) for k in range(largest + 1)]
+        values = pd.to_numeric(df['n_above'], errors='coerce').dropna() if df is not None else []
+        present = sorted({int(v) for v in values})
+        bins = [(f"{k} ions above", f"{k}above", lambda v, k=k: v == k) for k in present]
         return 'n_above', bins, 'ions_above', "the number of K+ above the ion in the cavity"
     bins = [(f"{k} {glu_name} occupied", f"{k}glu_occupied", lambda v, k=k: v == k) for k in N_GLU]
     return 'n_glu_occupied', bins, 'glu_occupancy', f"{glu_name} occupied"
@@ -404,35 +414,33 @@ def split_events(sub, column, test):
     return sub[v.notna() & test(v)]
 
 
-def figure_by_load(df, cls, kind, labels, types, split, head, rule, output_file, single_dir):
-    column, bins, _, what = split
+def figure_by_load(df, cls, kind, labels, types, load_mode, glu_name, head, rule, output_file, single_dir):
+    """Figure 2 / 3 for first touch = cls: one panel per load value (see load_split), plus each panel alone."""
     sub_cls = df[df['first_touch_class'] == cls]
+    column, bins, _, what = load_split(load_mode, glu_name, sub_cls)
     plt.rcParams['font.family'] = 'DejaVu Sans'
-    nrows = -(-(len(bins) + 1) // 3)                     # one slot per panel + the legend, 3 per row
-    fig, axes = plt.subplots(nrows, 3, figsize=(24, 6.5 * nrows), squeeze=False)
+    if not bins:                                          # 'above' with no ASP/ASN events at all
+        bins = [("no events", "none", lambda v: v != v)]
+    ncols = min(3, len(bins))
+    nrows = -(-len(bins) // ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(PANEL_SIZE[0] * ncols, PANEL_SIZE[1] * nrows + 2),
+                             squeeze=False, layout='constrained')
     for (title, _, test), ax in zip(bins, axes.flat):
-        draw_panel(ax, split_events(sub_cls, column, test), kind, labels, types, title, small=True)
+        draw_panel(ax, split_events(sub_cls, column, test), kind, labels, types, title)
     for ax in axes.flat[len(bins):]:
         ax.axis('off')
-    legend_ax = axes.flat[len(bins)]
-    legend_ax.legend(handles=legend_handles(labels, types), loc='center', fontsize=14, frameon=True,
-                     title=f"First touch = {cls}\nn = {len(sub_cls)} events\n\nNext stay",
-                     title_fontsize=14)
-    fig.suptitle(f"{head}: next stay after first touch = {cls}, by {what} "
-                 f"when it leaves {cls} ({kind_text(kind)})\n{rule}",
-                 fontsize=17, fontweight='bold')
-    plt.tight_layout(rect=(0, 0, 1, 1 - 0.6 / (6.5 * nrows)))   # ~0.6 in of headroom for the suptitle
+    _figure_legend(fig, labels, types, f"First touch = {cls}\nn = {len(sub_cls)} events\n\nNext stay")
+    fig.suptitle(f"{head}: next stay after first touch = {cls},\nby {what} when it leaves {cls}\n"
+                 f"{rule}\n({kind_text(kind)})", fontsize=FONT['suptitle'], fontweight='bold')
     _save(fig, output_file)
 
     single_dir.mkdir(parents=True, exist_ok=True)
     for title, tag, test in bins:
-        fig, ax = plt.subplots(figsize=(11, 7))
+        fig, ax = plt.subplots(figsize=PANEL_SIZE, layout='constrained')
         draw_panel(ax, split_events(sub_cls, column, test), kind, labels, types,
-                   f"{head}: first touch = {cls}, {title} at leaving\n"
-                   f"{rule}\n{kind_text(kind)}")
-        ax.legend(handles=legend_handles(labels, types), loc='upper left', bbox_to_anchor=(1.01, 1.0),
-                  fontsize=12, frameon=True, framealpha=0.9)
-        plt.tight_layout()
+                   f"{head}: first touch = {cls}, {title}")
+        _figure_legend(fig, labels, types, "Next stay")
+        fig.text(0.5, -0.02, f"{rule}\n{kind_text(kind)}", ha='center', va='top', fontsize=FONT['note'])
         _save(fig, single_dir / f"{cls.lower()}_{tag}_{kind}.png")
 
 
@@ -464,13 +472,14 @@ def write_plots(df, settings, head, output_dir, kinds=('pooled',), exclude_frame
         df = frame0_events(df, exclude_frame0)
     labels, types, glu_name = bar_labels(settings)
     rule = rule_text(settings)
-    split = load_split(settings.get('load_mode', 'glu'), glu_name, df)
+    load_mode = settings.get('load_mode', 'glu')
+    folder = load_split(load_mode, glu_name)[2]
     for kind in kinds:
         figure_overall(df, kind, labels, types, head, rule, output_dir / f"fig1_next_stay_overall_{kind}.png")
         for fig_no, cls in ((2, 'ASP'), (3, 'ASN')):
-            figure_by_load(df, cls, kind, labels, types, split, head, rule,
-                           output_dir / f"fig{fig_no}_{cls.lower()}_by_{split[2]}_{kind}.png",
-                           output_dir / f"{cls.lower()}_by_{split[2]}")
+            figure_by_load(df, cls, kind, labels, types, load_mode, glu_name, head, rule,
+                           output_dir / f"fig{fig_no}_{cls.lower()}_by_{folder}_{kind}.png",
+                           output_dir / f"{cls.lower()}_by_{folder}")
 
 
 def run_touch_to_next_stay_analysis(universe, permeation_events, asn_residues, glu_residues,

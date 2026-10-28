@@ -11,7 +11,8 @@ Events with end_1 == 0 (ion in the SF in the starting structure) are counted
 and kept; --exclude_frame0 leaves them out of the plots and the counts tables.
 
 Every figure is made twice:
-    pooled    every event of every run counted once; bars = counts, labels = count (% of the panel)
+    pooled    every event of every run counted once; bars = % of the panel's events (y 0-100 %),
+              labels = % (number of events)
     per_run   % in each run, then mean ± SEM over runs, dots = runs (runs with
               no event in the panel are left out of that panel)
 
@@ -23,7 +24,7 @@ Figures (one set per system, 9 bars per panel: the 4 GLU, the 4 ASN/ASP, out):
     fig3_asn_by_glu_occupancy_<kind>.png     the same for first touch = ASN
     asn_by_glu_occupancy/asn_<k>glu_occupied_<kind>.png
   load_mode='above': figures 2-3 split by K+ above the ion in the cavity, one panel per value
-  from 0 to the largest found among the ASP/ASN events of the system:
+  that occurs among that figure's events (ASP or ASN; values with no event get no panel):
     fig2_asp_by_ions_above_<kind>.png, asp_by_ions_above/asp_<k>above_<kind>.png
     fig3_asn_by_ions_above_<kind>.png, asn_by_ions_above/asn_<k>above_<kind>.png
 Tables:
@@ -99,22 +100,22 @@ def load_system(base, subdir):
 # Tables
 # ----------------------------------------------------------------------
 
-def panels(df, split):
-    """(class, panel title or 'all', events) of every panel."""
-    column, bins = split[0], split[1]
+def panels(df, load_mode, glu_name):
+    """(class, panel title or 'all', events) of every panel, as in figures 1-3."""
     for cls in CLASSES:
         sub = df[df['first_touch_class'] == cls]
         yield cls, 'all', sub
+        column, bins = load_split(load_mode, glu_name, sub)[:2]
         for title, _, test in bins:
             yield cls, title, split_events(sub, column, test)
 
 
-def write_tables(all_events, df, labels, types, split, output_dir):
+def write_tables(all_events, df, labels, types, load_mode, glu_name, output_dir):
     """events.csv: every event; counts_pooled.csv / per_run.csv: the plotted events (df)."""
     all_events.assign(_order=all_events['run'].map(lambda r: run_sort_key(r)[0])) \
         .sort_values(['_order', 'end_2']).drop(columns='_order').to_csv(output_dir / "events.csv", index=False)
     pooled, per_run = [], []
-    for cls, k, sub in panels(df, split):
+    for cls, k, sub in panels(df, load_mode, glu_name):
         for l, c in zip(labels, pooled_counts(sub, labels)):
             pooled.append({'first_touch_class': cls, 'panel': k, 'next_stay': l,
                            'next_stay_type': types[l], 'count': c, 'n_events': len(sub),
@@ -150,17 +151,18 @@ def aggregate(base, subdir, channel_type=None, output_dir=None, exclude_frame0=F
     counts = df['first_touch_class'].value_counts()
     print("  First touch: " + ", ".join(f"{c}: {counts.get(c, 0)}" for c in CLASSES + [NOT_LOWER]))
     labels, types, glu_name = bar_labels(settings)
-    split = load_split(settings.get('load_mode', 'glu'), glu_name, df)
+    load_mode = settings.get('load_mode', 'glu')
     for cls in CLASSES:
         sub = df[df['first_touch_class'] == cls]
-        print(f"  {cls} by {split[0]}: " + ", ".join(f"{title}: {len(split_events(sub, split[0], test))}"
-                                                 for title, _, test in split[1]))
+        column, bins = load_split(load_mode, glu_name, sub)[:2]
+        print(f"  {cls} by {column}: " + (", ".join(f"{title}: {len(split_events(sub, column, test))}"
+                                                    for title, _, test in bins) or "no events"))
 
     unknown = set(df.loc[df['first_touch_class'].isin(CLASSES), 'next_stay_residue']) - set(labels)
     if unknown:
         print(f"  ⚠ next stays not on the 9 bars (left out of the plots): {sorted(unknown)}")
     write_plots(df, settings, head, output_dir, KINDS, exclude_frame0=None)   # already handled above
-    write_tables(all_events, df, labels, types, split, output_dir)
+    write_tables(all_events, df, labels, types, load_mode, glu_name, output_dir)
 
 
 def main():
