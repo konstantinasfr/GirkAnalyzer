@@ -16,8 +16,9 @@ SF = channel 1 (region 1 of IonPermeationAnalysis). Per run it reads, in this or
                                                       permeation_events)
   3. <run>/ion_region_tracking.json + <run>/permeation_table.json
 
-so it also works for runs main.py has not been rerun on. 2 and 3 use
---frame_duration for the window length.
+so it also works for runs main.py has not been rerun on. 2 and 3 have no
+frame duration: it comes from --frame_duration, or from the system folder name
+as in main.py (G2* 0.4 ns, G12* 0.075 ns).
 
 USAGE
 -----
@@ -25,6 +26,7 @@ USAGE
 
     # G2 saves a frame every 0.4 ns (G12 systems 0.075, the default)
     python aggregate_sf_occupancy.py /media/.../girk_analyser_results/G2 --frame_duration 0.4
+    (not needed for folders named G2* / G12*: taken from the name)
 
 OUTPUTS  (default: <base_dir>/aggregated_sf_occupancy/)
 -------
@@ -71,6 +73,15 @@ TREND_COLOR = "#eb6834"
 OCC_COLORS = ["#cde2fb", "#86b6ef", "#3987e5", "#1c5cab", "#0d366b"]
 INK   = "#0b0b0b"
 INK_2 = "#52514e"
+
+
+def default_frame_duration(system):
+    """ns per frame as in main.py: 0.4 for G2 systems, 0.075 for G12 systems, else None."""
+    if system.startswith("G12"):
+        return 0.075
+    if system.startswith("G2"):
+        return 0.4
+    return None
 
 
 def run_number(run_dir):
@@ -245,10 +256,10 @@ def main():
     parser.add_argument("base_dir", help="Results directory containing RUN*")
     parser.add_argument("--runs", nargs="+", type=int, default=None,
                         help="Only these run numbers")
-    parser.add_argument("--frame_duration", "-ns_per_frame", type=float, default=0.075,
+    parser.add_argument("--frame_duration", "-ns_per_frame", type=float, default=None,
                         help="ns per saved frame, for the window length of runs without "
-                             "sf_occupancy/ from main.py: 0.075 for G12 / G12_ML / G12_GAT "
-                             "(default), 0.4 for G2")
+                             "sf_occupancy/ from main.py. Default from the folder name as in "
+                             "main.py: 0.4 for G2*, 0.075 for G12*")
     parser.add_argument("--window_ns", type=float, default=50.0,
                         help="Window length for the 2D window plot (default 50 ns)")
     parser.add_argument("-channel", default=None,
@@ -261,6 +272,9 @@ def main():
     channel = args.channel or base.name
     out_dir = Path(args.out) if args.out else base / "aggregated_sf_occupancy"
     out_dir.mkdir(parents=True, exist_ok=True)
+    frame_duration = args.frame_duration or default_frame_duration(base.name)
+    print(f"Frame duration for runs without sf_occupancy/: "
+          f"{frame_duration if frame_duration else 'unknown'} ns/frame")
 
     run_dirs = sorted((d for d in base.glob("RUN*") if d.is_dir()), key=run_number)
     if args.runs is not None:
@@ -274,7 +288,11 @@ def main():
                   f"ion_region_tracking.json, skipped")
             continue
         occ, exits, ns = loaded
-        window_frames = max(1, int(round(args.window_ns / (ns or args.frame_duration))))
+        ns = ns or frame_duration
+        if ns is None:
+            parser.error(f"cannot tell the frame duration of {base.name} from its name - "
+                         f"pass --frame_duration (ns per frame)")
+        window_frames = max(1, int(round(args.window_ns / ns)))
         n_perm = int(exits.sum())
         row = {
             "Run": run_dir.name,
