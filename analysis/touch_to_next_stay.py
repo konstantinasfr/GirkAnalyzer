@@ -59,6 +59,7 @@ Plots over runs: aggregate_touch_to_next_stay.py (repo root).
 """
 
 import json
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -88,7 +89,7 @@ SHARED = ['ion_id', 'end_1', 'end_2', 'first_touch_residue', 'first_touch_class'
 LOAD_MODES = ('glu', 'above')
 LEAVE_CHUNK = 50                         # frames read at a time while following the ion
 CLASSES = ['ASP', 'ASN']                 # first-touch classes that are plotted
-N_GLU = range(5)                         # 0-4 GLUs occupied
+N_GLU = range(1, 5)                      # 1-4 GLUs occupied (figures 2-3 leave out the 0 case)
 COLOR_MAP = ClosestResidueAnalysis.COLOR_MAP
 TYPE_ORDER = ClosestResidueAnalysis.TYPE_ORDER
 NO_CONTACT_COLOR = LastAndLongestDurationAnalysis.NO_CONTACT_COLOR
@@ -296,8 +297,8 @@ def legend_handles(labels, types):
 
 
 # Font sizes (pt) for every plot: large, so they stay readable when shrunk onto slides
-FONT = {'suptitle': 26, 'title': 23, 'axis': 23, 'tick': 20, 'bar': 17, 'legend': 20, 'note': 22}
-PANEL_SIZE = (11, 8.5)                   # inches per panel
+FONT = {'suptitle': 32, 'title': 29, 'axis': 29, 'tick': 25, 'bar': 21, 'legend': 26, 'note': 26}
+PANEL_SIZE = (14, 10.5)                  # inches per panel (grows with FONT so labels never touch)
 DPI = 150
 
 
@@ -375,20 +376,32 @@ def _save(fig, output_file):
     print(f"✓ Plot saved: {output_file}")
 
 
+def _wrap(text, fig, fontsize):
+    """Wrap each line of text to the figure's width, so titles never run past the panels."""
+    width = max(20, int(fig.get_figwidth() * 72 / (fontsize * 0.55)))
+    return "\n".join(textwrap.fill(line, width) for line in text.split("\n"))
+
+
 def _figure_legend(fig, labels, types, title=None):
     """Legend outside the panels, on the right of the figure."""
     fig.legend(handles=legend_handles(labels, types), loc='center left', bbox_to_anchor=(1.0, 0.5),
                fontsize=FONT['legend'], title=title, title_fontsize=FONT['legend'], frameon=True)
 
 
-def figure_overall(df, kind, labels, types, head, rule, output_file):
+def plotted_classes(settings):
+    """First-touch classes that get plots: G2 has no ASP, so only ASN; every other system both."""
+    return ['ASN'] if str(settings.get('channel_type', '')).upper().startswith('G2') else CLASSES
+
+
+def figure_overall(df, kind, labels, types, head, rule, output_file, classes=CLASSES):
     plt.rcParams['font.family'] = 'DejaVu Sans'
-    fig, axes = plt.subplots(1, 2, figsize=(2 * PANEL_SIZE[0], PANEL_SIZE[1] + 1.5), layout='constrained')
-    for ax, cls in zip(axes, CLASSES):
+    fig, axes = plt.subplots(1, len(classes), figsize=(len(classes) * PANEL_SIZE[0], PANEL_SIZE[1] + 1.5),
+                             squeeze=False, layout='constrained')
+    for ax, cls in zip(axes.flat, classes):
         draw_panel(ax, df[df['first_touch_class'] == cls], kind, labels, types, f"First touch = {cls}")
     _figure_legend(fig, labels, types, "Next stay")
-    fig.suptitle(f"{head}: next stay after the first touch on the lower ring\n{rule}\n({kind_text(kind)})",
-                 fontsize=FONT['suptitle'], fontweight='bold')
+    fig.suptitle(_wrap(f"{head}: next stay after the first touch on the lower ring\n{rule}\n({kind_text(kind)})",
+                       fig, FONT['suptitle']), fontsize=FONT['suptitle'], fontweight='bold')
     _save(fig, output_file)
 
 
@@ -396,12 +409,13 @@ def load_split(load_mode, glu_name, df=None):
     """
     How figures 2-3 split the events: (column, [(panel title, file tag, value
     test)] one per panel, sub-folder tag, how the suptitle names it).
-    'glu': 0-4 GLUs occupied. 'above': one panel per value of n_above that
-    occurs among the events in df (values with no event get no panel).
+    'glu': 1-4 GLUs occupied. 'above': one panel per value of n_above >= 1
+    that occurs among the events in df (values with no event get no panel).
+    The 0 case (no GLU occupied / no K+ above) is never shown in figures 2-3.
     """
     if load_mode == 'above':
         values = pd.to_numeric(df['n_above'], errors='coerce').dropna() if df is not None else []
-        present = sorted({int(v) for v in values})
+        present = sorted({int(v) for v in values if v >= 1})
         bins = [(f"{k} ions above", f"{k}above", lambda v, k=k: v == k) for k in present]
         return 'n_above', bins, 'ions_above', "the number of K+ above the ion in the cavity"
     bins = [(f"{k} {glu_name} occupied", f"{k}glu_occupied", lambda v, k=k: v == k) for k in N_GLU]
@@ -421,7 +435,7 @@ def figure_by_load(df, cls, kind, labels, types, load_mode, glu_name, head, rule
     plt.rcParams['font.family'] = 'DejaVu Sans'
     if not bins:                                          # 'above' with no ASP/ASN events at all
         bins = [("no events", "none", lambda v: v != v)]
-    ncols = min(3, len(bins))
+    ncols = 2 if len(bins) == 4 else min(3, len(bins))      # 4 panels as 2 x 2
     nrows = -(-len(bins) // ncols)
     fig, axes = plt.subplots(nrows, ncols, figsize=(PANEL_SIZE[0] * ncols, PANEL_SIZE[1] * nrows + 2),
                              squeeze=False, layout='constrained')
@@ -430,8 +444,9 @@ def figure_by_load(df, cls, kind, labels, types, load_mode, glu_name, head, rule
     for ax in axes.flat[len(bins):]:
         ax.axis('off')
     _figure_legend(fig, labels, types, f"First touch = {cls}\nn = {len(sub_cls)} events\n\nNext stay")
-    fig.suptitle(f"{head}: next stay after first touch = {cls},\nby {what} when it leaves {cls}\n"
-                 f"{rule}\n({kind_text(kind)})", fontsize=FONT['suptitle'], fontweight='bold')
+    fig.suptitle(_wrap(f"{head}: next stay after first touch = {cls},\nby {what} when it leaves {cls}\n"
+                       f"{rule}\n({kind_text(kind)})", fig, FONT['suptitle']),
+                 fontsize=FONT['suptitle'], fontweight='bold')
     _save(fig, output_file)
 
     single_dir.mkdir(parents=True, exist_ok=True)
@@ -440,7 +455,8 @@ def figure_by_load(df, cls, kind, labels, types, load_mode, glu_name, head, rule
         draw_panel(ax, split_events(sub_cls, column, test), kind, labels, types,
                    f"{head}: first touch = {cls}, {title}")
         _figure_legend(fig, labels, types, "Next stay")
-        fig.text(0.5, -0.02, f"{rule}\n{kind_text(kind)}", ha='center', va='top', fontsize=FONT['note'])
+        fig.text(0.5, -0.02, _wrap(f"{rule}\n{kind_text(kind)}", fig, FONT['note']), ha='center', va='top',
+                 fontsize=FONT['note'])
         _save(fig, single_dir / f"{cls.lower()}_{tag}_{kind}.png")
 
 
@@ -463,7 +479,8 @@ def write_plots(df, settings, head, output_dir, kinds=('pooled',), exclude_frame
     Figures 1-3 (and the single panels of 2-3) for the events in df, in
     output_dir: one run (main.py, kinds=('pooled',)) or a group of runs
     (aggregate_touch_to_next_stay.py, pooled and per_run). Figures 2-3 are
-    split by settings['load_mode'] (n_glu_occupied, or n_above).
+    split by settings['load_mode'] (n_glu_occupied, or n_above). G2 (no ASP):
+    ASN only (plotted_classes).
     exclude_frame0: True leaves end_1 == 0 events out; None = the caller already decided.
     """
     output_dir = Path(output_dir)
@@ -474,9 +491,13 @@ def write_plots(df, settings, head, output_dir, kinds=('pooled',), exclude_frame
     rule = rule_text(settings)
     load_mode = settings.get('load_mode', 'glu')
     folder = load_split(load_mode, glu_name)[2]
+    classes = plotted_classes(settings)
     for kind in kinds:
-        figure_overall(df, kind, labels, types, head, rule, output_dir / f"fig1_next_stay_overall_{kind}.png")
+        figure_overall(df, kind, labels, types, head, rule, output_dir / f"fig1_next_stay_overall_{kind}.png",
+                       classes)
         for fig_no, cls in ((2, 'ASP'), (3, 'ASN')):
+            if cls not in classes:
+                continue
             figure_by_load(df, cls, kind, labels, types, load_mode, glu_name, head, rule,
                            output_dir / f"fig{fig_no}_{cls.lower()}_by_{folder}_{kind}.png",
                            output_dir / f"{cls.lower()}_by_{folder}")

@@ -19,14 +19,15 @@ Every figure is made twice:
 Figures (one set per system, 9 bars per panel: the 4 GLU, the 4 ASN/ASP, out):
     fig1_next_stay_overall_<kind>.png        first touch = ASP | first touch = ASN
     fig2_asp_by_glu_occupancy_<kind>.png     first touch = ASP, one panel per number of GLUs
-                                             occupied at the leaving frame (0-4)
+                                             occupied at the leaving frame (1-4; 0 is left out)
     asp_by_glu_occupancy/asp_<k>glu_occupied_<kind>.png   each panel on its own
     fig3_asn_by_glu_occupancy_<kind>.png     the same for first touch = ASN
     asn_by_glu_occupancy/asn_<k>glu_occupied_<kind>.png
   load_mode='above': figures 2-3 split by K+ above the ion in the cavity, one panel per value
-  that occurs among that figure's events (ASP or ASN; values with no event get no panel):
+  >= 1 that occurs among that figure's events (ASP or ASN; 0 and values with no event get no panel):
     fig2_asp_by_ions_above_<kind>.png, asp_by_ions_above/asp_<k>above_<kind>.png
     fig3_asn_by_ions_above_<kind>.png, asn_by_ions_above/asn_<k>above_<kind>.png
+  G2 has no ASP: figure 1 shows only ASN and figure 2 (ASP) is not made.
 Tables:
     events.csv          every event of every run (not_lower events included)
     counts_pooled.csv   one row per panel and bar: count, % of the panel
@@ -54,7 +55,8 @@ import pandas as pd
 
 from aggregate_duration_results import run_sort_key
 from analysis.touch_to_next_stay import (NOT_LOWER, CLASSES, bar_labels, pooled_counts, per_run_pct,
-                                         write_plots, load_split, split_events, frame0_events)
+                                         write_plots, load_split, split_events, frame0_events,
+                                         plotted_classes)
 
 
 SYSTEM_NAMES = {'G12': 'WT', 'G12_E141Q': 'E141Q', 'G12_D173N': 'D173N', 'G2': 'G2'}
@@ -152,7 +154,7 @@ def aggregate(base, subdir, channel_type=None, output_dir=None, exclude_frame0=F
     print("  First touch: " + ", ".join(f"{c}: {counts.get(c, 0)}" for c in CLASSES + [NOT_LOWER]))
     labels, types, glu_name = bar_labels(settings)
     load_mode = settings.get('load_mode', 'glu')
-    for cls in CLASSES:
+    for cls in plotted_classes(settings):
         sub = df[df['first_touch_class'] == cls]
         column, bins = load_split(load_mode, glu_name, sub)[:2]
         print(f"  {cls} by {column}: " + (", ".join(f"{title}: {len(split_events(sub, column, test))}"
