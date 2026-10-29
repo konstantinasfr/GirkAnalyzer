@@ -19,7 +19,7 @@ USAGE
     python3 aggregate_site_chain.py /path/girk_analyser_results/G12 \\
         [/path/girk_analyser_results/G2 ...] [--models residue grouped]
         [--max_above 5] [--max_below 3] [--max_sf 5] [--window N] [--include_frame0]
-        [--start_frames starts.csv] [--eq_tolerance 0.5] [--include_preequil]
+        [--start_frames starts.csv] [--eq_max_slope 0.5] [--eq_window_ns 30] [--include_preequil]
 Each system folder is aggregated on its own, for every <settings> folder found in its runs.
 """
 
@@ -95,7 +95,8 @@ def main():
                             f"{system} ({data['events']['run'].nunique()} runs)", dt, window,
                             models=args.models, max_above=args.max_above, max_below=args.max_below,
                             max_sf=args.max_sf, include_frame0=args.include_frame0, rmsd=data["rmsd"],
-                            eq_tol=args.eq_tolerance, start_frames=starts,
+                            eq_max_slope=args.eq_max_slope,
+                            eq_window_ns=args.eq_window_ns, start_frames=starts,
                             include_preequil=args.include_preequil)
 
 

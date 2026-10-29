@@ -46,10 +46,12 @@ CSVs and left out of the analysis unless include_frame0=True.
 EQUILIBRATION  only ions that leave the SF after the protein has settled are
 analysed (unless include_preequil=True; the others stay in the CSVs). Per run:
 the Ca RMSD against frame 0 after superposition (protein_rmsd_analysis.
-fitted_ca_rmsd), smoothed over 7.5 ns; plateau = mean of the smoothed RMSD over
-the second half of the run; start = the first frame after which the smoothed
-RMSD stays within eq_tolerance (0.5 A) of the plateau (if it never settles:
-the middle of the run). A start frame given per run (start_frame=, or
+fitted_ca_rmsd), smoothed over 7.5 ns; start = where it stops rising: the start
+of the first 30 ns window (eq_window_ns) in which the smoothed RMSD is flat,
+|slope| <= 0.5 A per 100 ns (eq_max_slope), with its first point at the window's
+level. Later jumps of the RMSD (e.g. a conformational change late in the run) do
+not move it; if no window is that flat, nothing is cut (never_flat in
+equilibration.csv). A start frame given per run (start_frame=, or
 --start_frames run,start_frame CSV in the aggregator) replaces the automatic one.
 
 OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10)
@@ -108,7 +110,8 @@ GREY = "#9a9a9a"
 MIN_TEST = 20                     # departures needed for the memory test of a state
 N_SIM = 20000
 FROM_NEXT = "from \\ next"
-EQ_TOL = 0.5                      # A: smoothed RMSD within this of its plateau = settled
+EQ_MAX_SLOPE = 0.5                # A per 100 ns: a smoothed RMSD this flat over EQ_WINDOW_NS = settled
+EQ_WINDOW_NS = 30.0
 EQ_SMOOTH_NS = 7.5
 N_C = len(CONTROL_SHIFTS)
 
@@ -922,37 +925,51 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     return st
 
 
-def equilibration_start(frames, rmsd, dt, tol=EQ_TOL, smooth_ns=EQ_SMOOTH_NS):
-    """(start frame, plateau, smoothed RMSD) of one run; see the module docstring."""
+def equilibration_start(frames, rmsd, dt, max_slope=EQ_MAX_SLOPE, window_ns=EQ_WINDOW_NS,
+                        smooth_ns=EQ_SMOOTH_NS):
+    """
+    (start frame, level, smoothed RMSD, flat) of one run: the start of the first
+    window of window_ns in which the smoothed RMSD is flat - |linear slope| <=
+    max_slope (A per 100 ns), and the window's first point no further from the
+    window's mean than a line of that slope would be (so a window straddling the
+    end of the rise does not count); level = the window's mean RMSD. Later jumps
+    do not move it. If no window is flat: start 0 (nothing cut), flat = False.
+    """
     frames, rmsd = np.asarray(frames), np.asarray(rmsd, dtype=float)
-    w = max(1, int(round(smooth_ns / dt)))
-    sm = pd.Series(rmsd).rolling(w, center=True, min_periods=1).mean().to_numpy()
-    plateau = float(sm[len(sm) // 2:].mean())
-    off = np.flatnonzero(np.abs(sm - plateau) > tol)
-    if not len(off):
-        start = int(frames[0])
-    elif off[-1] == len(sm) - 1:                      # never settles: use the second half
-        start = int(frames[len(sm) // 2])
-    else:
-        start = int(frames[off[-1] + 1])
-    return start, plateau, sm
+    sm = pd.Series(rmsd).rolling(max(1, int(round(smooth_ns / dt))), center=True, min_periods=1).mean().to_numpy()
+    w = max(3, int(round(window_ns / dt)))
+    if len(sm) <= w:
+        return int(frames[0]), float(sm.mean()), sm, False
+    Y = np.lib.stride_tricks.sliding_window_view(sm, w)
+    x = np.arange(w) - (w - 1) / 2
+    slope = np.abs((Y - Y.mean(axis=1, keepdims=True)) @ x / (x @ x)) / dt * 100   # A per 100 ns
+    mean = Y.mean(axis=1)
+    near = np.abs(sm[:len(mean)] - mean) <= max_slope / 100 * window_ns / 2
+    ok = np.flatnonzero((slope <= max_slope) & near)
+    if not len(ok):
+        return int(frames[0]), float(mean[0]), sm, False
+    i = int(ok[0])
+    return int(frames[i]), float(mean[i]), sm, True
 
 
-def equilibration(rmsd, dt, out_base, tol=EQ_TOL, start_frames=None):
+def equilibration(rmsd, dt, out_base, max_slope=EQ_MAX_SLOPE, window_ns=EQ_WINDOW_NS, start_frames=None):
     """{run: start frame used}; writes equilibration.csv / .png in out_base."""
     start_frames = {int(k): int(v) for k, v in (start_frames or {}).items()}
     rows, curves = [], {}
     for run, g in (rmsd.groupby("run") if rmsd is not None and len(rmsd) else []):
         g = g.sort_values("frame")
-        auto, plateau, sm = equilibration_start(g["frame"], g["rmsd_fit_A"], dt, tol)
+        auto, plateau, sm, flat = equilibration_start(g["frame"], g["rmsd_fit_A"], dt, max_slope, window_ns)
+        if not flat:
+            print(f"site_chain: RUN{run}: the RMSD never gets flat; nothing cut (give a start with --start_frames)")
         used = start_frames.get(int(run), auto)
         rows.append(dict(run=run, auto_start_frame=auto, given_start_frame=start_frames.get(int(run)),
-                         used_start_frame=used, used_start_ns=used * dt, plateau_A=plateau))
-        curves[run] = (g["frame"].to_numpy(), g["rmsd_fit_A"].to_numpy(), sm, plateau, auto, used)
+                         used_start_frame=used, used_start_ns=used * dt, rmsd_at_start_A=plateau,
+                         never_flat=not flat))
+        curves[run] = (g["frame"].to_numpy(), g["rmsd_fit_A"].to_numpy(), sm, flat, auto, used)
     for run, f in start_frames.items():
         if run not in curves:
             rows.append(dict(run=run, auto_start_frame=None, given_start_frame=f, used_start_frame=f,
-                             used_start_ns=f * dt, plateau_A=np.nan))
+                             used_start_ns=f * dt, rmsd_at_start_A=np.nan))
     if not rows:
         return {}
     table = pd.DataFrame(rows).sort_values("run")
@@ -961,20 +978,21 @@ def equilibration(rmsd, dt, out_base, tol=EQ_TOL, start_frames=None):
         n = len(curves)
         cols = min(4, n)
         fig, axes = plt.subplots(-(-n // cols), cols, figsize=(4.2 * cols, 2.8 * -(-n // cols)), squeeze=False)
-        for ax, (run, (f, r, sm, plateau, auto, used)) in zip(axes.flat, sorted(curves.items())):
+        for ax, (run, (f, r, sm, flat, auto, used)) in zip(axes.flat, sorted(curves.items())):
             ax.plot(f * dt, r, lw=0.4, color="#9ab8d8")
             ax.plot(f * dt, sm, lw=1.5, color="#1c5cab")
-            ax.axhspan(plateau - tol, plateau + tol, color="#dddddd", zorder=0)
+            ax.axvspan(auto * dt, auto * dt + window_ns, color="#dddddd", zorder=0)
             ax.axvline(used * dt, color="#c0504d", lw=1.5, label=f"start {used * dt:.0f} ns")
             if used != auto:
                 ax.axvline(auto * dt, color="#c0504d", lw=1, ls="--", label=f"automatic {auto * dt:.0f} ns")
-            ax.set_title(f"RUN{run}", fontsize=9)
+            ax.set_title(f"RUN{run}" + ("" if flat else "  (never flat: nothing cut)"), fontsize=9)
             ax.legend(fontsize=7)
             ax.set_xlabel("time (ns)", fontsize=8)
             ax.set_ylabel("Ca RMSD, fitted (A)", fontsize=8)
         for ax in list(axes.flat)[n:]:
             ax.axis("off")
-        fig.suptitle(f"Equilibration: smoothed RMSD within {tol} A of its plateau (grey band) from the red line on")
+        fig.suptitle(f"Equilibration: start of the first {window_ns:g} ns window (grey) in which\n"
+                     f"the smoothed RMSD is flat (|slope| <= {max_slope:g} A per 100 ns)", fontsize=10)
         fig.tight_layout()
         fig.savefig(Path(out_base) / "equilibration.png", dpi=130)
         plt.close(fig)
@@ -982,9 +1000,10 @@ def equilibration(rmsd, dt, out_base, tol=EQ_TOL, start_frames=None):
 
 
 def analyze_all(frames, stays, events, out_base, head, frame_duration, window, models=MODELS,
-                max_above=5, max_below=3, max_sf=5, include_frame0=False, rmsd=None, eq_tol=EQ_TOL,
+                max_above=5, max_below=3, max_sf=5, include_frame0=False, rmsd=None, eq_max_slope=EQ_MAX_SLOPE,
+                eq_window_ns=EQ_WINDOW_NS,
                 start_frames=None, include_preequil=False):
-    eq = equilibration(rmsd, frame_duration, out_base, eq_tol, start_frames)
+    eq = equilibration(rmsd, frame_duration, out_base, eq_max_slope, eq_window_ns, start_frames)
     events = events.assign(eq_start_frame=events["run"].map(eq).fillna(0).astype(int))
     visits, ev = build_visits(frames, stays, events, window)
     for model in models:
@@ -1010,7 +1029,8 @@ def collect_rmsd(universe, run):
 def run_site_chain(universe, permeation_events, asn_residues, glu_residues, channel1, channel2,
                    results_dir, run, channel_type="G12", frame_duration=0.075, cutoff=3.5,
                    min_duration=None, window=None, models=MODELS, max_above=5, max_below=3, max_sf=5,
-                   include_frame0=False, start_frame=None, eq_tol=EQ_TOL, include_preequil=False,
+                   include_frame0=False, start_frame=None, eq_max_slope=EQ_MAX_SLOPE,
+                   eq_window_ns=EQ_WINDOW_NS, include_preequil=False,
                    analysis_start_frame=0, force_rerun=False):
     """Collect the data of one run (cached in CSVs) and analyse it; see the module docstring.
     start_frame: equilibration start of this run, instead of the one found from the RMSD."""
@@ -1038,7 +1058,7 @@ def run_site_chain(universe, permeation_events, asn_residues, glu_residues, chan
         rmsd.to_csv(rmsd_csv, index=False, float_format="%.4f")
     analyze_all(frames, stays, events, out_dir, f"{channel_type} RUN{run}", frame_duration, window,
                 models=models, max_above=max_above, max_below=max_below, max_sf=max_sf,
-                include_frame0=include_frame0, rmsd=rmsd, eq_tol=eq_tol,
+                include_frame0=include_frame0, rmsd=rmsd, eq_max_slope=eq_max_slope, eq_window_ns=eq_window_ns,
                 start_frames=None if start_frame is None else {run: start_frame},
                 include_preequil=include_preequil)
     return frames, stays, events
@@ -1053,8 +1073,10 @@ def add_analysis_args(p):
                                               "(default 4 for G12, 1 for G2)")
     p.add_argument("--include_frame0", action="store_true",
                    help="also analyse the ions present at frame 0 (end_1 == 0)")
-    p.add_argument("--eq_tolerance", type=float, default=EQ_TOL,
-                   help="A: the smoothed RMSD within this of its plateau counts as equilibrated")
+    p.add_argument("--eq_max_slope", type=float, default=EQ_MAX_SLOPE,
+                   help="A per 100 ns: the smoothed RMSD this flat counts as equilibrated")
+    p.add_argument("--eq_window_ns", type=float, default=EQ_WINDOW_NS,
+                   help="ns: length of the window that has to be that flat")
     p.add_argument("--include_preequil", action="store_true",
                    help="also analyse the ions entering before equilibration")
 
@@ -1107,7 +1129,8 @@ def main(argv=None):
                        min_duration=args.min_duration, window=args.window, models=args.models,
                        max_above=args.max_above, max_below=args.max_below, max_sf=args.max_sf,
                        include_frame0=args.include_frame0, start_frame=args.start_frame,
-                       eq_tol=args.eq_tolerance, include_preequil=args.include_preequil,
+                       eq_max_slope=args.eq_max_slope, eq_window_ns=args.eq_window_ns,
+                       include_preequil=args.include_preequil,
                        force_rerun=args.force_rerun)
 
 
