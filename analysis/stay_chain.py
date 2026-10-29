@@ -549,8 +549,7 @@ def analyze_chain(stays, events, out_dir, head, frame_duration, level="ring", ma
     rep("P(NEXT | where, K+ above when leaving)   % of departures (n = departures)")
     targets = list(wheres) + [OUT]
     rep(f"    {'state':<16}{'n':>6}" + "".join(f"{t:>10}" for t in targets))
-    for row in table.itertuples(index=False):
-        d = row._asdict()
+    for d in table.to_dict("records"):          # not itertuples: '141.G1' is no valid field name
         rep(f"    {d['where'] + '|' + d['above']:<16}{d['n']:>6}"
             + "".join(f"{d[t]:>9.0f}%" for t in targets)
             + ("   *" if d["n"] < MIN_ROW else ""))
