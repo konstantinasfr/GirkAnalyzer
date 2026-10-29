@@ -1853,6 +1853,7 @@ def main():
     #     threshold=threshold,
     #     window=window,
     #     analysis_start_frame=start_frame,
+    #     sf_residues=lower1,      # SF bottom (CA - 3 Å) = top of the GLU region
     #     results_dir=f"{results_dir}/glu_occupancy_exit/{settings_folder(threshold, window)}"
     # )
 

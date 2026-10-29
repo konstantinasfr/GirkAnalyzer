@@ -28,6 +28,21 @@ at <= `threshold` from any of its atoms. Stored per event and residue: the
 ions on it and the closest other ion; per ring: how many residues are
 occupied and how many distinct ions sit on them.
 
+Regions: a second count that also catches ions that are near a ring but not
+within `threshold` of it (e.g. one water layer away). Recomputed every frame:
+    c_glu  = mean position of the 4 GLU (GLN) CA atoms
+    c_low  = mean position of the 4 ASN/ASP CA atoms
+    axis   = c_low -> c_glu; heights are measured along it, from c_low
+    mid    = midpoint of c_glu and c_low (the cut)
+    top    = SF bottom: mean of the SF residues' CA - `margin` (the lower edge
+             of channel 1 in channels.py); without sf_residues: c_glu + `margin`
+
+    GLU region  mid < height <= top          within `region_radius` of the axis
+    ASN region  -margin <= height <= mid     within `region_radius` of the axis
+
+Counted: every other K+ (not the permeating ion) in each region, at end_1, at
+the touch frame and around end_1.
+
 Results (results_dir, suggested f"{results_dir}/glu_occupancy_exit/{settings_folder(threshold, window)}",
 i.e. glu_occupancy_exit/3.5_w10 or, with window=None, glu_occupancy_exit/3.5_no_w):
     glu_occupancy_exit_complete.json   every event, all fields
@@ -46,6 +61,9 @@ Plots (shared with the aggregator):
     plot_touched_residue_heatmap  first-touched residue (rows) x occupied residue at end_1 (columns)
     plot_ring_timecourse          mean occupied GLUs / ASN/ASP vs frames from end_1, per first-touch ring
     plot_residue_timecourse       % occupied vs frames from end_1, one panel per residue
+  region/   plot_occupancy_vs_touch, plot_first_touch_by_occupancy and the ring time
+            course again, with the number of other K+ in the GLU / ASN region instead
+            of the number of occupied residues
 """
 
 import json
@@ -111,7 +129,8 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
 
     def __init__(self, universe, permeation_events, asn_residues, glu_residues,
                  channel_type="G12", threshold=3.5, window=10, analysis_start_frame=0,
-                 ion_selection=ION_SELECTION, results_dir=".", timecourse_frames=10):
+                 ion_selection=ION_SELECTION, results_dir=".", timecourse_frames=10,
+                 sf_residues=None, region_radius=12.0, margin=3.0):
         # Residue mode, both rings compete for the first touch
         super().__init__(universe, permeation_events, asn_residues, glu_residues,
                          channel_type, threshold, window if window is not None else 1,
@@ -135,6 +154,44 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
         # Ring labels from the topology, so mutants are named correctly
         self.ring_labels = {'GLU': ring_name(self.resnames, glu_residues),
                             'ASN': ring_name(self.resnames, asn_residues)}
+
+        # GLU / ASN regions: CA atoms of both rings and of the SF bottom
+        self.region_radius = float(region_radius)
+        self.margin = float(margin)
+        self.sf_residues = list(sf_residues) if sf_residues is not None else None
+        self.glu_ca = self._ca(glu_residues, 'GLU')
+        self.low_ca = self._ca(asn_residues, 'ASN/ASP')
+        self.sf_ca = self._ca(sf_residues, 'SF') if sf_residues is not None else None
+
+    def _ca(self, resids, name):
+        """CA atoms of `resids`; stops if one is missing."""
+        ca = self.u.select_atoms(f"name CA and resid {' '.join(str(int(r)) for r in resids)}")
+        if len(ca) != len(resids):
+            raise ValueError(f"{name} ring: {len(ca)} CA atoms found for residues {list(resids)}")
+        return ca
+
+    def _region(self, ion_id):
+        """
+        Other K+ in the GLU and ASN/ASP regions at the current frame (see the
+        module docstring): {'GLU': [ion ids], 'ASN': [ion ids], 'geometry': {...}}.
+        """
+        c_glu = self.glu_ca.positions.mean(axis=0)
+        c_low = self.low_ca.positions.mean(axis=0)
+        axis = c_glu - c_low
+        length = float(np.linalg.norm(axis))
+        axis /= length
+        mid = length / 2
+        top = (float(np.dot(self.sf_ca.positions.mean(axis=0) - c_low, axis)) - self.margin
+               if self.sf_ca is not None else length + self.margin)
+        others = self.ions[self.ions.resids != int(ion_id)]
+        rel = others.positions - c_low
+        height = rel @ axis
+        inside = np.linalg.norm(rel - np.outer(height, axis), axis=1) <= self.region_radius
+        glu = inside & (height > mid) & (height <= top)
+        low = inside & (height >= -self.margin) & (height <= mid)
+        return {'GLU': [int(i) for i in others.resids[glu]],
+                'ASN': [int(i) for i in others.resids[low]],
+                'geometry': {'glu_low_ca_distance': length, 'top_above_glu_ca': top - length}}
 
     def rule_text(self):
         return (f"first touch < {self.threshold} Å, {touch_rule(self.window)}; "
@@ -173,18 +230,26 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
                                    'residue_type': res['residue_type'], 'ions': ions,
                                    'distance': float(D[j].min()) if D is not None else None}
         out = {'frame': int(frame), 'residues': per_res}
+        region = self._region(ion_id)
         for g, key in (('GLU', 'glu'), ('ASN', 'asn')):
             occupied = [p for p, v in per_res.items() if v['ring'] == g and v['ions']]
             out[f'n_{key}_occupied'] = len(occupied)
             out[f'n_ions_on_{key}'] = len(on_ring[g])
             out[f'occupied_{key}'] = occupied
+            out[f'{key}_region_ions'] = region[g]
+            out[f'n_{key}_region'] = len(region[g])
+        out['region_geometry'] = region['geometry']
         return out
 
     def timecourse(self, end_1_frame, ion_id):
-        """Occupied (1) or not (0) of every residue at end_1 -/+ timecourse_frames (None outside the trajectory)."""
+        """
+        At end_1 -/+ timecourse_frames (None outside the trajectory): occupied (1)
+        or not (0) of every residue, and the number of other K+ in each region.
+        """
         n = self.timecourse_frames
         offsets = list(range(-n, n + 1))
         occupied = {res['pdb']: [None] * len(offsets) for res in self.residues}
+        region = {g: [None] * len(offsets) for g in RINGS}
         first = max(0, end_1_frame - n)
         last = min(len(self.u.trajectory) - 1, end_1_frame + n)
         for ts in self.u.trajectory[first:last + 1]:
@@ -192,7 +257,10 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
             _, D = self._distances(ion_id)
             for j, res in enumerate(self.residues):
                 occupied[res['pdb']][i] = int(D is not None and bool((D[j] <= self.threshold).any()))
-        return {'offsets': offsets, 'occupied': occupied}
+            in_region = self._region(ion_id)
+            for g in RINGS:
+                region[g][i] = len(in_region[g])
+        return {'offsets': offsets, 'occupied': occupied, 'region': region}
 
     def analyze_event(self, event):
         r = super().analyze_event(event)
@@ -215,6 +283,8 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
         print(f"Distance threshold: {self.threshold} Å, {touch_rule(self.window)}")
         print(f"Residues: {', '.join(residue_tick(r) for r in self.residues)}; "
               f"ions: '{self.ion_selection}' ({len(self.ions)} atoms)")
+        print(f"Regions: split at the GLU / ASN CA midpoint, radius {self.region_radius} Å, margin {self.margin} Å, "
+              f"top = {'SF bottom (CA of ' + str(self.sf_residues) + ')' if self.sf_residues else 'GLU CA + margin'}")
         print(f"Analyzing {len(self.permeation_events)} permeation events...")
         for event in self.permeation_events:
             r = self.analyze_event(event)
@@ -225,7 +295,11 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
             print(f"Ion {r['ion_id']}: end_1 {r['end_1_frame']}: "
                   f"{occ['n_glu_occupied']} GLU occupied [{', '.join(occ['occupied_glu']) or '-'}], "
                   f"{occ['n_asn_occupied']} ASN/ASP occupied [{', '.join(occ['occupied_asn']) or '-'}]; "
+                  f"K+ in region: GLU {occ['n_glu_region']}, ASN/ASP {occ['n_asn_region']}; "
                   f"first touch: {where}")
+            if occ['region_geometry']['top_above_glu_ca'] < -occ['region_geometry']['glu_low_ca_distance'] / 2:
+                print(f"  ⚠ SF bottom is below the GLU / ASN midpoint at frame {r['end_1_frame']}: "
+                      f"the GLU region is empty")
 
     def save_results(self):
         self.results_dir.mkdir(parents=True, exist_ok=True)
@@ -240,6 +314,9 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
                 'ion_selection': self.ion_selection,
                 'asn_residues': self.asn_residues,
                 'glu_residues': self.glu_residues,
+                'sf_residues': self.sf_residues,
+                'region_radius': self.region_radius,
+                'region_margin': self.margin,
                 'residues': self.residues,
                 'ring_labels': self.ring_labels,
                 'results': self.results
@@ -270,7 +347,7 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
             'residue_occupied_at_end_1': {},
         }
         for at in ('end_1', 'touch'):
-            for key in ('n_glu_occupied', 'n_asn_occupied'):
+            for key in ('n_glu_occupied', 'n_asn_occupied', 'n_glu_region', 'n_asn_region'):
                 summary[f'{key}_at_{at}'] = self._crosstab(at, key)
         for r in self.results:
             g = r['touch_ring_label']
@@ -284,6 +361,9 @@ class GluOccupancyAtExitAnalysis(FirstTouchAnalysis):
         print(f"\nOccupied GLUs at end_1, by first-touch ring:")
         for ring, row in summary['n_glu_occupied_at_end_1'].items():
             print(f"  {ring:10s} " + ", ".join(f"{n} occ: {c}" for n, c in sorted(row.items())))
+        print(f"Other K+ in the GLU region at end_1, by first-touch ring:")
+        for ring, row in summary['n_glu_region_at_end_1'].items():
+            print(f"  {ring:10s} " + ", ".join(f"{n} K+: {c}" for n, c in sorted(row.items())))
         print(f"✓ Summary saved to: {output_file}")
         return summary
 
@@ -315,6 +395,10 @@ def event_row(r, at='end_1'):
         'occ': {p: int(bool(v['ions'])) for p, v in occ['residues'].items()} if occ else None,
         'tc': tc['occupied'] if tc else None,
         'offsets': tc['offsets'] if tc else None,
+        # other K+ in the GLU / ASN regions (None in result files from before the regions)
+        'n_glu_region': occ.get('n_glu_region') if occ else None,
+        'n_asn_region': occ.get('n_asn_region') if occ else None,
+        'tc_region': tc.get('region') if tc else None,
     }
 
 
@@ -326,6 +410,20 @@ def _rings_present(rows, ring_labels):
 def _ring_colors(ring_labels):
     return {ring_labels['ASN']: RING_COLORS['ASN'], ring_labels['GLU']: RING_COLORS['GLU'],
             NO_CONTACT: RING_COLORS[NO_CONTACT]}
+
+
+def _occ_colors(n_max):
+    """One colour per count 0..n_max: OCC_COLORS up to 4, white -> dark red beyond."""
+    if n_max < len(OCC_COLORS):
+        return OCC_COLORS
+    return [matplotlib.colors.to_hex(c) for c in plt.cm.OrRd(np.linspace(0.02, 1, n_max + 1))]
+
+
+def _count_names(occ_name, frame_desc, region):
+    """(short name, axis label) of what is counted: occupied residues, or other K+ in the ring's region."""
+    if region:
+        return f'K+ in {occ_name} region', f'Other K+ in the {occ_name} region at {frame_desc}'
+    return f'{occ_name} occupied', f'{occ_name} occupied by another K+ at {frame_desc}'
 
 
 def _style(ax, xlabel, ylabel, ylim=(0, 108)):
@@ -347,9 +445,11 @@ def _save(fig, output_file):
     print(f"✓ Plot saved: {output_file}")
 
 
-def plot_occupancy_vs_touch(rows, key, n_max, ring_labels, occ_name, frame_desc, title, output_file):
+def plot_occupancy_vs_touch(rows, key, n_max, ring_labels, occ_name, frame_desc, title, output_file,
+                            region=False):
     """
-    Two panels from rows (event_row), key 'n_glu' or 'n_asn':
+    Two panels from rows (event_row), key 'n_glu' or 'n_asn' ('n_glu_region' or
+    'n_asn_region' with region=True: other K+ in the region):
       left   for each first-touch ring, % of its events with 0..n_max residues occupied
       right  for each number of occupied residues, % of events whose first touch was each ring
     Event counts are written over the bars.
@@ -359,6 +459,8 @@ def plot_occupancy_vs_touch(rows, key, n_max, ring_labels, occ_name, frame_desc,
         return
     rings = _rings_present(rows, ring_labels)
     colors = _ring_colors(ring_labels)
+    occ_colors = _occ_colors(n_max)
+    short, xlabel = _count_names(occ_name, frame_desc, region)
     occs = list(range(n_max + 1))
     counts = np.array([[sum(1 for r in rows if r['ring'] == g and r[key] == n) for n in occs]
                        for g in rings], dtype=float)          # (ring, n_occ)
@@ -372,7 +474,7 @@ def plot_occupancy_vs_touch(rows, key, n_max, ring_labels, occ_name, frame_desc,
     bottom = np.zeros(len(rings))
     for j, n in enumerate(occs):
         pct = np.divide(counts[:, j], totals, out=np.zeros_like(totals), where=totals > 0) * 100
-        ax.bar(range(len(rings)), pct, bottom=bottom, color=OCC_COLORS[min(n, len(OCC_COLORS) - 1)],
+        ax.bar(range(len(rings)), pct, bottom=bottom, color=occ_colors[n],
                edgecolor='black', linewidth=0.8, zorder=3, label=f"{n}")
         bottom += pct
     for i, t in enumerate(totals):
@@ -380,8 +482,8 @@ def plot_occupancy_vs_touch(rows, key, n_max, ring_labels, occ_name, frame_desc,
     ax.set_xticks(range(len(rings)))
     ax.set_xticklabels(rings)
     _style(ax, 'First touch after the SF', '% of events')
-    ax.set_title(f'Occupied {occ_name} at {frame_desc}, per first touch', fontsize=15, fontweight='bold', pad=12)
-    ax.legend(title=f'{occ_name} occupied', loc='upper left', bbox_to_anchor=(1.01, 1.0),
+    ax.set_title(f'{short} at {frame_desc}, per first touch', fontsize=15, fontweight='bold', pad=12)
+    ax.legend(title=short, loc='upper left', bbox_to_anchor=(1.01, 1.0),
               fontsize=11, title_fontsize=11)
 
     # Right: first-touch ring within each occupancy level
@@ -396,8 +498,8 @@ def plot_occupancy_vs_touch(rows, key, n_max, ring_labels, occ_name, frame_desc,
     for n, t in zip(occs, totals):
         ax.text(n, 101, f"n={int(t)}", ha='center', va='bottom', fontsize=12, fontweight='bold')
     ax.set_xticks(occs)
-    _style(ax, f'{occ_name} occupied by another K+ at {frame_desc}', '% of events')
-    ax.set_title(f'First touch, per number of occupied {occ_name}', fontsize=15, fontweight='bold', pad=12)
+    _style(ax, xlabel, '% of events')
+    ax.set_title(f'First touch, per number of {short}', fontsize=15, fontweight='bold', pad=12)
     ax.legend(handles=[Patch(facecolor=colors[g], edgecolor='black', hatch='//' if g == NO_CONTACT else None,
                              label=g) for g in rings],
               loc='upper left', bbox_to_anchor=(1.01, 1.0), fontsize=11)
@@ -407,11 +509,12 @@ def plot_occupancy_vs_touch(rows, key, n_max, ring_labels, occ_name, frame_desc,
 
 
 def plot_first_touch_by_occupancy(rows, key, n_max, ring_labels, occ_name, frame_desc, title, output_file,
-                                  percent=False):
+                                  percent=False, region=False):
     """
-    x: number of occupied residues (key 'n_glu' or 'n_asn', 0..n_max); for each,
-    one bar per first touch (ASN/ASP, GLU, No contact). y: number of events, or
-    with percent=True the % of ALL events (every bar of the plot adds up to 100%).
+    x: number of occupied residues (key 'n_glu' or 'n_asn', 0..n_max; with
+    region=True 'n_glu_region' or 'n_asn_region', other K+ in the region); for
+    each, one bar per first touch (ASN/ASP, GLU, No contact). y: number of events,
+    or with percent=True the % of ALL events (every bar of the plot adds up to 100%).
     """
     rows = [r for r in rows if r[key] is not None]
     if not rows:
@@ -436,7 +539,7 @@ def plot_first_touch_by_occupancy(rows, key, n_max, ring_labels, occ_name, frame
                     fontsize=9 if percent else 10)
         top = max(top, values.max())
     ax.set_xticks(occs)
-    _style(ax, f'{occ_name} occupied by another K+ at {frame_desc}',
+    _style(ax, _count_names(occ_name, frame_desc, region)[1],
            f'% of all events (n={total})' if percent else 'Number of events', ylim=(0, top * 1.18 + 1))
     if not percent:
         ax.yaxis.set_major_locator(MaxNLocator(integer=True))
@@ -653,6 +756,33 @@ def plot_ring_timecourse(rows, residues, ring_labels, title, output_file):
     _save(fig, output_file)
 
 
+def plot_region_timecourse(rows, ring_labels, title, output_file):
+    """Mean number of other K+ in the GLU region (left) and ASN/ASP region (right) vs frames from end_1 (± SEM)."""
+    rows = [r for r in rows if r['tc_region'] is not None]
+    if not rows:
+        return
+    rings = _rings_present(rows, ring_labels)
+    colors = _ring_colors(ring_labels)
+    offsets = np.array(rows[0]['offsets'])
+
+    plt.rcParams['font.family'] = 'DejaVu Sans'
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5.5), sharey=True)
+    for ax, ring in zip(axes, RINGS):
+        for g in rings:
+            sub = [r for r in rows if r['ring'] == g]
+            mean, sem = _mean_sem([r['tc_region'][ring] for r in sub])
+            ax.plot(offsets, mean, color=colors[g], linewidth=2.2, marker='o', markersize=4,
+                    label=f"first touch {g} (n={len(sub)})", linestyle='--' if g == NO_CONTACT else '-')
+            ax.fill_between(offsets, mean - sem, mean + sem, color=colors[g], alpha=0.2)
+        ax.axvline(0, color='black', linestyle=':', linewidth=1.2)
+        _style(ax, 'Frames from end_1 (leaving the SF)', f'Mean other K+ in {ring_labels[ring]} region', ylim=None)
+        ax.set_ylim(bottom=0)
+        ax.set_title(f'{ring_labels[ring]} region', fontsize=15, fontweight='bold', pad=12)
+    axes[1].legend(loc='upper left', bbox_to_anchor=(1.01, 1.0), fontsize=11)
+    fig.suptitle(title, fontsize=16, fontweight='bold')
+    _save(fig, output_file)
+
+
 def plot_residue_timecourse(rows, residues, ring_labels, title, output_file):
     """One panel per residue: % of events it is occupied vs frames from end_1, one line per first-touch ring."""
     rows = [r for r in rows if r['tc'] is not None]
@@ -732,15 +862,46 @@ def write_all_plots(rows, residues, ring_labels, channel_type, threshold, window
                             f"{head}: each residue occupied around SF exit, per first touch {rule}",
                             output_dir / f"residue_occupancy_timecourse_{tag}.png")
 
+    # The same ring plots, counting the other K+ in the GLU / ASN region (region/)
+    region_rule = f"({touch_rule(window)}; regions split at the {ring_labels['GLU']}/{ring_labels['ASN']} CA midpoint)"
+    region_dir = output_dir / 'region'
+    has_region = False
+    for key, ring in (('n_glu_region', 'GLU'), ('n_asn_region', 'ASN')):
+        values = [r[key] for _, _, rr in frames for r in rr if r[key] is not None]
+        if not values:
+            continue                       # result files from before the regions
+        region_dir.mkdir(parents=True, exist_ok=True)
+        has_region = True
+        n_max = max(1, max(values))        # same x range at end_1 and at the touch
+        for at, desc, rr in frames:
+            plot_occupancy_vs_touch(rr, key, n_max, ring_labels, ring_labels[ring], desc,
+                                    f"{head}: K+ in the {ring_labels[ring]} region at {desc} vs first touch\n"
+                                    f"{region_rule}",
+                                    region_dir / f"{ring.lower()}_region_occupancy_{at}_{tag}.png", region=True)
+            for percent, kind in ((False, 'counts'), (True, 'percent')):
+                plot_first_touch_by_occupancy(
+                    rr, key, n_max, ring_labels, ring_labels[ring], desc,
+                    f"{head}: first touch per number of K+ in the {ring_labels[ring]} region at {desc}\n"
+                    f"{region_rule}",
+                    region_dir / f"first_touch_by_{ring.lower()}_region_ions_{at}_{kind}_{tag}.png",
+                    percent, region=True)
+    if has_region:
+        plot_region_timecourse(rows, ring_labels,
+                               f"{head}: K+ in the GLU / ASN regions around SF exit, per first touch\n{region_rule}",
+                               region_dir / f"region_ion_timecourse_{tag}.png")
+
 
 def run_glu_occupancy_at_exit_analysis(universe, permeation_events, asn_residues, glu_residues,
                                        channel_type="G12", threshold=3.5, window=10,
                                        analysis_start_frame=0, ion_selection=ION_SELECTION,
-                                       results_dir=".", timecourse_frames=10):
+                                       results_dir=".", timecourse_frames=10,
+                                       sf_residues=None, region_radius=12.0, margin=3.0):
     """
     Convenience function: first touch after the SF + occupancy of every GLU
     and ASN/ASP by other K+ (<= threshold) at end_1, at the touch frame and
-    around end_1. window=None: no window, the first touch is searched over
+    around end_1, and the number of other K+ in the GLU and ASN/ASP regions
+    (sf_residues: the SF residues whose CA, minus `margin`, is the top of the
+    GLU region; lower1 in main.py). window=None: no window, the first touch is searched over
     the whole stay in the cavity (end_1 to end_2). Suggested results_dir:
     f"{results_dir}/glu_occupancy_exit/{settings_folder(threshold, window)}"
     (3.5_w10, or 3.5_no_w without a window)
@@ -751,7 +912,8 @@ def run_glu_occupancy_at_exit_analysis(universe, permeation_events, asn_residues
     """
     analyzer = GluOccupancyAtExitAnalysis(universe, permeation_events, asn_residues, glu_residues,
                                           channel_type, threshold, window, analysis_start_frame,
-                                          ion_selection, results_dir, timecourse_frames)
+                                          ion_selection, results_dir, timecourse_frames,
+                                          sf_residues, region_radius, margin)
     analyzer.run_analysis()
     analyzer.save_results()
     analyzer.create_summary()
