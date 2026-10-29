@@ -16,6 +16,12 @@ LastAndLongestDurationAnalysis.find_last_and_longest_duration(...)
 ['all_durations'], as in touch_to_next_stay.py and the first-stay plots.
 Shorter contacts are not stays, so flicker never makes a step.
 
+MERGED VISITS (the <level>_merged/ outputs): consecutive stays on the same
+residue are joined into one visit (merge_repeat_stays) - a visit lasts until
+the ion stays on another residue or leaves, so losing contact for a moment and
+coming back is not a step. In the G12 data two thirds of the stay-to-stay steps
+were such returns; merged, the residue-level chain is much closer to Markovian.
+
 STATE of a stay = where + how many K+ are above the ion when it LEAVES it:
     level='ring'     resname of the residue (GLU, ASN, ASP; GLN / ASN in the
                      E141Q / D173N mutants), e.g. 'ASN|3'
@@ -56,7 +62,8 @@ OUTPUTS   <results_dir>/stay_chain/<settings>/   (settings e.g. t3.5_d10)
     stays_run<run>.csv     one row per stay (residue, frames, K+ above / below /
                            in the SF when it leaves, the same for each control shift)
     events_run<run>.csv    one row per permeation event (end_1, end_2, number of stays)
-    <level>/summary.txt    every number below; <level>/ = ring or residue
+    <level>/summary.txt    every number below; <level>/ = ring, residue, ring_merged,
+                           residue_merged (merged visits, see above)
     <level>/transitions.csv, next_by_above.csv, history_test.csv
     <level>/next_by_above.png       P(next | ring, K+ above), one panel per ring
     <level>/out_vs_above.png        P(out next) against K+ above, real and control
@@ -199,6 +206,31 @@ def collect_stays(universe, permeation_events, asn_residues, glu_residues, chann
 # ─────────────────────────────────────────────────────────────────────────────
 # The chain
 # ─────────────────────────────────────────────────────────────────────────────
+
+def merge_repeat_stays(stays):
+    """
+    Consecutive stays of an event on the same residue joined into one visit:
+    a visit lasts until the ion stays on another residue (or leaves), so a short
+    loss of contact and return is not a step (the core-set idea of M5 in
+    markov_check.py). The visit runs from the first stay's start to the last
+    stay's end, and keeps the K+ counts of the last one (the leaving frame).
+    """
+    if not len(stays):
+        return stays.copy()
+    rows = []
+    for _, g in stays.sort_values(["run", "event", "start_frame"]).groupby(["run", "event"], sort=False):
+        cur = None
+        for r in g.to_dict("records"):
+            if cur is not None and r["residue_id"] == cur["residue_id"]:
+                r = dict(r, start_frame=cur["start_frame"])
+            elif cur is not None:
+                rows.append(cur)
+            cur = r
+        rows.append(cur)
+    merged = pd.DataFrame(rows, columns=stays.columns)
+    merged["stay"] = merged.groupby(["run", "event"]).cumcount()
+    return merged
+
 
 def bin_label(n, max_bin):
     return f"{max_bin}+" if n >= max_bin else str(int(n))
@@ -512,8 +544,16 @@ class _Report:
 
 
 def analyze_chain(stays, events, out_dir, head, frame_duration, level="ring", max_bin=4,
-                  n_boot=200, n_sim=N_SIM, seed=0):
-    """Tables, tests and plots of one stays table; see the module docstring."""
+                  merge_repeats=False, n_boot=200, n_sim=N_SIM, seed=0):
+    """Tables, tests and plots of one stays table; see the module docstring.
+    merge_repeats: join consecutive stays on the same residue first (merge_repeat_stays)."""
+    if merge_repeats:
+        n_before = len(stays)
+        stays = merge_repeat_stays(stays)
+        per_event = stays.groupby(["run", "event"]).size() if len(stays) else {}
+        events = events.copy()
+        events["n_stays"] = [int(per_event.get((r, e), 0)) for r, e in zip(events["run"], events["event"])]
+        head = f"{head}, repeats merged ({n_before} stays -> {len(stays)} visits)"
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     dt = float(frame_duration)
@@ -688,8 +728,10 @@ def run_stay_chain(universe, permeation_events, asn_residues, glu_residues, chan
         stays.to_csv(stays_csv, index=False)
         events.to_csv(events_csv, index=False)
     for level in levels:
-        analyze_chain(stays, events, out_dir / level, f"{channel_type} RUN{run}", frame_duration,
-                      level=level, max_bin=max_bin)
+        for merged in (False, True):
+            analyze_chain(stays, events, out_dir / (level + ("_merged" if merged else "")),
+                          f"{channel_type} RUN{run}", frame_duration, level=level, max_bin=max_bin,
+                          merge_repeats=merged)
     return stays, events
 
 

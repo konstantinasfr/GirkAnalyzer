@@ -7,7 +7,8 @@ pooled events (tables, Markov tests, chain against real events, plots), with
 the per-run mean +/- SEM of P(out next) in the summary.
 
 Input:  <base>/RUN*/stay_chain/<settings>/stays_run*.csv and events_run*.csv
-Output: <base>/aggregated_stay_chain/<settings>/<level>/   (level = ring, residue)
+Output: <base>/aggregated_stay_chain/<settings>/<level>/   (level = ring, residue,
+        ring_merged, residue_merged: consecutive stays on one residue joined into a visit)
         plus stays_all.csv / events_all.csv in <settings>/
 <settings>: t<cutoff>_d<min_duration>, e.g. t3.5_d10
 
@@ -81,8 +82,10 @@ def main():
             events.to_csv(out / "events_all.csv", index=False)
             n_runs = events["run"].nunique()
             for level in args.levels:
-                analyze_chain(stays, events, out / level, f"{system} ({n_runs} runs)", dt,
-                              level=level, max_bin=args.max_bin)
+                for merged in (False, True):
+                    analyze_chain(stays, events, out / (level + ("_merged" if merged else "")),
+                                  f"{system} ({n_runs} runs)", dt, level=level,
+                                  max_bin=args.max_bin, merge_repeats=merged)
 
 
 if __name__ == "__main__":
