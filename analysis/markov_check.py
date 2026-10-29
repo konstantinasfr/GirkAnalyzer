@@ -1,9 +1,10 @@
 """
 markov_check.py
 ===============
-Is ion movement through the SF and the GLU/ASN cavity Markovian? Six state
+Is ion movement through the SF and the GLU/ASN cavity Markovian? Seven state
 models are tested before building a full Markov model: three geometric ones
-(M1-M3, split at z_mid) and three built on binding (M4-M6).
+(M1-M3, split at z_mid), three built on binding (M4-M6), and M6 with the
+other ions above / below the permeating one (M7).
 
 Standalone: nothing in main.py or in the other modules is changed. Call
 run_markov_check(...) from main.py, or run this file from the command line
@@ -76,6 +77,13 @@ Models:
          asn_enter (3.5 A) of OD1/ND2 of an N184 (the ASN residues of
          asn_residues), kept until asn_leave (4.5 A). In M4/M5 an ion on an
          Asn is free (M4) or keeps its last core (M5).
+    M7   M6 x other K+ above / below: each M6 binding state split into a0b0,
+         a1b0, a0b1, a1b1 = whether another K+ in the cavity (region 2) sits
+         more than z_buffer (1 A) closer to the SF (a1) and/or further from it
+         (b1), by z signed toward the SF centre; ions level within z_buffer
+         count as neither. Same definition as n_above / n_below of
+         touch_to_next_stay.py (cavity only; ions in the SF or below the
+         cavity are not counted). SF and Out are not split.
     In permeating_only, every model also has Out and none has SF.
 
 TESTS
@@ -124,10 +132,10 @@ Dwell times            runs of consecutive frames in a state, per model.
 OUTPUTS   <results_dir>/markov_check/RUN<run>/
 -----------------------------------------------
     summary.txt                          every printed number
-    implied_timescales_M{1..6}.png
-    ck_test_M{1..6}_lag<tau0>.png
-    exit_times_M{2,4,5,6}_lag<tau0>.png
-    dwell_times_M{1..6}.png
+    implied_timescales_M{1..7}.png
+    ck_test_M{1..7}_lag<tau0>.png
+    exit_times_M{2,4,5,6,7}_lag<tau0>.png
+    dwell_times_M{1..7}.png
     matrices/transition_M<m>_lag<tau>.csv  row-normalised, plus row counts
                                            and a low_counts flag
     matrices/counts_M<m>_lag<tau>.csv      raw counts
@@ -192,6 +200,8 @@ CACHE_VERSION = 3                                   # 2: + d_glu, 3: + d_asn
 
 DEFAULT_LAGS = (1, 2, 5, 10, 20, 40, 80, 160, 320)
 LOAD_LABELS = ["<=2", "3", ">=4"]
+NEIGHBOUR_LABELS = ["a0b0", "a1b0", "a0b1", "a1b1"]     # other K+ above (a) / below (b): 0 no, 1 yes
+CONTROL_SHIFTS = (0.25, 0.5, 0.75)        # M7 control: other ions taken this fraction of the run later
 
 # region codes of the frame data
 OUTSIDE, SF_REGION, CAVITY_REGION = 0, 1, 2
@@ -458,6 +468,8 @@ def make_models(with_sf=True, with_out=False):
         StateModel("M4", sf + ["Glu", "Asp", "Free_up", "Free_low"] + out),
         StateModel("M5", sf + ["Entry", "Glu", "Asp"] + out),
         StateModel("M6", sf + ["Entry", "Glu", "Asp", "Asn"] + out),
+        StateModel("M7", sf + [f"{x}|{n}" for x in ("Entry", "Glu", "Asp", "Asn")
+                               for n in NEIGHBOUR_LABELS] + out),
     ]
 
 
@@ -486,6 +498,15 @@ def assign_states(data, segments, models, asp_enter, asp_leave, glu_enter, glu_l
     M6        M5 with a fourth binding core, Asn: within asn_enter of OD1/ND2
               of an N184 (the ASN residues of the lower ring), kept until
               asn_leave. The closest of the sites entered on a frame wins.
+    M7        M6 x other K+ above / below the permeating ion in the cavity:
+              a = any other K+ in region 2 more than z_buffer closer to the
+              SF (along z, signed toward the SF centre), b = any more than
+              z_buffer further from it. SF and Out are not split.
+    The output also holds "M7_control": the same labels with the other
+    ions taken from a time-shifted frame (CONTROL_SHIFTS of the analysed
+    frames later, cyclic), one list of segments per shift, all appended.
+    It keeps the ion's own path (so the geometric link between its height
+    and having ions above / below) and removes any real coupling.
     """
     region, z, d_asp, d_glu = data["region"], data["z"], data["d_asp"], data["d_glu"]
     d_asn = data["d_asn"]
@@ -494,9 +515,13 @@ def assign_states(data, segments, models, asp_enter, asp_leave, glu_enter, glu_l
     low_side = (data["z_low"] - z_mid) * sf_sign       # z_low on the "SF side" axis (< 0)
     n_cav = (region == CAVITY_REGION).sum(axis=1)
     index = {m.name: {l: i for i, l in enumerate(m.labels)} for m in models}
+    models_by = {m.name: m for m in models}
     with_sf = "SF" in index["M1"]
 
     out = {m.name: [] for m in models}
+    out["M7_control"] = []
+    control_pending = []
+    n_frames_all = region.shape[0]
     stats = dict(n_sf_below=0, out_frames=0, out_below_low=0)
     for seg in segments:
         sl = slice(seg["i0"], seg["i1"] + 1)
@@ -507,6 +532,21 @@ def assign_states(data, segments, models, asp_enter, asp_leave, glu_enter, glu_l
         stats["n_sf_below"] += int((sf_sign[sl] < 0).sum())
         others = n_cav[sl] - (reg == CAVITY_REGION)
         load = np.clip(others - 2, 0, 2)                # <=2 -> 0, 3 -> 1, >=4 -> 2
+        in_cav = region[sl] == CAVITY_REGION
+        in_cav[:, c] = False
+        dz = (z[sl] - z[sl, c][:, None]) * sf_sign[sl][:, None]   # > 0: toward the SF
+        has_above = (in_cav & (dz > z_buffer)).any(axis=1)
+        has_below = (in_cav & (dz < -z_buffer)).any(axis=1)
+        neigh = has_above.astype(int) + 2 * has_below.astype(int)
+        frames_idx = np.arange(seg["i0"], seg["i1"] + 1)
+        neigh_ctrl = []
+        for frac in CONTROL_SHIFTS:
+            f2 = (frames_idx + int(frac * n_frames_all)) % n_frames_all
+            cav2 = region[f2] == CAVITY_REGION
+            cav2[:, c] = False
+            dz2 = (z[f2] - z[sl, c][:, None]) * sf_sign[sl][:, None]
+            neigh_ctrl.append((cav2 & (dz2 > z_buffer)).any(axis=1).astype(int)
+                              + 2 * (cav2 & (dz2 < -z_buffer)).any(axis=1).astype(int))
 
         labels = {m.name: [] for m in models}
         in_asp = False
@@ -576,12 +616,19 @@ def assign_states(data, segments, models, asp_enter, asp_leave, glu_enter, glu_l
             if core6:
                 last_core6 = core6
             m6 = last_core6 or "Entry"
+            m7 = m6 if m6 in ("SF", "Out") else f"{m6}|{NEIGHBOUR_LABELS[neigh[t]]}"
 
             for name, lab in (("M1", m1), ("M2", m2), ("M3", m3), ("M4", m4), ("M5", m5),
-                              ("M6", m6)):
+                              ("M6", m6), ("M7", m7)):
                 labels[name].append(index[name][lab])
-        for name in out:
+        for name in labels:
             out[name].append(np.asarray(labels[name], dtype=np.int16))
+        m6_labels = [models_by["M6"].labels[i] for i in labels["M6"]]
+        for nc in neigh_ctrl:
+            control_pending.append([index["M7"][l if l in ("SF", "Out")
+                                                else f"{l}|{NEIGHBOUR_LABELS[nc[t]]}"]
+                                    for t, l in enumerate(m6_labels)])
+    out["M7_control"] = [np.asarray(x, dtype=np.int16) for x in control_pending]
     return out, stats
 
 
@@ -966,6 +1013,8 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
         f"{glu_leave} A; Free_up / Free_low switch {z_buffer} A past z_mid")
     asn_ids = [int(r) for r in asn_residues if int(r) != int(asp_resid)]
     rep(f"M6 Asn: OD1/ND2 of resids {asn_ids}, enter < {asn_enter} A, leave > {asn_leave} A")
+    rep(f"M7 = M6 x other K+ in the cavity above (a) / below (b) the ion by more than "
+        f"{z_buffer} A (a0b0 none, a1b0 above only, a0b1 below only, a1b1 both)")
     if asp_name not in ("ASP", "ASH"):
         rep(f"WARNING: resid {asp_resid} is {asp_name}, not ASP")
     if int(asp_resid) not in [int(r) for r in asn_residues]:
@@ -1153,7 +1202,7 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
 
     # ── test 3: exit times, M2 / M4 / M5 ──
     rep("")
-    rep("TEST 3: EXIT TIMES (M2, M4, M5, M6; KS = largest gap between the observed and predicted "
+    rep("TEST 3: EXIT TIMES (M2, M4, M5, M6, M7; KS = largest gap between the observed and predicted "
         "cumulative distributions)")
     f0 = int(data["frames"][0])
     observed = np.array([(_end2(ev) - _end1(ev)) * dt for ev in permeation_events])
@@ -1182,7 +1231,7 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
         obs_hi = np.arange(1, len(x) + 1) / len(x)
         return float(max(np.max(np.abs(obs_hi - pred)), np.max(np.abs(obs_hi - 1 / len(x) - pred))))
 
-    for m in (by_name["M2"], by_name["M4"], by_name["M5"], by_name["M6"]):
+    for m in (by_name["M2"], by_name["M4"], by_name["M5"], by_name["M6"], by_name["M7"]):
         entry = np.zeros(m.n)                          # observed state at end_1 + 1
         for ev in permeation_events:
             k = _end1(ev) + 1 - f0
@@ -1223,6 +1272,33 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
                        if len(observed) else ""))
             plot_exit_times(m.name, tau0, dt, f_g, f_e, f_c, observed,
                             out_dir / f"exit_times_{m.name}_lag{tau0}.png")
+
+    # ── M7: effect of the other ions above / below ──
+    m7 = by_name["M7"]
+    _, T7, rows7 = get_T(m7, base_lag)
+    sd7 = bootstrap_sd(segment_count_matrices(states["M7"], exited, m7.n, base_lag), n_boot, rng)
+    ctrl_exited = [e for e in exited for _ in CONTROL_SHIFTS]   # stored per segment, per shift
+    Tc, rows_c = transition_matrix(count_matrix(states["M7_control"], ctrl_exited, m7.n, base_lag))
+    rep("")
+    rep(f"M7: OTHER K+ ABOVE (a1) / BELOW (b1) THE ION, lag {base_lag} frames ({base_lag * dt:g} ns)")
+    rep("  'control' = the same labels with the other ions taken from frames "
+        f"{', '.join(f'{f:g}' for f in CONTROL_SHIFTS)} of the run later: it keeps the link "
+        "between the ion's own height and having ions above / below, but no real coupling. "
+        "An effect of the other ions is a difference between 'real' and 'control' beyond the "
+        "SD; a lower CK score of M7 than M6 is expected either way")
+    rep(f"    {'state':<14}{'counts':>8}{'P(Exit) real':>18}{'control':>9}"
+        f"{'P(same site) real':>19}{'control':>9}")
+    for base in ("Entry", "Glu", "Asp", "Asn"):
+        same = [i for i, l in enumerate(m7.labels) if l.split("|")[0] == base]
+        for i in same:
+            if rows7[i] == 0:
+                continue
+            p_exit = f"{T7[i, m7.exit]:.3f} +/- {sd7[i, m7.exit]:.3f}"
+            c_exit = f"{Tc[i, m7.exit]:.3f}" if rows_c[i] else "-"
+            c_same = f"{Tc[i, same].sum():.3f}" if rows_c[i] else "-"
+            rep(f"    {m7.labels[i]:<14}{rows7[i]:>8}{p_exit:>18}{c_exit:>9}"
+                f"{T7[i, same].sum():>19.3f}{c_same:>9}"
+                + ("   *" if rows7[i] < min_counts else ""))
 
     # ── dwell times ──
     rep("")
