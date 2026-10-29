@@ -1,10 +1,10 @@
 """
 markov_check.py
 ===============
-Is ion movement through the SF and the GLU/ASN cavity Markovian? Seven state
+Is ion movement through the SF and the GLU/ASN cavity Markovian? Eight state
 models are tested before building a full Markov model: three geometric ones
-(M1-M3, split at z_mid), three built on binding (M4-M6), and M6 with the
-other ions above / below the permeating one (M7).
+(M1-M3, split at z_mid), three built on binding (M4-M6), and two with the
+other ions above / below the permeating one (M7 on M6, M8 on M1).
 
 Standalone: nothing in main.py or in the other modules is changed. Call
 run_markov_check(...) from main.py, or run this file from the command line
@@ -84,6 +84,15 @@ Models:
          count as neither. Same definition as n_above / n_below of
          touch_to_next_stay.py (cavity only; ions in the SF or below the
          cavity are not counted). SF and Out are not split.
+    M8   M1 x the NUMBER of other K+ above (a) / below (b): G and A each split
+         into a{0,1,2+}b{0,1,2+} (e.g. G|a1b2+), same above / below as M7.
+    For M7 and M8 summary.txt has a table of P(Exit) / P(same site) per
+    state next to a time-shifted control (the other ions taken from frames
+    1/4, 1/2, 3/4 of the run later): being low in the cavity goes with
+    having ions above, so only the difference from the control measures
+    an effect of the other ions. It also lists how many ions are above /
+    below (0, 1, 2, 3, 4, 5+) over all frames, per M1 state and on the last
+    frame before Exit, with the same control.
     In permeating_only, every model also has Out and none has SF.
 
 TESTS
@@ -132,10 +141,10 @@ Dwell times            runs of consecutive frames in a state, per model.
 OUTPUTS   <results_dir>/markov_check/RUN<run>/
 -----------------------------------------------
     summary.txt                          every printed number
-    implied_timescales_M{1..7}.png
-    ck_test_M{1..7}_lag<tau0>.png
-    exit_times_M{2,4,5,6,7}_lag<tau0>.png
-    dwell_times_M{1..7}.png
+    implied_timescales_M{1..8}.png
+    ck_test_M{1..8}_lag<tau0>.png
+    exit_times_M{2,4,5,6,7,8}_lag<tau0>.png
+    dwell_times_M{1..8}.png
     matrices/transition_M<m>_lag<tau>.csv  row-normalised, plus row counts
                                            and a low_counts flag
     matrices/counts_M<m>_lag<tau>.csv      raw counts
@@ -201,7 +210,8 @@ CACHE_VERSION = 3                                   # 2: + d_glu, 3: + d_asn
 DEFAULT_LAGS = (1, 2, 5, 10, 20, 40, 80, 160, 320)
 LOAD_LABELS = ["<=2", "3", ">=4"]
 NEIGHBOUR_LABELS = ["a0b0", "a1b0", "a0b1", "a1b1"]     # other K+ above (a) / below (b): 0 no, 1 yes
-CONTROL_SHIFTS = (0.25, 0.5, 0.75)        # M7 control: other ions taken this fraction of the run later
+COUNT_BINS = ["0", "1", "2+"]                            # M8: number of other K+ above / below
+CONTROL_SHIFTS = (0.25, 0.5, 0.75)        # M7/M8 control: other ions taken this fraction of the run later
 
 # region codes of the frame data
 OUTSIDE, SF_REGION, CAVITY_REGION = 0, 1, 2
@@ -470,6 +480,8 @@ def make_models(with_sf=True, with_out=False):
         StateModel("M6", sf + ["Entry", "Glu", "Asp", "Asn"] + out),
         StateModel("M7", sf + [f"{x}|{n}" for x in ("Entry", "Glu", "Asp", "Asn")
                                for n in NEIGHBOUR_LABELS] + out),
+        StateModel("M8", sf + [f"{x}|a{na}b{nb}" for x in ("G", "A")
+                               for na in COUNT_BINS for nb in COUNT_BINS] + out),
     ]
 
 
@@ -502,11 +514,16 @@ def assign_states(data, segments, models, asp_enter, asp_leave, glu_enter, glu_l
               a = any other K+ in region 2 more than z_buffer closer to the
               SF (along z, signed toward the SF centre), b = any more than
               z_buffer further from it. SF and Out are not split.
-    The output also holds "M7_control": the same labels with the other
-    ions taken from a time-shifted frame (CONTROL_SHIFTS of the analysed
-    frames later, cyclic), one list of segments per shift, all appended.
-    It keeps the ion's own path (so the geometric link between its height
-    and having ions above / below) and removes any real coupling.
+    M8        M1 x number of other K+ in the cavity above / below (0, 1, 2+),
+              same definition of above / below as M7.
+    The output also holds "M7_control" / "M8_control": the same labels with
+    the other ions taken from a time-shifted frame (CONTROL_SHIFTS of the
+    analysed frames later, cyclic), CONTROL_SHIFTS lists per segment, one
+    after the other. It keeps the ion's own path (so the geometric link
+    between its height and the ions above / below) and removes any real
+    coupling. "n_above" / "n_below" hold the exact counts per frame, and
+    "n_above_control" / "n_below_control" the control counts (per segment,
+    per shift, as above).
     """
     region, z, d_asp, d_glu = data["region"], data["z"], data["d_asp"], data["d_glu"]
     d_asn = data["d_asn"]
@@ -519,8 +536,9 @@ def assign_states(data, segments, models, asp_enter, asp_leave, glu_enter, glu_l
     with_sf = "SF" in index["M1"]
 
     out = {m.name: [] for m in models}
-    out["M7_control"] = []
-    control_pending = []
+    for key in ("M7_control", "M8_control", "n_above", "n_below",
+                "n_above_control", "n_below_control"):
+        out[key] = []
     n_frames_all = region.shape[0]
     stats = dict(n_sf_below=0, out_frames=0, out_below_low=0)
     for seg in segments:
@@ -535,18 +553,17 @@ def assign_states(data, segments, models, asp_enter, asp_leave, glu_enter, glu_l
         in_cav = region[sl] == CAVITY_REGION
         in_cav[:, c] = False
         dz = (z[sl] - z[sl, c][:, None]) * sf_sign[sl][:, None]   # > 0: toward the SF
-        has_above = (in_cav & (dz > z_buffer)).any(axis=1)
-        has_below = (in_cav & (dz < -z_buffer)).any(axis=1)
-        neigh = has_above.astype(int) + 2 * has_below.astype(int)
+        n_above = (in_cav & (dz > z_buffer)).sum(axis=1)
+        n_below = (in_cav & (dz < -z_buffer)).sum(axis=1)
         frames_idx = np.arange(seg["i0"], seg["i1"] + 1)
-        neigh_ctrl = []
+        counts_ctrl = []                                 # (n_above, n_below) per shift
         for frac in CONTROL_SHIFTS:
             f2 = (frames_idx + int(frac * n_frames_all)) % n_frames_all
             cav2 = region[f2] == CAVITY_REGION
             cav2[:, c] = False
             dz2 = (z[f2] - z[sl, c][:, None]) * sf_sign[sl][:, None]
-            neigh_ctrl.append((cav2 & (dz2 > z_buffer)).any(axis=1).astype(int)
-                              + 2 * (cav2 & (dz2 < -z_buffer)).any(axis=1).astype(int))
+            counts_ctrl.append(((cav2 & (dz2 > z_buffer)).sum(axis=1),
+                                (cav2 & (dz2 < -z_buffer)).sum(axis=1)))
 
         labels = {m.name: [] for m in models}
         in_asp = False
@@ -616,20 +633,40 @@ def assign_states(data, segments, models, asp_enter, asp_leave, glu_enter, glu_l
             if core6:
                 last_core6 = core6
             m6 = last_core6 or "Entry"
-            m7 = m6 if m6 in ("SF", "Out") else f"{m6}|{NEIGHBOUR_LABELS[neigh[t]]}"
+            m7 = _with_neighbours_m7(m6, n_above[t], n_below[t])
+            m8 = _with_neighbours_m8(m1, n_above[t], n_below[t])
 
             for name, lab in (("M1", m1), ("M2", m2), ("M3", m3), ("M4", m4), ("M5", m5),
-                              ("M6", m6), ("M7", m7)):
+                              ("M6", m6), ("M7", m7), ("M8", m8)):
                 labels[name].append(index[name][lab])
         for name in labels:
             out[name].append(np.asarray(labels[name], dtype=np.int16))
+        out["n_above"].append(n_above.astype(np.int16))
+        out["n_below"].append(n_below.astype(np.int16))
+        m1_labels = [models_by["M1"].labels[i] for i in labels["M1"]]
         m6_labels = [models_by["M6"].labels[i] for i in labels["M6"]]
-        for nc in neigh_ctrl:
-            control_pending.append([index["M7"][l if l in ("SF", "Out")
-                                                else f"{l}|{NEIGHBOUR_LABELS[nc[t]]}"]
-                                    for t, l in enumerate(m6_labels)])
-    out["M7_control"] = [np.asarray(x, dtype=np.int16) for x in control_pending]
+        for na, nb in counts_ctrl:
+            out["M7_control"].append(np.asarray(
+                [index["M7"][_with_neighbours_m7(l, na[t], nb[t])] for t, l in enumerate(m6_labels)],
+                dtype=np.int16))
+            out["M8_control"].append(np.asarray(
+                [index["M8"][_with_neighbours_m8(l, na[t], nb[t])] for t, l in enumerate(m1_labels)],
+                dtype=np.int16))
+            out["n_above_control"].append(na.astype(np.int16))
+            out["n_below_control"].append(nb.astype(np.int16))
     return out, stats
+
+
+def _with_neighbours_m7(label, n_above, n_below):
+    if label in ("SF", "Out"):
+        return label
+    return f"{label}|{NEIGHBOUR_LABELS[int(n_above > 0) + 2 * int(n_below > 0)]}"
+
+
+def _with_neighbours_m8(label, n_above, n_below):
+    if label in ("SF", "Out"):
+        return label
+    return f"{label}|a{COUNT_BINS[min(n_above, 2)]}b{COUNT_BINS[min(n_below, 2)]}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1015,6 +1052,7 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
     rep(f"M6 Asn: OD1/ND2 of resids {asn_ids}, enter < {asn_enter} A, leave > {asn_leave} A")
     rep(f"M7 = M6 x other K+ in the cavity above (a) / below (b) the ion by more than "
         f"{z_buffer} A (a0b0 none, a1b0 above only, a0b1 below only, a1b1 both)")
+    rep("M8 = M1 x number of other K+ above (a) / below (b), 0, 1 or 2+ (e.g. G|a2+b0)")
     if asp_name not in ("ASP", "ASH"):
         rep(f"WARNING: resid {asp_resid} is {asp_name}, not ASP")
     if int(asp_resid) not in [int(r) for r in asn_residues]:
@@ -1202,7 +1240,7 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
 
     # ── test 3: exit times, M2 / M4 / M5 ──
     rep("")
-    rep("TEST 3: EXIT TIMES (M2, M4, M5, M6, M7; KS = largest gap between the observed and predicted "
+    rep("TEST 3: EXIT TIMES (M2, M4, M5, M6, M7, M8; KS = largest gap between the observed and predicted "
         "cumulative distributions)")
     f0 = int(data["frames"][0])
     observed = np.array([(_end2(ev) - _end1(ev)) * dt for ev in permeation_events])
@@ -1231,7 +1269,8 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
         obs_hi = np.arange(1, len(x) + 1) / len(x)
         return float(max(np.max(np.abs(obs_hi - pred)), np.max(np.abs(obs_hi - 1 / len(x) - pred))))
 
-    for m in (by_name["M2"], by_name["M4"], by_name["M5"], by_name["M6"], by_name["M7"]):
+    for m in (by_name["M2"], by_name["M4"], by_name["M5"], by_name["M6"], by_name["M7"],
+              by_name["M8"]):
         entry = np.zeros(m.n)                          # observed state at end_1 + 1
         for ev in permeation_events:
             k = _end1(ev) + 1 - f0
@@ -1273,32 +1312,83 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
             plot_exit_times(m.name, tau0, dt, f_g, f_e, f_c, observed,
                             out_dir / f"exit_times_{m.name}_lag{tau0}.png")
 
-    # ── M7: effect of the other ions above / below ──
-    m7 = by_name["M7"]
-    _, T7, rows7 = get_T(m7, base_lag)
-    sd7 = bootstrap_sd(segment_count_matrices(states["M7"], exited, m7.n, base_lag), n_boot, rng)
+    # ── M7 / M8: effect of the other ions above / below ──
     ctrl_exited = [e for e in exited for _ in CONTROL_SHIFTS]   # stored per segment, per shift
-    Tc, rows_c = transition_matrix(count_matrix(states["M7_control"], ctrl_exited, m7.n, base_lag))
+    for mname, bases, title in (
+            ("M7", ("Entry", "Glu", "Asp", "Asn"), "OTHER K+ ABOVE (a1) / BELOW (b1) THE ION"),
+            ("M8", ("G", "A"), "NUMBER OF OTHER K+ ABOVE (a) / BELOW (b) THE ION (0, 1, 2+)")):
+        mm = by_name[mname]
+        _, Tm, rows_m = get_T(mm, base_lag)
+        sdm = bootstrap_sd(segment_count_matrices(states[mname], exited, mm.n, base_lag),
+                           n_boot, rng)
+        Tc, rows_c = transition_matrix(count_matrix(states[f"{mname}_control"], ctrl_exited,
+                                                    mm.n, base_lag))
+        rep("")
+        rep(f"{mname}: {title}, lag {base_lag} frames ({base_lag * dt:g} ns)")
+        rep("  'control' = the same labels with the other ions taken from frames "
+            f"{', '.join(f'{f:g}' for f in CONTROL_SHIFTS)} of the run later: it keeps the link "
+            "between the ion's own height and the ions above / below, but no real coupling. "
+            "An effect of the other ions is a difference between 'real' and 'control' beyond "
+            f"the SD; a lower CK score of {mname} than its base model is expected either way")
+        rep(f"    {'state':<14}{'counts':>8}{'P(Exit) real':>18}{'control':>9}"
+            f"{'P(same site) real':>19}{'control':>9}")
+        for base in bases:
+            same = [i for i, l in enumerate(mm.labels) if l.split("|")[0] == base]
+            for i in same:
+                if rows_m[i] == 0:
+                    continue
+                p_exit = f"{Tm[i, mm.exit]:.3f} +/- {sdm[i, mm.exit]:.3f}"
+                c_exit = f"{Tc[i, mm.exit]:.3f}" if rows_c[i] else "-"
+                c_same = f"{Tc[i, same].sum():.3f}" if rows_c[i] else "-"
+                rep(f"    {mm.labels[i]:<14}{rows_m[i]:>8}{p_exit:>18}{c_exit:>9}"
+                    f"{Tm[i, same].sum():>19.3f}{c_same:>9}"
+                    + ("   *" if rows_m[i] < min_counts else ""))
+
+    # ── how many other ions above / below ──
+    m1 = by_name["M1"]
+    n_bins = 6                                         # 0, 1, 2, 3, 4, 5+
+    bin_lab = [str(k) for k in range(n_bins - 1)] + [f"{n_bins - 1}+"]
+
+    def dist(arrs, masks=None):
+        vals = (np.concatenate([a[m] for a, m in zip(arrs, masks)]) if masks is not None
+                else np.concatenate(arrs))
+        if len(vals) == 0:
+            return None, 0
+        h = np.bincount(np.minimum(vals, n_bins - 1), minlength=n_bins)
+        return 100 * h / h.sum(), len(vals)
+
+    def show(name, arrs, arrs_c, masks=None, masks_c=None):
+        d, n = dist(arrs, masks)
+        dc, _ = dist(arrs_c, masks_c)
+        if d is None:
+            return
+        mean = np.mean(np.concatenate([a[m] for a, m in zip(arrs, masks)]) if masks is not None
+                       else np.concatenate(arrs))
+        mean_c = np.mean(np.concatenate([a[m] for a, m in zip(arrs_c, masks_c)])
+                         if masks_c is not None else np.concatenate(arrs_c))
+        rep(f"    {name:<28} n={n:>6}  " + "  ".join(f"{b}:{v:5.1f}" for b, v in zip(bin_lab, d))
+            + f"   mean {mean:.2f}")
+        rep(f"    {'  control':<28} {'':>8}  " + "  ".join(f"{b}:{v:5.1f}" for b, v in zip(bin_lab, dc))
+            + f"   mean {mean_c:.2f}")
+
+    k = len(CONTROL_SHIFTS)
+    seg_m1 = states["M1"]
+    seg_m1_c = [seg_m1[i // k] for i in range(len(states["n_above_control"]))]
+    last = [np.arange(len(x)) == len(x) - 1 for x in seg_m1]   # the frame before Exit (end_2)
+    last_c = [last[i // k] for i in range(len(seg_m1_c))]
+    exited_c = [exited[i // k] for i in range(len(seg_m1_c))]
     rep("")
-    rep(f"M7: OTHER K+ ABOVE (a1) / BELOW (b1) THE ION, lag {base_lag} frames ({base_lag * dt:g} ns)")
-    rep("  'control' = the same labels with the other ions taken from frames "
-        f"{', '.join(f'{f:g}' for f in CONTROL_SHIFTS)} of the run later: it keeps the link "
-        "between the ion's own height and having ions above / below, but no real coupling. "
-        "An effect of the other ions is a difference between 'real' and 'control' beyond the "
-        "SD; a lower CK score of M7 than M6 is expected either way")
-    rep(f"    {'state':<14}{'counts':>8}{'P(Exit) real':>18}{'control':>9}"
-        f"{'P(same site) real':>19}{'control':>9}")
-    for base in ("Entry", "Glu", "Asp", "Asn"):
-        same = [i for i, l in enumerate(m7.labels) if l.split("|")[0] == base]
-        for i in same:
-            if rows7[i] == 0:
-                continue
-            p_exit = f"{T7[i, m7.exit]:.3f} +/- {sd7[i, m7.exit]:.3f}"
-            c_exit = f"{Tc[i, m7.exit]:.3f}" if rows_c[i] else "-"
-            c_same = f"{Tc[i, same].sum():.3f}" if rows_c[i] else "-"
-            rep(f"    {m7.labels[i]:<14}{rows7[i]:>8}{p_exit:>18}{c_exit:>9}"
-                f"{T7[i, same].sum():>19.3f}{c_same:>9}"
-                + ("   *" if rows7[i] < min_counts else ""))
+    rep("HOW MANY OTHER K+ ARE ABOVE / BELOW THE ION (in the cavity, more than "
+        f"{z_buffer} A higher / lower); % of frames with 0, 1, 2, ... ions; 'control' as above")
+    for what, key in (("ABOVE", "n_above"), ("BELOW", "n_below")):
+        rep(f"  {what}")
+        arrs, arrs_c = states[key], states[f"{key}_control"]
+        show("all tracked frames", arrs, arrs_c)
+        for st_name in ("G", "A"):
+            i = m1.labels.index(st_name)
+            show(f"ion in {st_name}", arrs, arrs_c, [x == i for x in seg_m1], [x == i for x in seg_m1_c])
+        show("last frame before Exit", arrs, arrs_c,
+             [l & e for l, e in zip(last, exited)], [l & e for l, e in zip(last_c, exited_c)])
 
     # ── dwell times ──
     rep("")
