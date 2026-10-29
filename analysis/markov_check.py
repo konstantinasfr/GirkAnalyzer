@@ -1,8 +1,9 @@
 """
 markov_check.py
 ===============
-Is ion movement through the SF and the GLU/ASN cavity Markovian? Three simple
-state models are tested before building a full Markov model.
+Is ion movement through the SF and the GLU/ASN cavity Markovian? Five state
+models are tested before building a full Markov model: three geometric ones
+(M1-M3, split at z_mid) and two built on binding (M4, M5).
 
 Standalone: nothing in main.py or in the other modules is changed. Call
 run_markov_check(...) from main.py, or run this file from the command line
@@ -41,10 +42,11 @@ the trajectory ends) is censored: no transition is counted past it.
 PERMEATING IONS ONLY (permeating_only=True, --permeating_only)
 -----------------------------------------------------------
 Only the permeation events, each from end_1 + 1 (the ion has left the SF
-for the last time) to end_2 (its last cavity frame), Exit right after.
-There is no SF state. A frame of the window outside region 2 (an excursion
-below the cavity and back) splits it, and only the piece ending at end_2
-ends in Exit. M3 still counts every other K+ in the cavity. The transition
+for the last time) to end_2 (its last cavity frame), Exit right after: one
+segment per event, nothing censored. There is no SF state. Frames of the
+window outside region 2 (an excursion out of the cavity cylinder, mostly
+below the lower ring, and back) are the state Out in every model. M3 still
+counts every other K+ in the cavity. The transition
 probabilities are then conditioned on the ion leaving through the gate:
 they describe how permeating ions move, not the equilibrium of all cavity
 ions. Results go to markov_check/RUN<run>_permeating/; the trajectory pass
@@ -58,6 +60,19 @@ Models:
          within asp_leave (4.5 A) (hysteresis). Leaving A resets it.
     M3   M2 x number of OTHER K+ in region 2 at that frame (<=2, 3, >=4),
          counting every K+ of the system; Exit is one state.
+    M4   SF, Glu, Asp, Free_up, Free_low, Exit (binding, any z)
+         Glu: within glu_enter (3.5 A) of a side-chain O/N of the glu ring
+         (GLU OE1/OE2, GLN OE1/NE2), kept until glu_leave (4.5 A). Asp: the
+         same for D173.G1 with asp_enter / asp_leave. If both are entered on
+         the same frame the closer one wins. Otherwise free: Free_up /
+         Free_low by the side of z_mid, switched only once the ion is
+         z_buffer (1 A) past z_mid on the other side (no flicker at z_mid).
+    M5   SF, Entry, Glu, Asp, Exit: core sets (milestoning). SF, Glu, Asp
+         (as in M4) and Out are cores; every other frame carries the last
+         core visited, or Entry before the first one. A free ion is thus
+         counted where it came from until it reaches the next core, so
+         recrossings of a free region are not transitions.
+    In permeating_only, every model also has Out and none has SF.
 
 TESTS
 -----
@@ -84,12 +99,14 @@ Transition matrices    for each lag tau, counts state(t) -> state(t + tau)
                        resamples of the tracked segments; the share of
                        points within 2 SD is the verdict to read, since a
                        Markovian model still has a nonzero difference.
-3 exit times           M2 at tau0: mean first-passage time G -> Exit,
+3 exit times           M2, M4 and M5 at tau0. M2: mean first-passage time G -> Exit,
                        m = tau0 (I - Q)^-1 1, and the predicted first-passage
                        distribution f_k = (Q^(k-1) r)_G. Compared with the
                        observed end_1 -> end_2 transit times of this run.
-                       The same prediction starting from the observed M2
-                       state at end_1 + 1 of each event is also reported,
+                       The same prediction starting from the observed
+                       state at end_1 + 1 of each event (every model) is
+                       also reported, with the KS gap (largest distance
+                       between observed and predicted cumulative curves),
                        and the first passage G -> Exit among paths that do
                        not return to the SF first: end_1 is the LAST frame
                        in the SF, so the observed transits are of that kind
@@ -103,10 +120,10 @@ Dwell times            runs of consecutive frames in a state, per model.
 OUTPUTS   <results_dir>/markov_check/RUN<run>/
 -----------------------------------------------
     summary.txt                          every printed number
-    implied_timescales_M{1,2,3}.png
-    ck_test_M{1,2,3}_lag<tau0>.png
-    exit_times_M2_lag<tau0>.png
-    dwell_times_M{1,2,3}.png
+    implied_timescales_M{1..5}.png
+    ck_test_M{1..5}_lag<tau0>.png
+    exit_times_M{2,4,5}_lag<tau0>.png
+    dwell_times_M{1..5}.png
     matrices/transition_M<m>_lag<tau>.csv  row-normalised, plus row counts
                                            and a low_counts flag
     matrices/counts_M<m>_lag<tau>.csv      raw counts
@@ -163,11 +180,12 @@ except ImportError:                                    # tqdm optional
         return x
 
 ION_SELECTION = "resname K+ K"
+GLU_POLAR = {"GLU": ("OE1", "OE2"), "GLH": ("OE1", "OE2"), "GLN": ("OE1", "NE2")}
 OUT_FOLDER = "markov_check"
 CACHE_FILE = "frame_data_cache.npz"
-CACHE_VERSION = 1
+CACHE_VERSION = 2                                   # 2: + d_glu
 
-DEFAULT_LAGS = (1, 2, 5, 10, 20, 40, 80)
+DEFAULT_LAGS = (1, 2, 5, 10, 20, 40, 80, 160, 320)
 LOAD_LABELS = ["<=2", "3", ">=4"]
 
 # region codes of the frame data
@@ -222,6 +240,8 @@ def collect_frame_data(u, channel1, channel2, glu_residues, asn_residues, asp_re
         region      (n_frames, n_ions) int8   0 outside, 1 SF, 2 cavity
         z           (n_frames, n_ions) float32
         d_asp       (n_frames, n_ions) float32  min distance to D173 OD1/OD2
+        d_glu       (n_frames, n_ions) float32  min distance to the side-chain
+                    O/N of the Glu ring (GLU/GLH OE1 OE2, GLN OE1 NE2)
         z_glu, z_low, z_sf  (n_frames,)  z_sf = z of the ch1 centre
     """
     ions = u.select_atoms(ION_SELECTION)
@@ -232,12 +252,22 @@ def collect_frame_data(u, channel1, channel2, glu_residues, asn_residues, asp_re
     asp_o = u.select_atoms(f"resid {asp_resid} and name OD1 OD2")
     if len(asp_o) == 0:
         raise ValueError(f"asp_resid {asp_resid} has no OD1/OD2 atoms")
+    glu_polar = []
+    for resid in glu_residues:
+        res = u.select_atoms(f"resid {resid}")
+        names = GLU_POLAR.get(res.residues[0].resname if len(res) else "", ("OE1", "OE2"))
+        sel = res.select_atoms(f"name {' '.join(names)}")
+        if len(sel) == 0:
+            raise ValueError(f"glu_residues: resid {resid} has no {'/'.join(names)} atoms")
+        glu_polar.append(sel)
+    glu_polar = sum(glu_polar[1:], glu_polar[0])
 
     frames = np.arange(start_frame, end_frame + 1)
     n_f, n_i = len(frames), len(ions)
     region = np.zeros((n_f, n_i), dtype=np.int8)
     z = np.zeros((n_f, n_i), dtype=np.float32)
     d_asp = np.zeros((n_f, n_i), dtype=np.float32)
+    d_glu = np.zeros((n_f, n_i), dtype=np.float32)
     z_glu = np.zeros(n_f)
     z_low = np.zeros(n_f)
     z_sf = np.zeros(n_f)
@@ -253,12 +283,13 @@ def collect_frame_data(u, channel1, channel2, glu_residues, asn_residues, asp_re
         region[k, in2] = CAVITY_REGION
         z[k] = pos[:, 2]
         d_asp[k] = distance_array(pos, asp_o.positions, box=ts.dimensions).min(axis=1)
+        d_glu[k] = distance_array(pos, glu_polar.positions, box=ts.dimensions).min(axis=1)
         z_glu[k] = glu_cd.positions[:, 2].mean()
         z_low[k] = low_cg.positions[:, 2].mean()
         z_sf[k] = channel1.channel_center[2]
 
     return dict(ion_resids=ions.resids.astype(int), frames=frames, region=region, z=z,
-                d_asp=d_asp, z_glu=z_glu, z_low=z_low, z_sf=z_sf)
+                d_asp=d_asp, d_glu=d_glu, z_glu=z_glu, z_low=z_low, z_sf=z_sf)
 
 
 def _cache_key(glu_residues, asn_residues, asp_resid, start_frame, end_frame, channel1, channel2):
@@ -354,18 +385,18 @@ def build_segments(data, permeation_events):
 
 def build_permeating_segments(data, permeation_events):
     """
-    permeating_only: one window per permeation event, end_1 + 1 .. end_2 (the
-    ion has left the SF for the last time -> its last cavity frame). Frames of
-    the window that are not in region 2 (an excursion below the cavity and
-    back) split it; only the piece ending at end_2 ends in Exit, the others
-    are censored. Returns (segments, info).
+    permeating_only: one segment per permeation event, end_1 + 1 .. end_2
+    (the ion has left the SF for the last time -> its last cavity frame),
+    ending in Exit. Frames of the window outside region 2 (an excursion out
+    of the cavity cylinder and back) are kept: they are the Out state.
+    Returns (segments, info).
     """
     f0 = int(data["frames"][0])
     n_f = len(data["frames"])
     col_of = {int(r): c for c, r in enumerate(data["ion_resids"])}
     segments = []
     info = dict(events=0, window_frames=0, non_cavity_frames=0, sf_frames=0,
-                split_events=0, no_cavity=[], unknown_ions=set(), outside_traj=0)
+                events_with_out=0, no_cavity=[], unknown_ions=set(), outside_traj=0)
     for ev in permeation_events:
         ion_id = int(ev["ion_id"])
         c = col_of.get(ion_id)
@@ -377,25 +408,16 @@ def build_permeating_segments(data, permeation_events):
             info["outside_traj"] += 1
             continue
         info["events"] += 1
-        if i1 < i0:
+        reg = data["region"][max(i0, 0):i1 + 1, c]
+        if i1 < i0 or not np.any(reg == CAVITY_REGION):
             info["no_cavity"].append((ion_id, _end2(ev)))
             continue
-        reg = data["region"][i0:i1 + 1, c]
         info["window_frames"] += len(reg)
-        info["non_cavity_frames"] += int((reg != CAVITY_REGION).sum())
+        n_out = int((reg != CAVITY_REGION).sum())
+        info["non_cavity_frames"] += n_out
         info["sf_frames"] += int((reg == SF_REGION).sum())
-        cav = (reg == CAVITY_REGION).astype(np.int8)
-        edges = np.diff(np.concatenate(([0], cav, [0])))
-        starts = np.flatnonzero(edges == 1)
-        ends = np.flatnonzero(edges == -1) - 1
-        if len(starts) == 0:
-            info["no_cavity"].append((ion_id, _end2(ev)))
-            continue
-        if len(starts) > 1:
-            info["split_events"] += 1
-        for a, b in zip(starts, ends):
-            segments.append(dict(ion=int(c), resid=ion_id, i0=i0 + int(a), i1=i0 + int(b),
-                                 exited=bool(i0 + b == i1)))
+        info["events_with_out"] += int(n_out > 0)
+        segments.append(dict(ion=int(c), resid=ion_id, i0=i0, i1=i1, exited=True))
     return segments, info
 
 
@@ -407,63 +429,124 @@ class StateModel:
         self.exit = self.n - 1
 
 
-def make_models(with_sf=True):
-    """M1, M2, M3. Without the SF state (permeating_only) the codes of
-    assign_states are shifted down by n_sf_codes (1 for M1/M2, 3 for M3)."""
+def make_models(with_sf=True, with_out=False):
+    """
+    M1..M5. with_sf: the SF is a state (all-ions mode). with_out: the Out
+    state, frames of a permeation window outside the cavity (permeating_only).
+    """
     sf = ["SF"] if with_sf else []
-    m1 = StateModel("M1", sf + ["G", "A"])
-    m2 = StateModel("M2", sf + ["G", "A_asp", "A_other"])
-    m3 = StateModel("M3", [f"{s}|{l}" for s in m2.labels[:-1] for l in LOAD_LABELS])
-    return [m1, m2, m3]
+    out = ["Out"] if with_out else []
+    m2_core = ["G", "A_asp", "A_other"]
+    return [
+        StateModel("M1", sf + ["G", "A"] + out),
+        StateModel("M2", sf + m2_core + out),
+        StateModel("M3", [f"{x}|{l}" for x in sf + m2_core for l in LOAD_LABELS] + out),
+        StateModel("M4", sf + ["Glu", "Asp", "Free_up", "Free_low"] + out),
+        StateModel("M5", sf + ["Entry", "Glu", "Asp"] + out),
+    ]
 
 
-M1, M2, M3 = make_models()
-MODELS = [M1, M2, M3]
-N_SF_CODES = {"M1": 1, "M2": 1, "M3": len(LOAD_LABELS)}
-
-
-def assign_states(data, segments, asp_enter, asp_leave):
+def assign_states(data, segments, models, asp_enter, asp_leave, glu_enter, glu_leave,
+                  z_buffer):
     """
-    Per segment, the state of every frame under M1, M2 and M3 (Exit not
+    Per segment, the state index of every frame under each model (Exit not
     included: it is implied after an exited segment). Returns
-    {model name: [int array per segment]} and the number of segment frames
-    where the SF was not above z_mid.
+    ({model name: [int array per segment]}, stats).
+
+    Frame classes: region 1 -> SF, region 2 -> cavity, anything else -> Out
+    (only inside a permeation window; in the all-ions mode segments hold
+    regions 1 and 2 only). In permeating_only there is no SF state and a
+    region-1 frame would also count as Out (none are expected).
+
+    M1/M2/M3  G / A split at z_mid; A_asp with the asp_enter / asp_leave
+              hysteresis, only while in A.
+    M4        Glu: within glu_enter of a Glu-ring O/N, kept until glu_leave;
+              Asp: the same for D173 with asp_enter / asp_leave; if both are
+              entered on the same frame the closer one wins. Otherwise free,
+              Free_up / Free_low by the side of z_mid, switched only once the
+              ion is z_buffer beyond z_mid on the other side.
+    M5        core sets: SF, Glu, Asp (as in M4) and Out are cores; every
+              other frame carries the last core visited, or Entry before the
+              first one of the segment.
     """
-    region, z, d_asp = data["region"], data["z"], data["d_asp"]
+    region, z, d_asp, d_glu = data["region"], data["z"], data["d_asp"], data["d_glu"]
     z_mid = (data["z_glu"] + data["z_low"]) / 2
     sf_sign = np.sign(data["z_sf"] - z_mid)
+    low_side = (data["z_low"] - z_mid) * sf_sign       # z_low on the "SF side" axis (< 0)
     n_cav = (region == CAVITY_REGION).sum(axis=1)
+    index = {m.name: {l: i for i, l in enumerate(m.labels)} for m in models}
+    with_sf = "SF" in index["M1"]
 
-    out = {m.name: [] for m in MODELS}
-    n_sf_below = 0
+    out = {m.name: [] for m in models}
+    stats = dict(n_sf_below=0, out_frames=0, out_below_low=0)
     for seg in segments:
         sl = slice(seg["i0"], seg["i1"] + 1)
         c = seg["ion"]
         reg = region[sl, c]
-        sf_side = (z[sl, c] - z_mid[sl]) * sf_sign[sl] > 0
-        n_sf_below += int((sf_sign[sl] < 0).sum())
-
-        m1 = np.where(reg == SF_REGION, 0, np.where(sf_side, 1, 2))
-
-        m2 = np.where(m1 == 2, 3, m1)                  # A -> A_other by default
-        in_asp = False
-        d = d_asp[sl, c]
-        for t in range(len(m1)):
-            if m1[t] != 2:
-                in_asp = False
-                continue
-            in_asp = d[t] <= asp_leave if in_asp else d[t] < asp_enter
-            if in_asp:
-                m2[t] = 2
-
+        sv = (z[sl, c] - z_mid[sl]) * sf_sign[sl]      # > 0: SF side of z_mid
+        da, dg = d_asp[sl, c], d_glu[sl, c]
+        stats["n_sf_below"] += int((sf_sign[sl] < 0).sum())
         others = n_cav[sl] - (reg == CAVITY_REGION)
         load = np.clip(others - 2, 0, 2)                # <=2 -> 0, 3 -> 1, >=4 -> 2
-        m3 = m2 * len(LOAD_LABELS) + load
 
-        out["M1"].append(m1.astype(np.int16))
-        out["M2"].append(m2.astype(np.int16))
-        out["M3"].append(m3.astype(np.int16))
-    return out, n_sf_below
+        labels = {m.name: [] for m in models}
+        in_asp = False
+        bound = free_side = last_core = None
+        for t in range(len(reg)):
+            if reg[t] == CAVITY_REGION:
+                base = None
+            elif reg[t] == SF_REGION and with_sf:
+                base = "SF"
+            else:
+                base = "Out"
+                stats["out_frames"] += 1
+                stats["out_below_low"] += int(sv[t] < low_side[sl][t])
+
+            # M1, M2, M3
+            if base:
+                m1 = m2 = base
+                in_asp = False
+            elif sv[t] > 0:
+                m1 = m2 = "G"
+                in_asp = False
+            else:
+                m1 = "A"
+                in_asp = da[t] <= asp_leave if in_asp else da[t] < asp_enter
+                m2 = "A_asp" if in_asp else "A_other"
+            m3 = m2 if m2 == "Out" else f"{m2}|{LOAD_LABELS[load[t]]}"
+
+            # M4
+            if base:
+                m4 = base
+                bound = free_side = None
+            else:
+                if not ((bound == "Glu" and dg[t] <= glu_leave)
+                        or (bound == "Asp" and da[t] <= asp_leave)):
+                    near_g, near_a = dg[t] < glu_enter, da[t] < asp_enter
+                    if near_g and near_a:
+                        bound = "Glu" if dg[t] <= da[t] else "Asp"
+                    else:
+                        bound = "Glu" if near_g else ("Asp" if near_a else None)
+                if bound:
+                    m4 = bound
+                    free_side = None
+                else:
+                    if (free_side is None or (free_side == "up" and sv[t] < -z_buffer)
+                            or (free_side == "low" and sv[t] > z_buffer)):
+                        free_side = "up" if sv[t] > 0 else "low"
+                    m4 = "Free_up" if free_side == "up" else "Free_low"
+
+            # M5
+            core = base or bound
+            if core:
+                last_core = core
+            m5 = last_core or "Entry"
+
+            for name, lab in (("M1", m1), ("M2", m2), ("M3", m3), ("M4", m4), ("M5", m5)):
+                labels[name].append(index[name][lab])
+        for name in out:
+            out[name].append(np.asarray(labels[name], dtype=np.int16))
+    return out, stats
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -628,7 +711,7 @@ def plot_ck(model, tau0, ks, pred, obs, obs_sd, dt, out_file):
     plt.close(fig)
 
 
-def plot_exit_times(tau0, dt, f_g, f_entry, f_cond, observed_ns, out_file):
+def plot_exit_times(model_name, tau0, dt, f_g, f_entry, f_cond, observed_ns, out_file):
     """Left: fraction of exits per log-spaced time bin. Right: cumulative."""
     width = tau0 * dt
     curves = [(f, color, label) for f, color, label in (
@@ -666,7 +749,7 @@ def plot_exit_times(tau0, dt, f_g, f_entry, f_cond, observed_ns, out_file):
     ax2.set_ylim(0, 1.02)
     ax.legend(fontsize=8)
     ax2.legend(fontsize=8, loc="upper left")
-    fig.suptitle(f"M2 exit times, tau0 = {tau0} frames ({width:g} ns); "
+    fig.suptitle(f"{model_name} exit times, tau0 = {tau0} frames ({width:g} ns); "
                  f"predictions are on a {width:g} ns grid")
     fig.tight_layout()
     fig.savefig(out_file, dpi=150)
@@ -809,11 +892,12 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
                      channel_type="G12", frame_duration=0.075,
                      start_frame=0, end_frame=None, asp_resid=None,
                      lags=DEFAULT_LAGS, base_lag=10, ck_steps=10,
-                     asp_enter=3.5, asp_leave=4.5, min_counts=50,
+                     asp_enter=3.5, asp_leave=4.5, glu_enter=3.5, glu_leave=4.5,
+                     z_buffer=1.0, min_counts=50,
                      n_timescales=3, plateau_rtol=0.1, n_boot=200, seed=0,
                      permeating_only=False,
                      ion_region_tracking=None, force_rerun=False):
-    """Run the three Markov checks for one run; see the module docstring."""
+    """Run the Markov checks for one run; see the module docstring."""
     u = universe
     if end_frame is None:
         end_frame = len(u.trajectory) - 1
@@ -840,8 +924,10 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
     rep("=" * 78)
     rep(f"frames {start_frame}-{end_frame}, frame time {dt:g} ns")
     rep(f"glu ring {list(glu_residues)} (CD), lower ring {list(asn_residues)} (CG)")
-    rep(f"D173.G1 = resid {asp_resid} ({asp_name}); A_asp enter < {asp_enter} A, "
+    rep(f"D173.G1 = resid {asp_resid} ({asp_name}); A_asp / Asp enter < {asp_enter} A, "
         f"leave > {asp_leave} A")
+    rep(f"M4/M5 Glu: side-chain O/N of the glu ring, enter < {glu_enter} A, leave > "
+        f"{glu_leave} A; Free_up / Free_low switch {z_buffer} A past z_mid")
     if asp_name not in ("ASP", "ASH"):
         rep(f"WARNING: resid {asp_resid} is {asp_name}, not ASP")
     if int(asp_resid) not in [int(r) for r in asn_residues]:
@@ -871,16 +957,16 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
             rep(f"region check vs ion_region_tracking (regions 0-2): "
                 f"{agree}/{total} frames agree ({100 * agree / total:.2f}%)")
 
-    models = make_models(with_sf=not permeating_only)
-    m2 = models[1]
+    models = make_models(with_sf=not permeating_only, with_out=permeating_only)
+    by_name = {m.name: m for m in models}
     if permeating_only:
         segments, seg_info = build_permeating_segments(data, permeation_events)
     else:
         segments, seg_info = build_segments(data, permeation_events)
     exited = [s["exited"] for s in segments]
-    states, n_sf_below = assign_states(data, segments, asp_enter, asp_leave)
-    if permeating_only:                                 # no SF frames: drop the SF codes
-        states = {k: [v - N_SF_CODES[k] for v in seqs] for k, seqs in states.items()}
+    states, st = assign_states(data, segments, models, asp_enter, asp_leave,
+                               glu_enter, glu_leave, z_buffer)
+    n_sf_below = st["n_sf_below"]
     n_frames_tracked = sum(s["i1"] - s["i0"] + 1 for s in segments)
 
     rep("")
@@ -890,8 +976,9 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
             f"outside the analysed frames: {seg_info['outside_traj']}")
         rep(f"  window frames (end_1 + 1 .. end_2): {seg_info['window_frames']}; not in the "
             f"cavity: {seg_info['non_cavity_frames']} (of them in the SF: "
-            f"{seg_info['sf_frames']}); events split by an excursion: "
-            f"{seg_info['split_events']}")
+            f"{seg_info['sf_frames']}) = state Out, in {seg_info['events_with_out']} "
+            f"events; Out frames beyond the lower ring: "
+            f"{st['out_below_low']}/{st['out_frames']}")
         if seg_info["no_cavity"]:
             rep(f"    events without cavity frames (ion, end_2): {seg_info['no_cavity'][:10]}")
         rep(f"  tracked segments: {len(segments)} ({n_frames_tracked} ion-frames); "
@@ -1024,9 +1111,10 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
             plot_ck(m, tau0, ks, pred, obs, obs_sd, dt,
                     out_dir / f"ck_test_{m.name}_lag{tau0}.png")
 
-    # ── test 3: exit times, M2 ──
+    # ── test 3: exit times, M2 / M4 / M5 ──
     rep("")
-    rep("TEST 3: EXIT TIMES (M2)")
+    rep("TEST 3: EXIT TIMES (M2, M4, M5; KS = largest gap between the observed and predicted "
+        "cumulative distributions)")
     f0 = int(data["frames"][0])
     observed = np.array([(_end2(ev) - _end1(ev)) * dt for ev in permeation_events])
     n_frame0 = sum(1 for ev in permeation_events if _end1(ev) == f0)
@@ -1038,53 +1126,63 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
         rep("  no permeation events in this run")
     if permeating_only:
         rep("  note: every window starts after end_1 and ends in Exit, so at lag 1 the predicted "
-            "mean equals the observed mean by construction; judge the median, the shape and "
-            "longer lags")
+            "mean from the observed entry states equals the observed mean by construction; "
+            "judge the median, the KS gap and longer lags")
 
-    # observed M2 state at end_1 + 1 of each event
-    entry = np.zeros(m2.n)
     seg_lookup = {}
     for si, s in enumerate(segments):
         seg_lookup.setdefault(s["resid"], []).append(si)
-    for ev in permeation_events:
-        k = _end1(ev) + 1 - f0
-        for si in seg_lookup.get(int(ev["ion_id"]), []):
-            s = segments[si]
-            if s["i0"] <= k <= s["i1"]:
-                entry[states["M2"][si][k - s["i0"]]] += 1
-                break
-    if entry.sum():
-        rep("  M2 state at end_1 + 1: " + ", ".join(
-            f"{m2.labels[i]} {int(entry[i])}" for i in range(m2.n - 1) if entry[i]))
 
-    for tau0 in base_lags_by_model["M2"]:
-        _, T0, rows0 = get_T(m2, tau0)
-        mfpt_g, f_g = first_passage(T0, rows0, m2.labels.index("G"), tau0, m2.exit)
-        mfpt_e, f_e = (first_passage(T0, rows0, entry, tau0, m2.exit)
-                       if entry.sum() else (np.nan, None))
-        line = f"  tau0 = {tau0} frames: predicted MFPT G -> Exit {mfpt_g * dt:.3f} ns"
-        if f_g is not None:
-            line += f" (median {_median_from_pmf(f_g, tau0) * dt:.3f} ns)"
-        rep(line)
-        if f_e is not None:
-            rep(f"               from observed entry states {mfpt_e * dt:.3f} ns "
-                f"(median {_median_from_pmf(f_e, tau0) * dt:.3f} ns)")
-        if "SF" in m2.labels:
-            reach, mean_c, f_c = first_passage_no_return(T0, rows0, m2.labels.index("G"),
-                                                         m2.labels.index("SF"), m2.exit)
-        else:                     # permeating_only: no SF state, every path is of this kind
-            reach, mean_c, f_c = np.nan, np.nan, None
-        if f_c is not None:
-            rep(f"               G -> Exit without returning to the SF (the observed "
-                f"end_1 -> end_2 is of this kind): P = {reach:.3f}, mean "
-                f"{mean_c * tau0 * dt:.3f} ns (median {_median_from_pmf(f_c, tau0) * dt:.3f} ns)")
-        if len(observed) and np.isfinite(mfpt_g):
-            rep(f"               predicted / observed mean: G {mfpt_g * dt / observed.mean():.2f}"
-                + (f", entry {mfpt_e * dt / observed.mean():.2f}" if f_e is not None else "")
-                + (f", no return to SF {mean_c * tau0 * dt / observed.mean():.2f}"
-                   if f_c is not None else ""))
-        plot_exit_times(tau0, dt, f_g, f_e, f_c, observed,
-                        out_dir / f"exit_times_M2_lag{tau0}.png")
+    def ks_gap(f, tau0):
+        if f is None or not len(observed):
+            return np.nan
+        t = np.arange(1, len(f) + 1) * tau0 * dt
+        x = np.sort(observed)
+        pred = np.concatenate(([0.0], np.cumsum(f)))[np.searchsorted(t, x, side="right")]
+        obs_hi = np.arange(1, len(x) + 1) / len(x)
+        return float(max(np.max(np.abs(obs_hi - pred)), np.max(np.abs(obs_hi - 1 / len(x) - pred))))
+
+    for m in (by_name["M2"], by_name["M4"], by_name["M5"]):
+        entry = np.zeros(m.n)                          # observed state at end_1 + 1
+        for ev in permeation_events:
+            k = _end1(ev) + 1 - f0
+            for si in seg_lookup.get(int(ev["ion_id"]), []):
+                sg = segments[si]
+                if sg["i0"] <= k <= sg["i1"]:
+                    entry[states[m.name][si][k - sg["i0"]]] += 1
+                    break
+        rep(f"  {m.name}" + (": state at end_1 + 1: " + ", ".join(
+            f"{m.labels[i]} {int(entry[i])}" for i in range(m.n - 1) if entry[i])
+            if entry.sum() else ""))
+        for tau0 in base_lags_by_model[m.name]:
+            _, T0, rows0 = get_T(m, tau0)
+            mfpt_e, f_e = (first_passage(T0, rows0, entry, tau0, m.exit)
+                           if entry.sum() else (np.nan, None))
+            f_g = f_c = None
+            if "G" in m.labels:
+                mfpt_g, f_g = first_passage(T0, rows0, m.labels.index("G"), tau0, m.exit)
+                line = f"    tau0 = {tau0:>3}: MFPT G -> Exit {mfpt_g * dt:9.3f} ns"
+                if f_g is not None:
+                    line += (f" (median {_median_from_pmf(f_g, tau0) * dt:.3f} ns, "
+                             f"KS {ks_gap(f_g, tau0):.2f})")
+                rep(line)
+                if "SF" in m.labels:
+                    reach, mean_c, f_c = first_passage_no_return(
+                        T0, rows0, m.labels.index("G"), m.labels.index("SF"), m.exit)
+                    if f_c is not None:
+                        rep(f"                 G -> Exit without returning to the SF (the observed "
+                            f"end_1 -> end_2 is of this kind): P = {reach:.3f}, mean "
+                            f"{mean_c * tau0 * dt:.3f} ns (median "
+                            f"{_median_from_pmf(f_c, tau0) * dt:.3f} ns, KS {ks_gap(f_c, tau0):.2f})")
+            if f_e is not None:
+                rep(f"    tau0 = {tau0:>3}: from the observed entry states: mean "
+                    f"{mfpt_e * dt:9.3f} ns, median {_median_from_pmf(f_e, tau0) * dt:.3f} ns, "
+                    f"KS {ks_gap(f_e, tau0):.2f}"
+                    + (f"; predicted / observed mean {mfpt_e * dt / observed.mean():.2f}, "
+                       f"median {_median_from_pmf(f_e, tau0) * dt / np.median(observed):.2f}"
+                       if len(observed) else ""))
+            plot_exit_times(m.name, tau0, dt, f_g, f_e, f_c, observed,
+                            out_dir / f"exit_times_{m.name}_lag{tau0}.png")
 
     # ── dwell times ──
     rep("")
@@ -1150,6 +1248,10 @@ def main(argv=None):
     p.add_argument("--lags", type=_int_list, default=list(DEFAULT_LAGS))
     p.add_argument("--base_lag", type=int, default=10)
     p.add_argument("--min_counts", type=int, default=50)
+    p.add_argument("--glu_enter", type=float, default=3.5, help="M4/M5 Glu binding, A")
+    p.add_argument("--glu_leave", type=float, default=4.5, help="M4/M5 Glu unbinding, A")
+    p.add_argument("--z_buffer", type=float, default=1.0,
+                   help="M4 Free_up / Free_low switch this far past z_mid, A")
     p.add_argument("--permeating_only", action="store_true",
                    help="only the permeating ions, end_1 + 1 -> end_2 of each event "
                         "(results in markov_check/RUN<run>_permeating/)")
@@ -1199,6 +1301,9 @@ def main(argv=None):
         lags=args.lags,
         base_lag=args.base_lag,
         min_counts=args.min_counts,
+        glu_enter=args.glu_enter,
+        glu_leave=args.glu_leave,
+        z_buffer=args.z_buffer,
         permeating_only=args.permeating_only,
         ion_region_tracking=state.get("ion_region_tracking"),
         force_rerun=args.force_rerun,
