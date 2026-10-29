@@ -38,6 +38,18 @@ mismatch is reported). Any other end (the ion leaves the SF upwards, leaves
 the cavity sideways, makes an excursion below the cavity and comes back, or
 the trajectory ends) is censored: no transition is counted past it.
 
+PERMEATING IONS ONLY (permeating_only=True, --permeating_only)
+-----------------------------------------------------------
+Only the permeation events, each from end_1 + 1 (the ion has left the SF
+for the last time) to end_2 (its last cavity frame), Exit right after.
+There is no SF state. A frame of the window outside region 2 (an excursion
+below the cavity and back) splits it, and only the piece ending at end_2
+ends in Exit. M3 still counts every other K+ in the cavity. The transition
+probabilities are then conditioned on the ion leaving through the gate:
+they describe how permeating ions move, not the equilibrium of all cavity
+ions. Results go to markov_check/RUN<run>_permeating/; the trajectory pass
+is shared with the all-ions mode (cached in markov_check/RUN<run>/).
+
 Models:
     M1   SF, G, A, Exit
     M2   SF, G, A_asp, A_other, Exit
@@ -123,6 +135,7 @@ USAGE - from main.py (after ch1, ch2 and analyzer exist)
 CLI
 ---
     python3 -m analysis.markov_check --channel_type G12 --run 3
+    python3 -m analysis.markov_check --channel_type G12 --run 3 --permeating_only
 reads analyzer_state.pkl (written by main.py) from the results dir for the
 permeation events. The paths and residues of G12 runs 1-20 are those of
 main.py; any of them can be overridden (--top, --traj, --results_dir,
@@ -339,6 +352,53 @@ def build_segments(data, permeation_events):
     return segments, info
 
 
+def build_permeating_segments(data, permeation_events):
+    """
+    permeating_only: one window per permeation event, end_1 + 1 .. end_2 (the
+    ion has left the SF for the last time -> its last cavity frame). Frames of
+    the window that are not in region 2 (an excursion below the cavity and
+    back) split it; only the piece ending at end_2 ends in Exit, the others
+    are censored. Returns (segments, info).
+    """
+    f0 = int(data["frames"][0])
+    n_f = len(data["frames"])
+    col_of = {int(r): c for c, r in enumerate(data["ion_resids"])}
+    segments = []
+    info = dict(events=0, window_frames=0, non_cavity_frames=0, sf_frames=0,
+                split_events=0, no_cavity=[], unknown_ions=set(), outside_traj=0)
+    for ev in permeation_events:
+        ion_id = int(ev["ion_id"])
+        c = col_of.get(ion_id)
+        if c is None:
+            info["unknown_ions"].add(ion_id)
+            continue
+        i0, i1 = _end1(ev) + 1 - f0, _end2(ev) - f0
+        if i0 < 0 or i1 >= n_f:
+            info["outside_traj"] += 1
+            continue
+        info["events"] += 1
+        if i1 < i0:
+            info["no_cavity"].append((ion_id, _end2(ev)))
+            continue
+        reg = data["region"][i0:i1 + 1, c]
+        info["window_frames"] += len(reg)
+        info["non_cavity_frames"] += int((reg != CAVITY_REGION).sum())
+        info["sf_frames"] += int((reg == SF_REGION).sum())
+        cav = (reg == CAVITY_REGION).astype(np.int8)
+        edges = np.diff(np.concatenate(([0], cav, [0])))
+        starts = np.flatnonzero(edges == 1)
+        ends = np.flatnonzero(edges == -1) - 1
+        if len(starts) == 0:
+            info["no_cavity"].append((ion_id, _end2(ev)))
+            continue
+        if len(starts) > 1:
+            info["split_events"] += 1
+        for a, b in zip(starts, ends):
+            segments.append(dict(ion=int(c), resid=ion_id, i0=i0 + int(a), i1=i0 + int(b),
+                                 exited=bool(i0 + b == i1)))
+    return segments, info
+
+
 class StateModel:
     def __init__(self, name, labels):
         self.name = name
@@ -347,10 +407,19 @@ class StateModel:
         self.exit = self.n - 1
 
 
-M1 = StateModel("M1", ["SF", "G", "A"])
-M2 = StateModel("M2", ["SF", "G", "A_asp", "A_other"])
-M3 = StateModel("M3", [f"{s}|{l}" for s in M2.labels[:-1] for l in LOAD_LABELS])
+def make_models(with_sf=True):
+    """M1, M2, M3. Without the SF state (permeating_only) the codes of
+    assign_states are shifted down by n_sf_codes (1 for M1/M2, 3 for M3)."""
+    sf = ["SF"] if with_sf else []
+    m1 = StateModel("M1", sf + ["G", "A"])
+    m2 = StateModel("M2", sf + ["G", "A_asp", "A_other"])
+    m3 = StateModel("M3", [f"{s}|{l}" for s in m2.labels[:-1] for l in LOAD_LABELS])
+    return [m1, m2, m3]
+
+
+M1, M2, M3 = make_models()
 MODELS = [M1, M2, M3]
+N_SF_CODES = {"M1": 1, "M2": 1, "M3": len(LOAD_LABELS)}
 
 
 def assign_states(data, segments, asp_enter, asp_leave):
@@ -560,29 +629,45 @@ def plot_ck(model, tau0, ks, pred, obs, obs_sd, dt, out_file):
 
 
 def plot_exit_times(tau0, dt, f_g, f_entry, f_cond, observed_ns, out_file):
-    fig, ax = plt.subplots(figsize=(8, 5))
+    """Left: fraction of exits per log-spaced time bin. Right: cumulative."""
     width = tau0 * dt
+    curves = [(f, color, label) for f, color, label in (
+        (f_g, "#1c5cab", "predicted, start in G"),
+        (f_entry, "#d1495b", "predicted, observed entry states"),
+        (f_cond, "#2a9d4b", "predicted, start in G, no return to SF")) if f is not None]
+    hi = width
     if len(observed_ns):
-        hi = max(np.max(observed_ns), width) * 1.05
-        bins = np.arange(0, hi + width, width)
-        ax.hist(observed_ns, bins=bins, density=True, color="#bbbbbb", edgecolor="white",
-                label=f"observed end_1 -> end_2 (n = {len(observed_ns)})")
-        xmax = hi
-    else:
-        xmax = None
-    for f, color, label in ((f_g, "#1c5cab", "predicted, start in G"),
-                            (f_entry, "#d1495b", "predicted, observed entry states"),
-                            (f_cond, "#2a9d4b", "predicted, start in G, no return to SF")):
-        if f is None:
-            continue
+        hi = max(hi, np.max(observed_ns))
+    for f, _, _ in curves:                              # 99.9% of the predicted mass
+        hi = max(hi, (np.searchsorted(np.cumsum(f), 0.999) + 1) * width)
+    lo = min(dt, np.min(observed_ns[observed_ns > 0])) if np.any(observed_ns > 0) else dt
+    bins = np.geomspace(lo * 0.999, hi * 1.001, 26)
+
+    fig, (ax, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+    if len(observed_ns):
+        h, _ = np.histogram(observed_ns, bins=bins)
+        ax.bar(bins[:-1], h / len(observed_ns), width=np.diff(bins), align="edge",
+               color="#bbbbbb", edgecolor="white",
+               label=f"observed end_1 -> end_2 (n = {len(observed_ns)})")
+        x = np.sort(observed_ns)
+        ax2.step(x, np.arange(1, len(x) + 1) / len(x), where="post", color="black",
+                 label="observed")
+    for f, color, label in curves:
         t = np.arange(1, len(f) + 1) * width
-        ax.step(t, f / width, where="post", color=color, linewidth=1.5, label=label)
-    if xmax is not None:
-        ax.set_xlim(0, xmax)
-    ax.set_xlabel("time to Exit (ns)")
-    ax.set_ylabel("probability density (1/ns)")
-    ax.set_title(f"M2 exit times, tau0 = {tau0} frames ({width:g} ns)")
+        mass, _ = np.histogram(t, bins=bins, weights=f)
+        ax.step(bins[:-1], mass, where="post", color=color, linewidth=1.5, label=label)
+        ax2.step(t, np.cumsum(f), where="post", color=color, linewidth=1.5, label=label)
+    for a in (ax, ax2):
+        a.set_xscale("log")
+        a.set_xlim(bins[0], bins[-1])
+        a.set_xlabel("time to Exit (ns)")
+    ax.set_ylabel("fraction of exits per bin")
+    ax2.set_ylabel("fraction exited by t")
+    ax2.set_ylim(0, 1.02)
     ax.legend(fontsize=8)
+    ax2.legend(fontsize=8, loc="upper left")
+    fig.suptitle(f"M2 exit times, tau0 = {tau0} frames ({width:g} ns); "
+                 f"predictions are on a {width:g} ns grid")
     fig.tight_layout()
     fig.savefig(out_file, dpi=150)
     plt.close(fig)
@@ -609,6 +694,7 @@ def plot_dwell(model, dwell, dt, out_file):
         ax.plot((edges[:-1] + width / 2) * dt, ref, color="grey", linestyle="--",
                 label="exponential, same mean")
         ax.set_yscale("log")
+        ax.set_ylim(0.5, hist.max() * 2)
         ax.set_title(f"{model.labels[s]}  (n = {len(d)})", fontsize=8)
         ax.set_xlabel("dwell (ns)", fontsize=8)
         ax.tick_params(labelsize=7)
@@ -620,6 +706,7 @@ def plot_dwell(model, dwell, dt, out_file):
         ax.step(lengths * dt, surv, where="post")
         ax.plot(lengths * dt, (1 - p) ** (lengths - 1), color="grey", linestyle="--")
         ax.set_yscale("log")
+        ax.set_ylim(0.5 / len(d), 1.5)
         ax.set_xlabel("dwell (ns)", fontsize=8)
         ax.tick_params(labelsize=7)
         if c == 0:
@@ -724,12 +811,15 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
                      lags=DEFAULT_LAGS, base_lag=10, ck_steps=10,
                      asp_enter=3.5, asp_leave=4.5, min_counts=50,
                      n_timescales=3, plateau_rtol=0.1, n_boot=200, seed=0,
+                     permeating_only=False,
                      ion_region_tracking=None, force_rerun=False):
     """Run the three Markov checks for one run; see the module docstring."""
     u = universe
     if end_frame is None:
         end_frame = len(u.trajectory) - 1
-    out_dir = Path(results_dir) / OUT_FOLDER / f"RUN{run}"
+    cache_dir = Path(results_dir) / OUT_FOLDER / f"RUN{run}"
+    out_dir = cache_dir.parent / f"RUN{run}_permeating" if permeating_only else cache_dir
+    cache_dir.mkdir(parents=True, exist_ok=True)
     mat_dir = out_dir / "matrices"
     mat_dir.mkdir(parents=True, exist_ok=True)
     dt = float(frame_duration)
@@ -745,7 +835,8 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
     asp_name = asp_res[0].resname if len(asp_res) else "?"
 
     rep("=" * 78)
-    rep(f"MARKOV CHECK  {channel_type} RUN{run}")
+    rep(f"MARKOV CHECK  {channel_type} RUN{run}"
+        + ("  (permeating ions only, end_1 + 1 -> end_2)" if permeating_only else ""))
     rep("=" * 78)
     rep(f"frames {start_frame}-{end_frame}, frame time {dt:g} ns")
     rep(f"glu ring {list(glu_residues)} (CD), lower ring {list(asn_residues)} (CG)")
@@ -760,7 +851,7 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
     rep(f"output {out_dir}")
 
     data = load_or_collect(u, channel1, channel2, glu_residues, asn_residues, asp_resid,
-                           start_frame, end_frame, out_dir, force_rerun)
+                           start_frame, end_frame, cache_dir, force_rerun)
 
     # ── consistency with the analyzer's own region tracking ──
     if ion_region_tracking:
@@ -780,27 +871,47 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
             rep(f"region check vs ion_region_tracking (regions 0-2): "
                 f"{agree}/{total} frames agree ({100 * agree / total:.2f}%)")
 
-    segments, seg_info = build_segments(data, permeation_events)
+    models = make_models(with_sf=not permeating_only)
+    m2 = models[1]
+    if permeating_only:
+        segments, seg_info = build_permeating_segments(data, permeation_events)
+    else:
+        segments, seg_info = build_segments(data, permeation_events)
     exited = [s["exited"] for s in segments]
     states, n_sf_below = assign_states(data, segments, asp_enter, asp_leave)
+    if permeating_only:                                 # no SF frames: drop the SF codes
+        states = {k: [v - N_SF_CODES[k] for v in seqs] for k, seqs in states.items()}
     n_frames_tracked = sum(s["i1"] - s["i0"] + 1 for s in segments)
 
     rep("")
     rep("TRACKING")
-    rep(f"  K+ in the system: {len(data['ion_resids'])}; "
-        f"ever in SF/cavity: {len({s['ion'] for s in segments})}")
-    rep(f"  tracked segments: {len(segments)} ({n_frames_tracked} ion-frames); "
-        f"ending in Exit: {sum(exited)}; censored: {len(segments) - sum(exited)}")
-    rep(f"  permeation events: {len(permeation_events)}; end_2 at a segment end: "
-        f"{seg_info['end2_found']}; end_2 inside a segment (cut there): {seg_info['end2_cut']}; "
-        f"end_2 outside every segment: {len(seg_info['end2_missing'])}")
-    if seg_info["end2_missing"]:
-        rep(f"    (ion, end_2) not matched: {seg_info['end2_missing'][:10]}")
+    if permeating_only:
+        rep(f"  permeation events: {len(permeation_events)}; used: {seg_info['events']}; "
+            f"outside the analysed frames: {seg_info['outside_traj']}")
+        rep(f"  window frames (end_1 + 1 .. end_2): {seg_info['window_frames']}; not in the "
+            f"cavity: {seg_info['non_cavity_frames']} (of them in the SF: "
+            f"{seg_info['sf_frames']}); events split by an excursion: "
+            f"{seg_info['split_events']}")
+        if seg_info["no_cavity"]:
+            rep(f"    events without cavity frames (ion, end_2): {seg_info['no_cavity'][:10]}")
+        rep(f"  tracked segments: {len(segments)} ({n_frames_tracked} ion-frames); "
+            f"ending in Exit: {sum(exited)}; censored: {len(segments) - sum(exited)}")
+    else:
+        rep(f"  K+ in the system: {len(data['ion_resids'])}; "
+            f"ever in SF/cavity: {len({s['ion'] for s in segments})}")
+        rep(f"  tracked segments: {len(segments)} ({n_frames_tracked} ion-frames); "
+            f"ending in Exit: {sum(exited)}; censored: {len(segments) - sum(exited)}")
+        rep(f"  permeation events: {len(permeation_events)}; end_2 at a segment end: "
+            f"{seg_info['end2_found']}; end_2 inside a segment (cut there): "
+            f"{seg_info['end2_cut']}; end_2 outside every segment: "
+            f"{len(seg_info['end2_missing'])}")
+        if seg_info["end2_missing"]:
+            rep(f"    (ion, end_2) not matched: {seg_info['end2_missing'][:10]}")
     if seg_info["unknown_ions"]:
         rep(f"    permeating ions not found among K+: {sorted(seg_info['unknown_ions'])}")
     if n_sf_below:
         rep(f"  WARNING: in {n_sf_below} tracked ion-frames the SF centre was below z_mid")
-    for m in MODELS:
+    for m in models:
         occ = np.bincount(np.concatenate(states[m.name]), minlength=m.n - 1)
         rep(f"  {m.name} occupancy: " + ", ".join(
             f"{m.labels[s]} {100 * occ[s] / max(occ.sum(), 1):.1f}%" for s in range(m.n - 1)))
@@ -818,7 +929,7 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
             cache_T[(model.name, lag)] = (C, T, rows)
         return cache_T[(model.name, lag)]
 
-    for m in MODELS:
+    for m in models:
         rep(f"  {m.name}")
         for lag in lags:
             C, T, rows = get_T(m, lag)
@@ -843,7 +954,7 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
         f"< {100 * plateau_rtol:g}% between consecutive lags for >= 2 steps, judged only "
         f"at lags shorter than the timescale; the model's lag is that of t1)")
     plateaus = {}
-    for m in MODELS:
+    for m in models:
         its = np.array([implied_timescales(get_T(m, lag)[1], get_T(m, lag)[2], lag,
                                            n_timescales) for lag in lags])
         plateau, _ = find_plateau(lags, its[:, 0], plateau_rtol)
@@ -869,7 +980,7 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
     ks = np.arange(1, ck_steps + 1)
     rng = np.random.default_rng(seed)
     base_lags_by_model = {}
-    for m in MODELS:
+    for m in models:
         bl = [int(base_lag)]
         if plateaus[m.name] is not None and plateaus[m.name] != base_lag:
             bl.append(plateaus[m.name])
@@ -925,9 +1036,13 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
             f"first frame)")
     else:
         rep("  no permeation events in this run")
+    if permeating_only:
+        rep("  note: every window starts after end_1 and ends in Exit, so at lag 1 the predicted "
+            "mean equals the observed mean by construction; judge the median, the shape and "
+            "longer lags")
 
     # observed M2 state at end_1 + 1 of each event
-    entry = np.zeros(M2.n)
+    entry = np.zeros(m2.n)
     seg_lookup = {}
     for si, s in enumerate(segments):
         seg_lookup.setdefault(s["resid"], []).append(si)
@@ -940,12 +1055,12 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
                 break
     if entry.sum():
         rep("  M2 state at end_1 + 1: " + ", ".join(
-            f"{M2.labels[i]} {int(entry[i])}" for i in range(M2.n - 1) if entry[i]))
+            f"{m2.labels[i]} {int(entry[i])}" for i in range(m2.n - 1) if entry[i]))
 
     for tau0 in base_lags_by_model["M2"]:
-        _, T0, rows0 = get_T(M2, tau0)
-        mfpt_g, f_g = first_passage(T0, rows0, M2.labels.index("G"), tau0, M2.exit)
-        mfpt_e, f_e = (first_passage(T0, rows0, entry, tau0, M2.exit)
+        _, T0, rows0 = get_T(m2, tau0)
+        mfpt_g, f_g = first_passage(T0, rows0, m2.labels.index("G"), tau0, m2.exit)
+        mfpt_e, f_e = (first_passage(T0, rows0, entry, tau0, m2.exit)
                        if entry.sum() else (np.nan, None))
         line = f"  tau0 = {tau0} frames: predicted MFPT G -> Exit {mfpt_g * dt:.3f} ns"
         if f_g is not None:
@@ -954,8 +1069,11 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
         if f_e is not None:
             rep(f"               from observed entry states {mfpt_e * dt:.3f} ns "
                 f"(median {_median_from_pmf(f_e, tau0) * dt:.3f} ns)")
-        reach, mean_c, f_c = first_passage_no_return(T0, rows0, M2.labels.index("G"),
-                                                     M2.labels.index("SF"), M2.exit)
+        if "SF" in m2.labels:
+            reach, mean_c, f_c = first_passage_no_return(T0, rows0, m2.labels.index("G"),
+                                                         m2.labels.index("SF"), m2.exit)
+        else:                     # permeating_only: no SF state, every path is of this kind
+            reach, mean_c, f_c = np.nan, np.nan, None
         if f_c is not None:
             rep(f"               G -> Exit without returning to the SF (the observed "
                 f"end_1 -> end_2 is of this kind): P = {reach:.3f}, mean "
@@ -971,7 +1089,7 @@ def run_markov_check(universe, permeation_events, channel1, channel2,
     # ── dwell times ──
     rep("")
     rep("DWELL TIMES (all visits; complete = a transition at both ends)")
-    for m in MODELS:
+    for m in models:
         dw = dwell_times(states[m.name], exited, m.n - 1)
         rep(f"  {m.name}")
         for s in range(m.n - 1):
@@ -1032,6 +1150,9 @@ def main(argv=None):
     p.add_argument("--lags", type=_int_list, default=list(DEFAULT_LAGS))
     p.add_argument("--base_lag", type=int, default=10)
     p.add_argument("--min_counts", type=int, default=50)
+    p.add_argument("--permeating_only", action="store_true",
+                   help="only the permeating ions, end_1 + 1 -> end_2 of each event "
+                        "(results in markov_check/RUN<run>_permeating/)")
     p.add_argument("--force_rerun", action="store_true", help="ignore the cached trajectory pass")
     args = p.parse_args(argv)
 
@@ -1078,6 +1199,7 @@ def main(argv=None):
         lags=args.lags,
         base_lag=args.base_lag,
         min_counts=args.min_counts,
+        permeating_only=args.permeating_only,
         ion_region_tracking=state.get("ion_region_tracking"),
         force_rerun=args.force_rerun,
     )
