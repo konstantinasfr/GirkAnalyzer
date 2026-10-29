@@ -68,6 +68,7 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
         states.csv        per state: departures, P(next site / Exit), times
         transitions.csv   per arrow: count, P, moving time
         exit_by_counts.csv  P(Exit next) per site x K+ above x K+ below, real and control
+        crowding_within_blocks.csv, crowding_per_run.csv   the crowding checks of the summary
         network.png          P(next site | site), all K+ counts together
         network_crowding.png the same, split: departures with <= 3 / >= 4 other K+ in the cavity
         network_net.png      net flow (hops a -> b minus b -> a) per permeating ion
@@ -309,7 +310,8 @@ def build_visits(frames, stays, events, window):
 def steps_table(visits, events, model, max_above, max_below, max_sf, control=0):
     """
     One row per arrow: from_state, to_state, from_site, to_site, prev_site,
-    moving (frames), residue_frames of the from visit (NaN for SF), run, event.
+    moving (frames), residue_frames of the from visit (NaN for SF), run, event,
+    frame (when the ion leaves: end_1 for SF, else the last bound frame of the visit).
     control=j uses the counts of control shift j.
     """
     sfx = "" if control == 0 else f"_c{control}"
@@ -321,17 +323,17 @@ def steps_table(visits, events, model, max_above, max_below, max_sf, control=0):
         g = by_event.get((ev["run"], ev["event"]))
         vs = [] if g is None else g.to_dict("records")
         state = f"{SF}|{bin_label(ev['sf_count' + sfx], max_sf)}"
-        site, prev, res_frames = SF, None, np.nan
+        site, prev, res_frames, t = SF, None, np.nan, ev["end_1"]
         moving = ev["moving_first"]
         for v in vs:
             s_new = name(v["site"])
             st_new = f"{s_new}|{bin_label(v['above' + sfx], max_above)}a{bin_label(v['below' + sfx], max_below)}b"
-            rows.append((ev["run"], ev["event"], state, st_new, site, s_new, prev, moving, res_frames))
+            rows.append((ev["run"], ev["event"], state, st_new, site, s_new, prev, moving, res_frames, t))
             prev, state, site = site, st_new, s_new
-            moving, res_frames = v["moving_after"], v["residue_frames"]
-        rows.append((ev["run"], ev["event"], state, EXIT, site, EXIT, prev, moving, res_frames))
+            moving, res_frames, t = v["moving_after"], v["residue_frames"], v["end"]
+        rows.append((ev["run"], ev["event"], state, EXIT, site, EXIT, prev, moving, res_frames, t))
     return pd.DataFrame(rows, columns=["run", "event", "from_state", "to_state", "from_site", "to_site",
-                                       "prev_site", "moving", "residue_frames"])
+                                       "prev_site", "moving", "residue_frames", "frame"])
 
 
 def site_order(visits, model):
@@ -409,6 +411,52 @@ def simulate(steps, n_sim, rng):
             n_vis[k] += 1
             s = t
     return transit, n_vis, moving
+
+
+def _chi2_p(stat):
+    """p of a chi-square statistic with 1 degree of freedom."""
+    import math
+    return math.erfc(math.sqrt(max(stat, 0) / 2))
+
+
+def crowding_within_blocks(steps, dt, block_ns, crowded=4):
+    """
+    Crowded (>= crowded other K+) vs uncrowded departures compared only within the
+    same block of block_ns of the same run (Cochran-Mantel-Haenszel). Returns dict:
+    blocks used, crowded / uncrowded departures and their exit % in those blocks,
+    crowded exits observed vs expected if crowding did not matter within blocks, p.
+    """
+    d = steps.assign(crowd=steps["from_state"].map(crowding) >= crowded, ex=steps["to_site"] == EXIT,
+                     block=(steps["frame"] * dt // block_ns).astype(int))
+    obs = exp = var = 0.0
+    n1 = n0 = e1 = e0 = blocks = 0
+    for _, g in d.groupby(["run", "block"]):
+        c, u = g[g["crowd"]], g[~g["crowd"]]
+        if not len(c) or not len(u):
+            continue
+        N, m1 = len(g), int(g["ex"].sum())
+        blocks += 1
+        n1, n0, e1, e0 = n1 + len(c), n0 + len(u), e1 + int(c["ex"].sum()), e0 + int(u["ex"].sum())
+        obs += c["ex"].sum()
+        exp += len(c) * m1 / N
+        if N > 1:
+            var += len(c) * len(u) * m1 * (N - m1) / (N ** 2 * (N - 1))
+    stat = (abs(obs - exp) - 0.5) ** 2 / var if var > 0 else np.nan
+    return dict(block_ns=block_ns, blocks=blocks, crowded_n=n1, crowded_exit_pct=100 * e1 / n1 if n1 else np.nan,
+                uncrowded_n=n0, uncrowded_exit_pct=100 * e0 / n0 if n0 else np.nan,
+                crowded_exits=int(obs), expected=exp, p=_chi2_p(stat) if np.isfinite(stat) else np.nan)
+
+
+def crowding_per_run(steps, crowded=4, min_n=3):
+    """Per run: exit % of crowded and uncrowded departures (runs with >= min_n of each)."""
+    d = steps.assign(crowd=steps["from_state"].map(crowding) >= crowded, ex=steps["to_site"] == EXIT)
+    rows = []
+    for run, g in d.groupby("run"):
+        c, u = g[g["crowd"]], g[~g["crowd"]]
+        rows.append(dict(run=run, crowded_n=len(c), crowded_exit_pct=100 * c["ex"].mean() if len(c) else np.nan,
+                         uncrowded_n=len(u), uncrowded_exit_pct=100 * u["ex"].mean() if len(u) else np.nan,
+                         compared=len(c) >= min_n and len(u) >= min_n))
+    return pd.DataFrame(rows)
 
 
 def memory_test(steps, min_row=MIN_TEST):
@@ -948,6 +996,34 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     pd.DataFrame(rows).to_csv(out_dir / "exit_by_counts.csv", index=False, float_format="%.2f")
 
     # ── memory ──
+    rep("")
+    rep("CROWDING CHECKS: is 'more K+ in the cavity -> more exits' real?   crowded = 4+ other K+ in the "
+        "cavity when the ion leaves (SF: when it enters), uncrowded = 3 or fewer")
+    rep("  1 within the same time: crowded vs uncrowded departures compared only inside the same block of "
+        "the same run (Cochran-Mantel-Haenszel), so slow changes of the protein cannot cause it")
+    rep(f"    {'':<14}{'block':>7}{'blocks':>8}{'crowded':>9}{'exit %':>8}{'uncrowded':>11}{'exit %':>8}"
+        f"{'crowded exits: real / expected':>32}{'p':>9}")
+    rows_chk = []
+    for part, sub in (("all", steps), ("SF entries", steps[steps["from_site"] == SF]),
+                      ("site visits", steps[steps["from_site"] != SF])):
+        for block in (25, 50, 100):
+            r = crowding_within_blocks(sub, dt, block)
+            rows_chk.append(dict(part=part, **r))
+            rep(f"    {part:<14}{block:>5} ns{r['blocks']:>8}{r['crowded_n']:>9}{r['crowded_exit_pct']:>7.0f}%"
+                f"{r['uncrowded_n']:>11}{r['uncrowded_exit_pct']:>7.0f}%"
+                f"{r['crowded_exits']:>20} / {r['expected']:>9.1f}{r['p']:>9.2g}")
+    pd.DataFrame(rows_chk).to_csv(out_dir / "crowding_within_blocks.csv", index=False, float_format="%.4f")
+    per = crowding_per_run(steps)
+    per.to_csv(out_dir / "crowding_per_run.csv", index=False, float_format="%.2f")
+    cmp_ = per[per["compared"]]
+    if len(cmp_):
+        k = int((cmp_["crowded_exit_pct"] > cmp_["uncrowded_exit_pct"]).sum())
+        from math import comb
+        p_sign = sum(comb(len(cmp_), i) for i in range(k, len(cmp_) + 1)) / 2 ** len(cmp_)
+        rep(f"  2 run by run (runs with >= 3 crowded and >= 3 uncrowded departures): crowded departures exit more "
+            f"often in {k} of {len(cmp_)} runs (sign test p = {p_sign:.2g}; crowding_per_run.csv)")
+        rep("    " + "  ".join(f"RUN{d['run']}: {d['crowded_exit_pct']:.0f}% vs {d['uncrowded_exit_pct']:.0f}%"
+                               for d in cmp_.to_dict("records")))
     rep("")
     rep("MARKOV TEST 1: DOES THE NEXT SITE DEPEND ON THE SITE THE ION CAME FROM?")
     rep(f"  states with >= {MIN_TEST} departures; chi-square of previous site x next site (rows with >= 5); "
