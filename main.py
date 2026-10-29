@@ -1905,6 +1905,24 @@ def main():
             force_rerun=args.force_pkl_generation   # n_sf uses the SF cylinder ch1
         )
 
+    # SITE-TO-SITE CHAIN: every permeating ion as visits to the GLU / ASN-ASP residues,
+    # state = residue | K+ above | K+ below when it leaves; network, exit by K+ counts
+    # (real and control), crowding checks, Markov tests. Only ions entering after the
+    # protein has equilibrated (fitted Ca RMSD flat) are analysed. Stays >= 10 frames
+    # for G12, 2 for G2. -> site_chain/t3.5_d10/ (G2: t3.5_d2/); pool the runs with
+    # aggregate_site_chain.py. Needs ch1 / ch2 (regions 1 and 2) for the K+ counts.
+    from analysis.site_chain import run_site_chain
+    run_site_chain(
+        u, analyzer.permeation_events, asn_residues, glu_residues,
+        channel1=ch1, channel2=ch2,
+        results_dir=results_dir,
+        run=run_number,
+        channel_type=channel_type,
+        frame_duration=frame_duration,
+        analysis_start_frame=start_frame,
+        force_rerun=args.force_pkl_generation   # recollect the frames (reads the trajectory again)
+    )
+
 #     #  NEW: Add proximity analysis
 #     print("\n" + "="*70)
 #     print("RUNNING RESIDUE PROXIMITY ANALYSIS")
