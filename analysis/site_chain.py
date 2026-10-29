@@ -68,7 +68,11 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
         states.csv        per state: departures, P(next site / Exit), times
         transitions.csv   per arrow: count, P, moving time
         exit_by_counts.csv  P(Exit next) per site x K+ above x K+ below, real and control
-        network.png, exit_heatmaps.png, first_step.png, time_budget.png,
+        network.png          P(next site | site), all K+ counts together
+        network_crowding.png the same, split: departures with <= 3 / >= 4 other K+ in the cavity
+        network_net.png      net flow (hops a -> b minus b -> a) per permeating ion
+        exit_sources.png     last site before Exit, all and by cavity filling
+        exit_heatmaps.png, first_step.png, time_budget.png,
         time_to_exit.png, prediction.png
 Over runs: aggregate_site_chain.py (repo root).
 
@@ -450,47 +454,74 @@ def _layout(sites, ring):
     return pos
 
 
-def plot_network(steps, visits_site, sites, ring, dt, title, out_file, min_prob=0.05, label_prob=0.10):
-    """Sites as nodes; arrows: P(next site | site), all K+ counts together."""
+def crowding(state):
+    """Other K+ in the cavity of a state: n of SF|n, above + below of site|XaYb (bins: lower bound)."""
+    lab = state.split("|", 1)[1] if "|" in state else ""
+    if state.startswith(SF + "|"):
+        return int(lab.rstrip("+"))
+    a, b = lab[:-1].split("a")
+    return int(a.rstrip("+")) + int(b.rstrip("+"))
+
+
+def draw_network(ax, steps, sites, ring, dt, title, min_prob=0.05, label_prob=0.10, net=False, n_ions=None):
+    """
+    Sites as nodes, one panel. net=False: arrow width = P(next site | site) over the
+    departures in steps. net=True: arrow = net flow a -> b (hops a -> b minus b -> a)
+    per permeating ion (n_ions), drawn in the net direction; min_prob / label_prob
+    are then thresholds in hops per ion. Nodes: departures (= visits), median residue
+    time, P(Exit next).
+    """
     pos = _layout(sites, ring)
     counts = steps.groupby(["from_site", "to_site"]).size()
     totals = steps.groupby("from_site").size()
-    n_vis = visits_site.groupby("site").size()
-    med = visits_site.groupby("site")["residue_frames"].median() * dt
-    top = max(n_vis.max() if len(n_vis) else 1, 1)
-    size = {s: 1700 + 2800 * np.sqrt(n_vis.get(s, 0) / top) for s in sites}
+    med = steps.groupby("from_site")["residue_frames"].median() * dt
+    n_ions = n_ions or max(int(totals.get(SF, 0)), 1)
+    top = max([totals.get(s, 0) for s in sites] + [1])
+    size = {s: 1700 + 2800 * np.sqrt(totals.get(s, 0) / top) for s in sites}
     size[SF] = size[EXIT] = 2600
     radius = {s: np.sqrt(a) / 2 for s, a in size.items()}
-    fig, ax = plt.subplots(figsize=(13, 9))
+    arrows = []
     for (a, b), c in counts.items():
-        p = c / totals[a]
-        if a == b or p < min_prob or a not in pos or b not in pos:
+        if a == b or a not in pos or b not in pos:
+            continue
+        if net:
+            back = counts.get((b, a), 0)
+            if c <= back:
+                continue
+            w = (c - back) / n_ions
+            arrows.append((a, b, w, min(w / 0.3, 1), f"{w:.2f}"))
+        else:
+            w = c / totals[a]
+            arrows.append((a, b, w, min(w / 0.4, 1), f"{100 * w:.0f}%"))
+    for a, b, w, strength, text in arrows:
+        if w < min_prob:
             continue
         color = site_color(a) if a != SF else GREY
         straight = a == SF and b == EXIT
-        ax.add_patch(FancyArrowPatch(pos[a], pos[b], arrowstyle="-|>", mutation_scale=12 + 16 * p,
-                                     lw=0.8 + 12 * p, color=color, alpha=0.35 + 0.55 * min(p / 0.4, 1),
+        lw = 0.8 + (12 * w if not net else 25 * min(w, 0.6))
+        ax.add_patch(FancyArrowPatch(pos[a], pos[b], arrowstyle="-|>", mutation_scale=12 + 16 * min(w, 1),
+                                     lw=lw, color=color, alpha=0.35 + 0.55 * strength,
                                      connectionstyle="arc3,rad=0.0" if straight else "arc3,rad=0.15",
                                      shrinkA=radius[a], shrinkB=radius[b], zorder=1))
-        if p >= label_prob:
+        if w >= label_prob:
             (x1, y1), (x2, y2) = pos[a], pos[b]
             mx, my = (x1 + x2) / 2, (y1 + y2) / 2
             if not straight:
                 mx, my = mx + 0.075 * (y2 - y1), my - 0.075 * (x2 - x1)
-            ax.text(mx, my, f"{100 * p:.0f}%", fontsize=8, ha="center", va="center", zorder=4,
-                    color=color, fontweight="bold",
-                    bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85))
+            ax.text(mx, my, text, fontsize=8, ha="center", va="center", zorder=4, color=color,
+                    fontweight="bold", bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85))
+    exits = int(counts.xs(EXIT, level=1).sum()) if len(counts) and EXIT in counts.index.get_level_values(1) else 0
     for s, (x, y) in pos.items():
         ax.scatter([x], [y], s=size[s], color=site_color(s) if s not in (SF, EXIT) else GREY,
                    edgecolor="black", linewidth=1.2, zorder=3)
         if s == SF:
             text = f"SF\n{int(totals.get(SF, 0))} ions"
         elif s == EXIT:
-            text = f"Exit\n{int(counts.xs(EXIT, level=1).sum()) if len(counts) else 0} exits"
+            text = f"Exit\n{exits} exits"
         else:
             dep = totals.get(s, 0)
             loop = counts.get((s, s), 0)
-            text = (f"{s}\n{int(n_vis.get(s, 0))} visits\n{med.get(s, np.nan):.1f} ns"
+            text = (f"{s}\n{int(dep)} visits\n{med.get(s, np.nan):.1f} ns"
                     f"\nexit {100 * counts.get((s, EXIT), 0) / max(dep, 1):.0f}%"
                     + (f"\nloop {100 * loop / max(dep, 1):.0f}%" if loop else ""))
         ax.text(x, y, text, ha="center", va="center", fontsize=8, fontweight="bold", zorder=5)
@@ -499,11 +530,72 @@ def plot_network(steps, visits_site, sites, ring, dt, title, out_file, min_prob=
     ax.set_ylim(-2.2, 5.3)
     ax.set_aspect("equal")
     ax.axis("off")
-    ax.set_title(f"{title}\narrow width = P(next site | site), all K+ counts together, shown if "
+    ax.set_title(title, fontsize=10)
+
+
+def plot_network(steps, sites, ring, dt, title, out_file, min_prob=0.05, label_prob=0.10):
+    """Sites as nodes; arrows: P(next site | site), all K+ counts together."""
+    fig, ax = plt.subplots(figsize=(13, 9))
+    draw_network(ax, steps, sites, ring, dt,
+                 f"{title}\narrow width = P(next site | site), all K+ counts together, shown if "
                  f">= {100 * min_prob:.0f}%; node size = visits; in the node: visits, median residue "
-                 "time, P(Exit next)", fontsize=10)
+                 "time, P(Exit next)", min_prob, label_prob)
     fig.tight_layout()
     fig.savefig(out_file, dpi=170, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_network_crowding(steps, sites, ring, dt, title, out_file, crowded=4, min_prob=0.05, label_prob=0.10):
+    """Two networks: departures with < crowded other K+ in the cavity, and with >= crowded."""
+    k = steps["from_state"].map(crowding)
+    fig, axes = plt.subplots(1, 2, figsize=(9 + 1.3 * len(sites), 9.5))
+    for ax, sel, name in ((axes[0], k < crowded, f"{crowded - 1} or fewer other K+"),
+                          (axes[1], k >= crowded, f"{crowded} or more other K+")):
+        g = steps[sel]
+        ax_title = (f"departures with {name} in the cavity ({len(g)} departures, "
+                    f"{100 * (g['to_site'] == EXIT).mean():.0f}% to Exit)")
+        draw_network(ax, g, sites, ring, dt, ax_title, min_prob, label_prob)
+    fig.suptitle(f"{title}\nP(next site | site) split by how full the cavity is when the ion leaves "
+                 f"(SF: when it enters); arrows >= {100 * min_prob:.0f}%", fontsize=12)
+    fig.subplots_adjust(wspace=0.02)
+    fig.savefig(out_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_network_net(steps, sites, ring, dt, title, out_file, min_flow=0.02, label_flow=0.05):
+    """Net flow: hops a -> b minus b -> a, per permeating ion."""
+    n_ions = int((steps["from_site"] == SF).sum())
+    fig, ax = plt.subplots(figsize=(13, 9))
+    draw_network(ax, steps, sites, ring, dt,
+                 f"{title}\nNET FLOW: arrow = (hops a -> b minus b -> a) per permeating ion ({n_ions} ions), "
+                 f"in the net direction, shown if >= {min_flow:g}; back-and-forth exchange cancels",
+                 min_flow, label_flow, net=True, n_ions=n_ions)
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=170, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_exit_sources(steps, sites, title, out_file, crowded=4):
+    """Where the exits come from: last site before Exit, all and split by cavity filling."""
+    ex = steps[steps["to_site"] == EXIT]
+    k = ex["from_state"].map(crowding)
+    order = [SF] + sites
+    labels = ["no binding\n(SF)"] + sites
+    fig, ax = plt.subplots(figsize=(11, 5))
+    x = np.arange(len(order))
+    for i, (sel, name, c) in enumerate(((k == k, f"all ({len(ex)})", "#555555"),
+                                        (k < crowded, f"{crowded - 1} or fewer other K+ ({int((k < crowded).sum())})", "#7fa7d6"),
+                                        (k >= crowded, f"{crowded}+ other K+ ({int((k >= crowded).sum())})", "#c0504d"))):
+        g = ex[sel]
+        frac = [100 * (g["from_site"] == s).mean() if len(g) else 0 for s in order]
+        ax.bar(x + (i - 1) * 0.27, frac, 0.27, color=c, label=name)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+    ax.set_ylabel("% of exits")
+    ax.legend(title="exits", fontsize=8)
+    ax.set_title(f"{title}: where the exits come from (last site before Exit)")
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150)
     plt.close(fig)
 
 
@@ -910,9 +1002,14 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     ev_out["residue_ns"] = ev_out["residue_frames"] * dt
     ev_out["moving_ns"] = ev_out["moving_frames"] * dt
     ev_out.to_csv(out_dir / "events.csv", index=False, float_format="%.3f")
-    crowded = len(sites) > 5                     # 8 residues: only the main hops drawn
-    plot_network(steps, vs, sites, ring, dt, f"{head}: {model} model", out_dir / "network.png",
-                 min_prob=0.10 if crowded else 0.05, label_prob=0.15 if crowded else 0.10)
+    busy = len(sites) > 5                        # 8 residues: only the main hops drawn
+    mp, lp = (0.10, 0.15) if busy else (0.05, 0.10)
+    plot_network(steps, sites, ring, dt, f"{head}: {model} model", out_dir / "network.png", mp, lp)
+    plot_network_crowding(steps, sites, ring, dt, f"{head}: {model} model", out_dir / "network_crowding.png",
+                          min_prob=mp, label_prob=lp)
+    plot_network_net(steps, sites, ring, dt, f"{head}: {model} model", out_dir / "network_net.png",
+                     min_flow=0.03 if busy else 0.02, label_flow=0.06 if busy else 0.05)
+    plot_exit_sources(steps, sites, f"{head}: {model} model", out_dir / "exit_sources.png")
     plot_exit_heatmaps(steps, ctrl, sites, max_above, max_below, f"{head}: {model} model",
                        out_dir / "exit_heatmaps.png")
     plot_first_step(steps, sites, max_sf, f"{head}: first site after the SF", out_dir / "first_step.png")
