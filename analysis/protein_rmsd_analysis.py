@@ -2,10 +2,14 @@
 analysis/protein_rmsd_analysis.py
 ====================================
 Computes the RMSD of the full protein (Cα atoms) over the trajectory,
-using the first frame as reference. Saves a CSV and plots.
+using the first frame as reference. Each frame is superimposed on the
+reference first (translation + rotation removed), so the RMSD measures
+changes of the structure only, not the protein drifting or turning in the
+box. Saves a CSV and plots.
 
 Output (saved in results_dir/protein_rmsd/):
-    protein_rmsd.csv              -- per-frame RMSD
+    protein_rmsd.csv              -- per-frame RMSD: rmsd_A (fitted),
+                                     rmsd_nofit_A (without fitting, as before)
     protein_rmsd.png              -- raw plot
     protein_rmsd_smooth<W>.png    -- smoothed plot
 
@@ -38,6 +42,31 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore")
 
 
+def fitted_ca_rmsd(u, start_frame=0, end_frame=None, progress=False):
+    """
+    Cα RMSD of every frame start_frame..end_frame against start_frame, after
+    superimposing the frame on the reference (translation + rotation removed,
+    so only changes of the structure count). Returns (frames, fitted RMSD,
+    RMSD without fitting) in Å.
+    """
+    from MDAnalysis.analysis import rms
+
+    end_frame = len(u.trajectory) - 1 if end_frame is None else end_frame
+    ca = u.select_atoms("protein and name CA")
+    u.trajectory[start_frame]
+    ref = ca.positions.copy()
+    n = end_frame - start_frame + 1
+    fitted, nofit = np.zeros(n), np.zeros(n)
+    frames_iter = u.trajectory[start_frame:end_frame + 1]
+    if progress:
+        frames_iter = tqdm(frames_iter, total=n, desc="  Protein RMSD", leave=False)
+    for i, _ in enumerate(frames_iter):
+        pos = ca.positions
+        fitted[i] = rms.rmsd(pos, ref, center=True, superposition=True)
+        nofit[i] = np.sqrt(((pos - ref) ** 2).sum(axis=1).mean())
+    return np.arange(start_frame, end_frame + 1), fitted, nofit
+
+
 def run_protein_rmsd_analysis(
     u,
     results_dir:      Path,
@@ -60,33 +89,12 @@ def run_protein_rmsd_analysis(
     print(f"  reference     : frame {start_frame}")
     print("=" * 70)
 
-    ca_atoms = u.select_atoms("protein and name CA")
-    n_atoms  = len(ca_atoms)
-    n_frames = end_frame - start_frame + 1
-    print(f"\n  Cα atoms: {n_atoms}")
-
-    # get reference positions (first frame)
-    u.trajectory[start_frame]
-    ref_positions = ca_atoms.positions.copy()
-
-    rmsd_values = np.zeros(n_frames)
-
-    print(f"  Computing RMSD over {n_frames} frames...")
-    for fi, ts in enumerate(tqdm(
-        u.trajectory[start_frame:end_frame + 1],
-        total=n_frames,
-        desc="  Protein RMSD",
-        leave=False,
-    )):
-        pos   = ca_atoms.positions
-        diff  = pos - ref_positions
-        rmsd  = np.sqrt((diff ** 2).sum(axis=1).mean())
-        rmsd_values[fi] = rmsd
-
-    frames = np.arange(start_frame, end_frame + 1)
+    print(f"\n  Cα atoms: {len(u.select_atoms('protein and name CA'))}")
+    print(f"  Computing RMSD over {end_frame - start_frame + 1} frames...")
+    frames, rmsd_values, rmsd_nofit = fitted_ca_rmsd(u, start_frame, end_frame, progress=True)
 
     # save CSV
-    df = pd.DataFrame({"frame": frames, "rmsd_A": rmsd_values})
+    df = pd.DataFrame({"frame": frames, "rmsd_A": rmsd_values, "rmsd_nofit_A": rmsd_nofit})
     csv_path = out_dir / "protein_rmsd.csv"
     df.to_csv(csv_path, index=False)
     print(f"\n  Saved CSV -> {csv_path.name}")

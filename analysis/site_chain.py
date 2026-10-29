@@ -43,12 +43,23 @@ CONTROL  the same states with the other ions taken from frames 1/4, 1/2, 3/4 of
 IONS PRESENT AT FRAME 0 (end_1 == 0: their entry was not seen) are kept in the
 CSVs and left out of the analysis unless include_frame0=True.
 
+EQUILIBRATION  only ions that leave the SF after the protein has settled are
+analysed (unless include_preequil=True; the others stay in the CSVs). Per run:
+the Ca RMSD against frame 0 after superposition (protein_rmsd_analysis.
+fitted_ca_rmsd), smoothed over 7.5 ns; plateau = mean of the smoothed RMSD over
+the second half of the run; start = the first frame after which the smoothed
+RMSD stays within eq_tolerance (0.5 A) of the plateau (if it never settles:
+the middle of the run). A start frame given per run (start_frame=, or
+--start_frames run,start_frame CSV in the aggregator) replaces the automatic one.
+
 OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10)
+    rmsd_run<run>.csv    fitted / unfitted Ca RMSD of every frame
+    equilibration.csv, equilibration.png   start frame per run (automatic, given, used)
     frames_run<run>.csv  per frame end_1 .. end_2 of every event: residue in
                          contact (closest within the cutoff), K+ above / below /
                          in the SF, the same counts for the 3 control shifts
     stays_run<run>.csv, events_run<run>.csv
-    <model>_a<max_above>b<max_below>[_frame0]/
+    <model>_a<max_above>b<max_below>[_frame0][_preeq]/
         summary.txt
         visits.csv        one row per visit (times, counts when leaving, next, touches)
         events.csv        one row per ion (SF count, residue / moving time, path)
@@ -97,6 +108,8 @@ GREY = "#9a9a9a"
 MIN_TEST = 20                     # departures needed for the memory test of a state
 N_SIM = 20000
 FROM_NEXT = "from \\ next"
+EQ_TOL = 0.5                      # A: smoothed RMSD within this of its plateau = settled
+EQ_SMOOTH_NS = 7.5
 N_C = len(CONTROL_SHIFTS)
 
 
@@ -105,8 +118,9 @@ def default_window(channel_type):
     return 1 if str(channel_type).upper().startswith("G2") else 4
 
 
-def analysis_folder(model, max_above, max_below, include_frame0):
-    return f"{model}_a{max_above}b{max_below}" + ("_frame0" if include_frame0 else "")
+def analysis_folder(model, max_above, max_below, include_frame0, include_preequil=False):
+    return (f"{model}_a{max_above}b{max_below}" + ("_frame0" if include_frame0 else "")
+            + ("_preeq" if include_preequil else ""))
 
 
 def bin_label(n, top):
@@ -648,16 +662,33 @@ def plot_prediction(obs_t, sim_t, obs_n, sim_n, title, out_file):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def analyze_model(visits, events, out_dir, head, frame_duration, model="residue", max_above=5,
-                  max_below=3, max_sf=5, include_frame0=False, n_sim=N_SIM, seed=0):
-    """Tables, tests and plots of one model; see the module docstring."""
+                  max_below=3, max_sf=5, include_frame0=False, include_preequil=False, n_sim=N_SIM,
+                  seed=0):
+    """Tables, tests and plots of one model; see the module docstring. events may carry
+    eq_start_frame (per run): ions leaving the SF before it are left out unless include_preequil."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     dt = float(frame_duration)
     rng = np.random.default_rng(seed)
     rep = _Report()
     n_all = len(events)
-    if not include_frame0 and len(events):
-        events = events[~events["starts_at_frame0"].astype(bool)]
+    n_frame0 = n_pre = 0
+    eq_report = excluded_ids = None
+    if len(events):
+        eq = events["eq_start_frame"] if "eq_start_frame" in events else pd.Series(0, index=events.index)
+        frame0 = events["starts_at_frame0"].astype(bool)
+        pre = (events["end_1"] < eq) & ~frame0
+        eq_report = (events.assign(pre=pre, eq=eq).groupby("run")
+                     .agg(start=("eq", "first"), ions=("pre", "size"), before=("pre", "sum")))
+        excluded_ids = events.loc[pre, "ion_id"].value_counts()
+        drop = pd.Series(False, index=events.index)
+        if not include_frame0:
+            drop |= frame0
+            n_frame0 = int(frame0.sum())
+        if not include_preequil:
+            drop |= pre
+            n_pre = int(pre.sum())
+        events = events[~drop]
         keep = set(zip(events["run"], events["event"]))
         visits = visits[[(r, e) in keep for r, e in zip(visits["run"], visits["event"])]] if len(visits) else visits
     if not len(events):
@@ -679,9 +710,17 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     rep(f"  states: site | K+ above | K+ below when leaving (bins 0..{max_above}+ / 0..{max_below}+); "
         f"start SF|other K+ in the cavity at end_1 (0..{max_sf}+)")
     rep("=" * 78)
-    rep(f"runs: {events['run'].nunique()}; ions: {len(events)}"
-        + ("" if include_frame0 else f" ({n_all - len(events)} present at frame 0 left out)")
+    rep(f"runs: {events['run'].nunique()}; ions: {len(events)} of {n_all}"
+        + f" ({n_frame0} present at frame 0 and {n_pre} entering before equilibration left out)"
         + f"; visits: {len(visits)}; states seen: {steps['from_state'].nunique()}")
+    if eq_report is not None and (eq_report["start"] > 0).any():
+        rep("  equilibration start per run (ns) and ions entering before it"
+            + (" (kept: include_preequil)" if include_preequil else " (left out)") + ":")
+        rep("    " + "  ".join(f"RUN{r}: {d['start'] * dt:.0f} ns, {int(d['before'])}/{int(d['ions'])}"
+                               for r, d in eq_report.iterrows()))
+        if excluded_ids is not None and len(excluded_ids):
+            rep("    ions most often entering before equilibration: "
+                + ", ".join(f"{i} ({n}x)" for i, n in excluded_ids.head(6).items()))
     rep(f"ions with no visit (SF -> Exit): {int((events['n_visits'] == 0).sum())} "
         f"({100 * (events['n_visits'] == 0).mean():.0f}%); visits per ion: mean "
         f"{events['n_visits'].mean():.2f}, median {events['n_visits'].median():.0f}, max {events['n_visits'].max()}")
@@ -883,14 +922,85 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     return st
 
 
+def equilibration_start(frames, rmsd, dt, tol=EQ_TOL, smooth_ns=EQ_SMOOTH_NS):
+    """(start frame, plateau, smoothed RMSD) of one run; see the module docstring."""
+    frames, rmsd = np.asarray(frames), np.asarray(rmsd, dtype=float)
+    w = max(1, int(round(smooth_ns / dt)))
+    sm = pd.Series(rmsd).rolling(w, center=True, min_periods=1).mean().to_numpy()
+    plateau = float(sm[len(sm) // 2:].mean())
+    off = np.flatnonzero(np.abs(sm - plateau) > tol)
+    if not len(off):
+        start = int(frames[0])
+    elif off[-1] == len(sm) - 1:                      # never settles: use the second half
+        start = int(frames[len(sm) // 2])
+    else:
+        start = int(frames[off[-1] + 1])
+    return start, plateau, sm
+
+
+def equilibration(rmsd, dt, out_base, tol=EQ_TOL, start_frames=None):
+    """{run: start frame used}; writes equilibration.csv / .png in out_base."""
+    start_frames = {int(k): int(v) for k, v in (start_frames or {}).items()}
+    rows, curves = [], {}
+    for run, g in (rmsd.groupby("run") if rmsd is not None and len(rmsd) else []):
+        g = g.sort_values("frame")
+        auto, plateau, sm = equilibration_start(g["frame"], g["rmsd_fit_A"], dt, tol)
+        used = start_frames.get(int(run), auto)
+        rows.append(dict(run=run, auto_start_frame=auto, given_start_frame=start_frames.get(int(run)),
+                         used_start_frame=used, used_start_ns=used * dt, plateau_A=plateau))
+        curves[run] = (g["frame"].to_numpy(), g["rmsd_fit_A"].to_numpy(), sm, plateau, auto, used)
+    for run, f in start_frames.items():
+        if run not in curves:
+            rows.append(dict(run=run, auto_start_frame=None, given_start_frame=f, used_start_frame=f,
+                             used_start_ns=f * dt, plateau_A=np.nan))
+    if not rows:
+        return {}
+    table = pd.DataFrame(rows).sort_values("run")
+    table.to_csv(Path(out_base) / "equilibration.csv", index=False, float_format="%.3f")
+    if curves:
+        n = len(curves)
+        cols = min(4, n)
+        fig, axes = plt.subplots(-(-n // cols), cols, figsize=(4.2 * cols, 2.8 * -(-n // cols)), squeeze=False)
+        for ax, (run, (f, r, sm, plateau, auto, used)) in zip(axes.flat, sorted(curves.items())):
+            ax.plot(f * dt, r, lw=0.4, color="#9ab8d8")
+            ax.plot(f * dt, sm, lw=1.5, color="#1c5cab")
+            ax.axhspan(plateau - tol, plateau + tol, color="#dddddd", zorder=0)
+            ax.axvline(used * dt, color="#c0504d", lw=1.5, label=f"start {used * dt:.0f} ns")
+            if used != auto:
+                ax.axvline(auto * dt, color="#c0504d", lw=1, ls="--", label=f"automatic {auto * dt:.0f} ns")
+            ax.set_title(f"RUN{run}", fontsize=9)
+            ax.legend(fontsize=7)
+            ax.set_xlabel("time (ns)", fontsize=8)
+            ax.set_ylabel("Ca RMSD, fitted (A)", fontsize=8)
+        for ax in list(axes.flat)[n:]:
+            ax.axis("off")
+        fig.suptitle(f"Equilibration: smoothed RMSD within {tol} A of its plateau (grey band) from the red line on")
+        fig.tight_layout()
+        fig.savefig(Path(out_base) / "equilibration.png", dpi=130)
+        plt.close(fig)
+    return dict(zip(table["run"], table["used_start_frame"]))
+
+
 def analyze_all(frames, stays, events, out_base, head, frame_duration, window, models=MODELS,
-                max_above=5, max_below=3, max_sf=5, include_frame0=False):
+                max_above=5, max_below=3, max_sf=5, include_frame0=False, rmsd=None, eq_tol=EQ_TOL,
+                start_frames=None, include_preequil=False):
+    eq = equilibration(rmsd, frame_duration, out_base, eq_tol, start_frames)
+    events = events.assign(eq_start_frame=events["run"].map(eq).fillna(0).astype(int))
     visits, ev = build_visits(frames, stays, events, window)
     for model in models:
-        analyze_model(visits, ev, Path(out_base) / analysis_folder(model, max_above, max_below, include_frame0),
+        analyze_model(visits, ev, Path(out_base) / analysis_folder(model, max_above, max_below, include_frame0,
+                                                                     include_preequil),
                       head, frame_duration, model=model, max_above=max_above, max_below=max_below,
-                      max_sf=max_sf, include_frame0=include_frame0)
+                      max_sf=max_sf, include_frame0=include_frame0, include_preequil=include_preequil)
     return visits, ev
+
+
+def collect_rmsd(universe, run):
+    """Fitted and unfitted Ca RMSD of every frame against frame 0."""
+    from analysis.protein_rmsd_analysis import fitted_ca_rmsd
+
+    frames, fit, nofit = fitted_ca_rmsd(universe, 0, len(universe.trajectory) - 1)
+    return pd.DataFrame(dict(run=run, frame=frames, rmsd_fit_A=fit, rmsd_nofit_A=nofit))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -900,8 +1010,10 @@ def analyze_all(frames, stays, events, out_base, head, frame_duration, window, m
 def run_site_chain(universe, permeation_events, asn_residues, glu_residues, channel1, channel2,
                    results_dir, run, channel_type="G12", frame_duration=0.075, cutoff=3.5,
                    min_duration=None, window=None, models=MODELS, max_above=5, max_below=3, max_sf=5,
-                   include_frame0=False, analysis_start_frame=0, force_rerun=False):
-    """Collect the data of one run (cached in CSVs) and analyse it; see the module docstring."""
+                   include_frame0=False, start_frame=None, eq_tol=EQ_TOL, include_preequil=False,
+                   analysis_start_frame=0, force_rerun=False):
+    """Collect the data of one run (cached in CSVs) and analyse it; see the module docstring.
+    start_frame: equilibration start of this run, instead of the one found from the RMSD."""
     min_duration = default_min_duration(channel_type) if min_duration is None else int(min_duration)
     window = default_window(channel_type) if window is None else int(window)
     out_dir = Path(results_dir) / OUT_FOLDER / settings_folder(cutoff, min_duration)
@@ -917,9 +1029,18 @@ def run_site_chain(universe, permeation_events, asn_residues, glu_residues, chan
                                             analysis_start_frame)
         for k, d in (("frames", frames), ("stays", stays), ("events", events)):
             d.to_csv(paths[k], index=False)
+    rmsd_csv = out_dir / f"rmsd_run{run}.csv"
+    if rmsd_csv.exists() and not force_rerun:
+        rmsd = pd.read_csv(rmsd_csv)
+    else:
+        print("site_chain: computing the fitted Ca RMSD")
+        rmsd = collect_rmsd(universe, run)
+        rmsd.to_csv(rmsd_csv, index=False, float_format="%.4f")
     analyze_all(frames, stays, events, out_dir, f"{channel_type} RUN{run}", frame_duration, window,
                 models=models, max_above=max_above, max_below=max_below, max_sf=max_sf,
-                include_frame0=include_frame0)
+                include_frame0=include_frame0, rmsd=rmsd, eq_tol=eq_tol,
+                start_frames=None if start_frame is None else {run: start_frame},
+                include_preequil=include_preequil)
     return frames, stays, events
 
 
@@ -932,6 +1053,10 @@ def add_analysis_args(p):
                                               "(default 4 for G12, 1 for G2)")
     p.add_argument("--include_frame0", action="store_true",
                    help="also analyse the ions present at frame 0 (end_1 == 0)")
+    p.add_argument("--eq_tolerance", type=float, default=EQ_TOL,
+                   help="A: the smoothed RMSD within this of its plateau counts as equilibrated")
+    p.add_argument("--include_preequil", action="store_true",
+                   help="also analyse the ions entering before equilibration")
 
 
 def main(argv=None):
@@ -951,6 +1076,7 @@ def main(argv=None):
     p.add_argument("--cutoff", type=float, default=3.5)
     p.add_argument("--min_duration", type=int, help="frames of a stay (default 10 for G12, 2 for G2)")
     add_analysis_args(p)
+    p.add_argument("--start_frame", type=int, help="equilibration start of this run (default: from the RMSD)")
     p.add_argument("--force_rerun", action="store_true", help="recollect the data from the trajectory")
     args = p.parse_args(argv)
 
@@ -980,7 +1106,9 @@ def main(argv=None):
                        frame_duration=cfg["frame_duration"], cutoff=args.cutoff,
                        min_duration=args.min_duration, window=args.window, models=args.models,
                        max_above=args.max_above, max_below=args.max_below, max_sf=args.max_sf,
-                       include_frame0=args.include_frame0, force_rerun=args.force_rerun)
+                       include_frame0=args.include_frame0, start_frame=args.start_frame,
+                       eq_tol=args.eq_tolerance, include_preequil=args.include_preequil,
+                       force_rerun=args.force_rerun)
 
 
 if __name__ == "__main__":
