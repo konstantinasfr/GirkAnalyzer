@@ -211,7 +211,19 @@ def collect_run(universe, permeation_events, asn_residues, glu_residues, channel
                 row[f"n_above_c{j}"], row[f"n_below_c{j}"], _ = pore.neighbours(ion, f, (f + s) % n_frames)
             frames.append(row)
     stay_cols = ["run", "event", "residue_id", "residue_pdb", "resname", "ring", "start_frame", "end_frame"]
-    return pd.DataFrame(frames), pd.DataFrame(stays, columns=stay_cols), pd.DataFrame(events)
+    frame_cols = ["run", "event", "frame", "contact", "n_above", "n_below", "n_sf"] + \
+                 [f"n_{k}_c{j}" for j in range(1, N_C + 1) for k in ("above", "below")]
+    event_cols = ["run", "event", "ion_id", "end_1", "end_2", "starts_at_frame0"]
+    return (pd.DataFrame(frames, columns=frame_cols), pd.DataFrame(stays, columns=stay_cols),
+            pd.DataFrame(events, columns=event_cols))
+
+
+def read_csv_or_empty(path, **kw):
+    """pd.read_csv, or an empty DataFrame for a file without columns (a run without permeation)."""
+    try:
+        return pd.read_csv(path, **kw)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1215,14 +1227,17 @@ def run_site_chain(universe, permeation_events, asn_residues, glu_residues, chan
     paths = {k: out_dir / f"{k}_run{run}.csv" for k in ("frames", "stays", "events")}
     if all(p.exists() for p in paths.values()) and not force_rerun:
         print(f"site_chain: using {paths['frames']}")
-        frames = pd.read_csv(paths["frames"], keep_default_na=False)
-        stays, events = pd.read_csv(paths["stays"]), pd.read_csv(paths["events"])
+        frames = read_csv_or_empty(paths["frames"], keep_default_na=False)
+        stays, events = read_csv_or_empty(paths["stays"]), read_csv_or_empty(paths["events"])
     else:
         frames, stays, events = collect_run(universe, permeation_events, asn_residues, glu_residues,
                                             channel1, channel2, run, channel_type, cutoff, min_duration,
                                             analysis_start_frame)
         for k, d in (("frames", frames), ("stays", stays), ("events", events)):
             d.to_csv(paths[k], index=False)
+    if not len(events) or not len(frames):
+        print(f"site_chain: RUN{run} has no permeation events: nothing to analyse")
+        return frames, stays, events
     rmsd_csv = out_dir / f"rmsd_run{run}.csv"
     if rmsd_csv.exists() and not force_rerun:
         rmsd = pd.read_csv(rmsd_csv)

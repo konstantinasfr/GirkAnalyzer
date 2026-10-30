@@ -30,7 +30,7 @@ from pathlib import Path
 import pandas as pd
 
 from aggregate_duration_results import run_sort_key
-from analysis.site_chain import OUT_FOLDER, add_analysis_args, analyze_all, default_window
+from analysis.site_chain import OUT_FOLDER, add_analysis_args, analyze_all, default_window, read_csv_or_empty
 
 FRAME_DURATION = {"G2": 0.4}                 # ns per frame; everything else 0.075
 
@@ -50,9 +50,14 @@ def load(base, settings):
             if not all(p.exists() for p in parts.values()):
                 print(f"  [SKIP] {f_csv}: stays / events CSV missing")
                 continue
-            out["frames"].append(pd.read_csv(parts["frames"], keep_default_na=False))
-            out["stays"].append(pd.read_csv(parts["stays"]))
-            out["events"].append(pd.read_csv(parts["events"]))
+            frames = read_csv_or_empty(parts["frames"], keep_default_na=False)
+            events = read_csv_or_empty(parts["events"])
+            if not len(frames) or not len(events):
+                print(f"  [SKIP] {run_dir.name}: no permeation events")
+                continue
+            out["frames"].append(frames)
+            out["stays"].append(read_csv_or_empty(parts["stays"]))
+            out["events"].append(events)
             r_csv = d / f_csv.name.replace("frames_", "rmsd_")
             if r_csv.exists():
                 rmsd.append(pd.read_csv(r_csv))
