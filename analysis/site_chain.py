@@ -569,8 +569,9 @@ def draw_network(ax, steps, sites, ring, dt, title, min_prob=0.05, label_prob=0.
         else:
             dep = totals.get(s, 0)
             loop = counts.get((s, s), 0)
-            text = (f"{s}\n{int(dep)} visits\n{med.get(s, np.nan):.1f} ns"
-                    f"\nexit {100 * counts.get((s, EXIT), 0) / max(dep, 1):.0f}%"
+            m = med.get(s, np.nan)
+            text = (f"{s}\n{int(dep)} visits\n" + (f"{m:.1f} ns" if np.isfinite(m) else "-")
+                    + f"\nexit {100 * counts.get((s, EXIT), 0) / max(dep, 1):.0f}%"
                     + (f"\nloop {100 * loop / max(dep, 1):.0f}%" if loop else ""))
         ax.text(x, y, text, ha="center", va="center", fontsize=8, fontweight="bold", zorder=5)
     xs = [x for x, _ in pos.values()]
