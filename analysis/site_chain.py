@@ -77,9 +77,12 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
         exit_heatmaps.png, first_step.png, time_budget.png,
         time_to_exit.png, prediction.png
         visits/visits_histogram.png  visits per ion, all ions and by the other K+ at end_1
-        visits/first_visit.csv, visits/first_visit[_all|_by_k].png   visit 0 of every ion (residue, or out = no
-                             visit): all ions and one panel per other K+ in the cavity at end_1
-                             (first_visit.png both, _all only all ions, _by_k only the K+ panels)
+        visits/visit_<k>.csv, visits/visit_<k>[_all|_by_k].png   k = 0, 1 (visits.csv
+                             numbering): of the ions with a visit k-1, the residue of
+                             visit k or out (left before it); all ions and one panel per
+                             other K+ in the cavity (visit 0: at end_1; visit k: above +
+                             below when leaving visit k-1). _all only all ions, _by_k only
+                             the K+ panels
 Over runs: aggregate_site_chain.py (repo root).
 
 USAGE - from main.py (after ch1, ch2 and analyzer exist)
@@ -119,6 +122,7 @@ COLORS = {"E": "#e8766f", "Q": "#f2a35e", "N": "#5aa5d6", "D": "#5cbf6a"}
 GREY = "#9a9a9a"
 MIN_TEST = 20                     # departures needed for the memory test of a state
 N_SIM = 20000
+PLOT_VISITS = (0, 1)              # visits/visit_<k>*.png: visits.csv numbering, 0 = first visit
 FROM_NEXT = "from \\ next"
 EQ_MAX_SLOPE = 0.5                # A per 100 ns: a smoothed RMSD this flat over EQ_WINDOW_NS = settled
 EQ_WINDOW_NS = 30.0
@@ -753,17 +757,28 @@ def plot_first_step(steps, sites, max_sf, title, out_file):
     plt.close(fig)
 
 
-def first_visit_table(events, visits_site, sites, max_sf):
+def visit_table(events, visits_site, sites, max_k, visit=0):
     """
-    Visit 0 of every ion (visits.csv visit == 0): the residue of its first visit, or Exit (no visit). For
-    all ions and split by the other K+ in the cavity at end_1 (sf_count). Columns:
-    start (all, 0 .. max_sf+), n_ions, n_runs, target, count, pct.
+    Where the ions go at visit `visit` (visits.csv numbering, 0 = first visit).
+    Ions: those with n_visits >= visit; target = the residue of that visit, or
+    Exit (n_visits == visit: left the cavity without it). Split by the other K+
+    in the cavity at the step: visit 0 at end_1 (sf_count), visit k when the ion
+    leaves visit k-1 (above + below of that row). Columns: start (all,
+    0 .. max_k+), n_ions, n_runs, target, count, pct.
     """
-    first = visits_site[visits_site["visit"] == 0].set_index(["run", "event"])["site"] if len(visits_site) else {}
-    ev = events.assign(start=events["sf_count"].map(lambda v: bin_label(v, max_sf)),
-                       target=[first.get((r, e), EXIT) for r, e in zip(events["run"], events["event"])])
+    ev = events[events["n_visits"] >= visit]
+    v = visits_site.set_index(["run", "event", "visit"]) if len(visits_site) else None
+    keys = list(zip(ev["run"], ev["event"]))
+    here = v["site"] if v is not None else {}
+    target = [here.get((r, e, visit), EXIT) for r, e in keys]
+    if visit == 0:
+        total = ev["sf_count"].to_numpy()
+    else:
+        tot = v["above"] + v["below"]
+        total = [tot[(r, e, visit - 1)] for r, e in keys]
+    ev = ev.assign(start=[bin_label(k, max_k) for k in total], target=target)
     rows = []
-    for start in ["all"] + [bin_label(k, max_sf) for k in range(max_sf + 1)]:
+    for start in ["all"] + [bin_label(k, max_k) for k in range(max_k + 1)]:
         g = ev if start == "all" else ev[ev["start"] == start]
         c = g["target"].value_counts()
         for t in sites + [EXIT]:
@@ -772,13 +787,15 @@ def first_visit_table(events, visits_site, sites, max_sf):
     return pd.DataFrame(rows, columns=["start", "n_ions", "n_runs", "target", "count", "pct"])
 
 
-def plot_first_visit(table, sites, title, out_file, which=None):
-    """One panel for all ions and one per K+ count at end_1: % of the ions whose visit 0 is each residue, or out.
-    which: the panels to draw (e.g. ["all"]); default all of them."""
+def plot_visit(table, sites, title, out_file, visit=0, which=None):
+    """One panel for all ions and one per K+ count at the step: % of the ions whose visit `visit` is each
+    residue, or out. which: the panels to draw (e.g. ["all"]); default all of them."""
     starts = [s for s in table["start"].unique() if table.loc[table["start"] == s, "n_ions"].iloc[0] > 0
               and (which is None or s in which)]
     if not starts:
         return
+    when = "at end_1" if visit == 0 else f"when leaving visit {visit - 1}"
+    what = "first visit after the SF" if visit == 0 else f"ions with a visit {visit - 1}"
     targets = sites + [EXIT]
     ncol = min(3, len(starts))
     nrow = int(np.ceil(len(starts) / ncol))
@@ -798,17 +815,18 @@ def plot_first_visit(table, sites, title, out_file, which=None):
         ax.set_xticklabels([t if t != EXIT else "out" for t in targets], rotation=60, ha="right", fontsize=8)
         ax.set_ylim(0, 115)
         ax.set_ylabel("% of ions")
-        ax.set_xlabel("visit 0 (first visit)")
-        name = "all ions" if start == "all" else f"{start} other K+ in the cavity at end_1"
+        ax.set_xlabel(f"visit {visit}")
+        name = "all ions" if start == "all" else f"{start} other K+ in the cavity {when}"
         ax.set_title(f"{name}\n(n = {int(g['n_ions'].iloc[0])} ions, {int(g['n_runs'].iloc[0])} runs)", fontsize=10)
     from matplotlib.patches import Patch
     kinds = [(k, v) for k, v in (("GLU", "E"), ("GLN", "Q"), ("ASP", "D"), ("ASN", "N"))
              if any(t[:1] == v for t in sites)]
+    out = "out (no visit)" if visit == 0 else f"out (left after visit {visit - 1})"
     handles = [Patch(color=COLORS[v], label=k) for k, v in kinds] + \
-              [Patch(facecolor="#d9d9d9", hatch="////", edgecolor="#555555", label="out (no visit)")]
-    fig.legend(handles=handles, title="visit 0", loc="center left", bbox_to_anchor=(1.0, 0.5))
-    split = "" if starts == ["all"] else ", by the other K+ in the cavity when the ion leaves the SF (end_1)"
-    fig.suptitle(f"{title}\nvisit 0 (first visit after the SF){split}")
+              [Patch(facecolor="#d9d9d9", hatch="////", edgecolor="#555555", label=out)]
+    fig.legend(handles=handles, title=f"visit {visit}", loc="center left", bbox_to_anchor=(1.0, 0.5))
+    split = "" if starts == ["all"] else f", by the other K+ in the cavity {when}"
+    fig.suptitle(f"{title}\nvisit {visit} ({what}){split}")
     fig.tight_layout()
     fig.savefig(out_file, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -1231,12 +1249,14 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     vis_dir = out_dir / "visits"
     vis_dir.mkdir(exist_ok=True)
     plot_visit_histogram(events, max_sf, f"{head}: visits per ion", vis_dir / "visits_histogram.png")
-    fv = first_visit_table(events, vs, sites, max_sf)
-    fv.to_csv(vis_dir / "first_visit.csv", index=False, float_format="%.2f")
-    plot_first_visit(fv, sites, f"{head}: {model} model", vis_dir / "first_visit.png")
-    plot_first_visit(fv, sites, f"{head}: {model} model", vis_dir / "first_visit_all.png", which=["all"])
-    plot_first_visit(fv, sites, f"{head}: {model} model", vis_dir / "first_visit_by_k.png",
-                     which=[k for k in fv["start"].unique() if k != "all"])
+    for k in PLOT_VISITS:
+        tab = visit_table(events, vs, sites, max_sf, k)
+        tab.to_csv(vis_dir / f"visit_{k}.csv", index=False, float_format="%.2f")
+        head_k = f"{head}: {model} model"
+        plot_visit(tab, sites, head_k, vis_dir / f"visit_{k}.png", k)
+        plot_visit(tab, sites, head_k, vis_dir / f"visit_{k}_all.png", k, which=["all"])
+        plot_visit(tab, sites, head_k, vis_dir / f"visit_{k}_by_k.png", k,
+                   which=[b for b in tab["start"].unique() if b != "all"])
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
     plot_prediction(obs_t * dt, sim_t * dt, obs_n, sim_n, f"{head}: chain against real ions",
