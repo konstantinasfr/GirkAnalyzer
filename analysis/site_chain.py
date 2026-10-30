@@ -76,8 +76,8 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
         exit_sources.png     last site before Exit, all and by cavity filling
         exit_heatmaps.png, first_step.png, time_budget.png,
         time_to_exit.png, prediction.png
-        visits_histogram.png  visits per ion, all ions and by the other K+ at end_1
-        first_visit.csv, first_visit.png   visit 0 of every ion (residue, or out = no
+        visits/visits_histogram.png  visits per ion, all ions and by the other K+ at end_1
+        visits/first_visit.csv, visits/first_visit.png   visit 0 of every ion (residue, or out = no
                              visit): all ions and one panel per other K+ in the cavity at end_1
 Over runs: aggregate_site_chain.py (repo root).
 
@@ -1223,10 +1223,12 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     plot_exit_heatmaps(steps, ctrl, sites, max_above, max_below, f"{head}: {model} model",
                        out_dir / "exit_heatmaps.png")
     plot_first_step(steps, sites, max_sf, f"{head}: first site after the SF", out_dir / "first_step.png")
-    plot_visit_histogram(events, max_sf, f"{head}: visits per ion", out_dir / "visits_histogram.png")
+    vis_dir = out_dir / "visits"
+    vis_dir.mkdir(exist_ok=True)
+    plot_visit_histogram(events, max_sf, f"{head}: visits per ion", vis_dir / "visits_histogram.png")
     fv = first_visit_table(events, vs, sites, max_sf)
-    fv.to_csv(out_dir / "first_visit.csv", index=False, float_format="%.2f")
-    plot_first_visit(fv, sites, f"{head}: {model} model", out_dir / "first_visit.png")
+    fv.to_csv(vis_dir / "first_visit.csv", index=False, float_format="%.2f")
+    plot_first_visit(fv, sites, f"{head}: {model} model", vis_dir / "first_visit.png")
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
     plot_prediction(obs_t * dt, sim_t * dt, obs_n, sim_n, f"{head}: chain against real ions",
