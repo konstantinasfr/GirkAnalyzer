@@ -1473,14 +1473,14 @@ def main():
     # from analysis.ion_ion_permeation_analysis import run_ion_ion_permeation_analysis
 
     # run_ion_ion_permeation_analysis(
-        # u                   = u,
-        # permeation_events   = analyzer.permeation_events,
-        # channel1            = ch1,
-        # channel2            = ch2,
-        # sf_low_res_residues = sf_low_res_residues,
-        # hbc_residues        = hbc_residues,
-        # results_dir         = results_dir,
-        # channel_type        = args.channel_type,
+    #     u                   = u,
+    #     permeation_events   = analyzer.permeation_events,
+    #     channel1            = ch1,
+    #     channel2            = ch2,
+    #     sf_low_res_residues = sf_low_res_residues,
+    #     hbc_residues        = hbc_residues,
+    #     results_dir         = results_dir,
+    #     channel_type        = args.channel_type,
     # )
 
     # from analysis.cavity_occupancy_analysis import run_cavity_occupancy_analysis
@@ -1503,14 +1503,14 @@ def main():
     # (uses the SF cylinder ch1: rerun after an SF residue fix, e.g. with --force_pkl_generation)
     # from analysis.cavity_occupancy_analysis import run_cavity_occupancy_analysis
     # run_cavity_occupancy_analysis(
-        # u, ch2, analyzer.permeation_events,
-        # asn_residues, glu_residues, subunit_groups,
-        # channel_type=args.channel_type,
-        # results_dir=results_dir,   # base RUN*/ dir — subfolder created automatically
-        # start_frame=start_frame, end_frame=end_frame, frame_duration=frame_duration,
-        # channel3=ch3, hbc_residues=hbc_residues,
-        # channel1=ch1, sf_residues=sf_residues,
-        # force_rerun=args.force_pkl_generation,
+    #     u, ch2, analyzer.permeation_events,
+    #     asn_residues, glu_residues, subunit_groups,
+    #     channel_type=args.channel_type,
+    #     results_dir=results_dir,   # base RUN*/ dir — subfolder created automatically
+    #     start_frame=start_frame, end_frame=end_frame, frame_duration=frame_duration,
+    #     channel3=ch3, hbc_residues=hbc_residues,
+    #     channel1=ch1, sf_residues=sf_residues,
+    #     force_rerun=args.force_pkl_generation,
     # )
 
     # # from analysis.permeation_stage_times import run_permeation_stage_times_analysis
@@ -1593,10 +1593,10 @@ def main():
     # from analysis.ion_force_correlation_analysis import run_force_correlation_analysis
 
     # force_analyzer = run_force_correlation_analysis(
-        # universe=u, channel1=ch1, channel2=ch2,
-        # permeation_events=analyzer.permeation_events,
-        # asn_residues=asn_residues, glu_residues=glu_residues,
-        # results_dir=results_dir / "force_correlation_analysis"
+    #     universe=u, channel1=ch1, channel2=ch2,
+    #     permeation_events=analyzer.permeation_events,
+    #     asn_residues=asn_residues, glu_residues=glu_residues,
+    #     results_dir=results_dir / "force_correlation_analysis"
     # )
 
     # from analysis.dihedral_analysis_module import run_dihedral_analysis
@@ -1692,39 +1692,39 @@ def main():
 
     # ============= COMPREHENSIVE END_2 ANALYSIS =============
     # if len(analyzer.permeation_events) > 0:
-        # print("\n" + "="*80)
-        # print("Running Comprehensive end_2 Analysis...")
-        # print("="*80)
+    #     print("\n" + "="*80)
+    #     print("Running Comprehensive end_2 Analysis...")
+    #     print("="*80)
 
-        # threshold=3
-        # comp_analyzer = run_comprehensive_end2_analysis(
-            # universe=u,
-            # channel1=ch1,
-            # channel2=ch2,
-            # permeation_events=analyzer.permeation_events,
-            # asn_residues=asn_residues,
-            # glu_residues=glu_residues,
-            # subunit_groups=subunit_groups,
-            # channel_type=channel_type,
-            # threshold=threshold,  # Distance threshold for "close to residue"
-            # results_dir=f"{results_dir}/occupancy_alignment/{threshold}"  # <-- Separate folder
-        # )
+    #     threshold=3
+    #     comp_analyzer = run_comprehensive_end2_analysis(
+    #         universe=u,
+    #         channel1=ch1,
+    #         channel2=ch2,
+    #         permeation_events=analyzer.permeation_events,
+    #         asn_residues=asn_residues,
+    #         glu_residues=glu_residues,
+    #         subunit_groups=subunit_groups,
+    #         channel_type=channel_type,
+    #         threshold=threshold,  # Distance threshold for "close to residue"
+    #         results_dir=f"{results_dir}/occupancy_alignment/{threshold}"  # <-- Separate folder
+    #     )
 
-        # print("\nComprehensive end_2 Analysis Complete!")
+    #     print("\nComprehensive end_2 Analysis Complete!")
 
 
 
     # (uses the SF cylinder ch1: rerun after an SF residue fix, e.g. with --force_pkl_generation)
     # if len(analyzer.permeation_events) > 0:
-        # sf_analyzer = run_sf_alignment_analysis(
-            # universe=u,
-            # channel1=ch1,
-            # channel2=ch2,
-            # permeation_events=analyzer.permeation_events,
-            # asn_residues=asn_residues,
-            # glu_residues=glu_residues,
-            # results_dir=results_dir
-        # )
+    #     sf_analyzer = run_sf_alignment_analysis(
+    #         universe=u,
+    #         channel1=ch1,
+    #         channel2=ch2,
+    #         permeation_events=analyzer.permeation_events,
+    #         asn_residues=asn_residues,
+    #         glu_residues=glu_residues,
+    #         results_dir=results_dir
+    #     )
 
 
     # from analysis.closest_residue_analysis import run_closest_residue_analysis
@@ -1836,24 +1836,25 @@ def main():
     #         results_dir=f"{results_dir}/duration_lasttouch_{mode}/{threshold}_w{window}"
     #     )
 
-    # # GLU / ASN OCCUPANCY AT SF EXIT: first touch (same rule as FIRST TOUCH) + which GLU and
-    # # ASN/ASP residues have another K+ at <= threshold, at end_1, at the touch and around end_1
-    # # (needs analyzer.permeation_events: the saved-state / IonPermeationAnalysis block above)
-    # # window = 10    first touch in the first 10 frames after the SF -> glu_occupancy_exit/3.5_w10/
-    # # window = None  no window: first touch anywhere in the cavity (end_1 to end_2) -> glu_occupancy_exit/3.5_no_w/
+    # GLU / ASN OCCUPANCY AT SF EXIT: first touch (same rule as FIRST TOUCH) + which GLU and
+    # ASN/ASP residues have another K+ at <= threshold, at end_1, at the touch and around end_1
+    # (needs analyzer.permeation_events: the saved-state / IonPermeationAnalysis block above)
+    # window = 10    first touch in the first 10 frames after the SF -> glu_occupancy_exit/3.5_w10/
+    # window = None  no window: first touch anywhere in the cavity (end_1 to end_2) -> glu_occupancy_exit/3.5_no_w/
     # from analysis.glu_occupancy_at_exit import run_glu_occupancy_at_exit_analysis, settings_folder
     # threshold = 3.5
     # window = None
     # run_glu_occupancy_at_exit_analysis(
-    #     universe=u,
-    #     permeation_events=analyzer.permeation_events,
-    #     asn_residues=asn_residues,
-    #     glu_residues=glu_residues,
-    #     channel_type=channel_type,
-    #     threshold=threshold,
-    #     window=window,
-    #     analysis_start_frame=start_frame,
-    #     results_dir=f"{results_dir}/glu_occupancy_exit/{settings_folder(threshold, window)}"
+        # universe=u,
+        # permeation_events=analyzer.permeation_events,
+        # asn_residues=asn_residues,
+        # glu_residues=glu_residues,
+        # channel_type=channel_type,
+        # threshold=threshold,
+        # window=window,
+        # analysis_start_frame=start_frame,
+        # sf_residues=lower1,      # SF bottom (CA - 3 Å) = top of the GLU region
+        # results_dir=f"{results_dir}/glu_occupancy_exit/{settings_folder(threshold, window)}"
     # )
 
 
@@ -1864,14 +1865,14 @@ def main():
     # (needs analyzer.permeation_events: the saved-state / IonPermeationAnalysis block above)
     # from analysis.sf_occupancy import run_sf_occupancy_analysis
     # run_sf_occupancy_analysis(
-        # ion_region_tracking=analyzer.ion_region_tracking,
-        # permeation_events=analyzer.permeation_events,
-        # start_frame=analyzer.start_frame,
-        # end_frame=analyzer.end_frame,
-        # run=run_number,
-        # results_dir=results_dir,
-        # frame_duration=frame_duration,
-        # force_rerun=args.force_pkl_generation
+    #     ion_region_tracking=analyzer.ion_region_tracking,
+    #     permeation_events=analyzer.permeation_events,
+    #     start_frame=analyzer.start_frame,
+    #     end_frame=analyzer.end_frame,
+    #     run=run_number,
+    #     results_dir=results_dir,
+    #     frame_duration=frame_duration,
+    #     force_rerun=args.force_pkl_generation
     # )
 
     # TOUCH -> NEXT STAY: first touch on the ASN/ASP ring, the next residue the ion stays on
@@ -1886,24 +1887,24 @@ def main():
     # cavity (ch2), in <settings>_above/. Both store n_glu_occupied, n_above, n_below, n_sf.
     # stay_settings = [None] + ([5] if channel_type.startswith("G12") else [])   # None: 10 G12, 2 G2
     # for load_mode, min_duration in [(m, d) for m in ('glu', 'above') for d in stay_settings]:
-        # run_touch_to_next_stay_analysis(
-            # universe=u,
-            # permeation_events=analyzer.permeation_events,
-            # asn_residues=asn_residues,
-            # glu_residues=glu_residues,
-            # channel_type=channel_type,
-            # run=run_number,
-            # results_dir=results_dir,
-            # frame_duration=frame_duration,
-            # cutoff=3.5,
-            # min_duration=min_duration,
-            # analysis_start_frame=start_frame,
-            # no_window=True,
-            # load_mode=load_mode,
-            # channel1=ch1,
-            # channel2=ch2,
-            # force_rerun=args.force_pkl_generation   # n_sf uses the SF cylinder ch1
-        # )
+    #     run_touch_to_next_stay_analysis(
+    #         universe=u,
+    #         permeation_events=analyzer.permeation_events,
+    #         asn_residues=asn_residues,
+    #         glu_residues=glu_residues,
+    #         channel_type=channel_type,
+    #         run=run_number,
+    #         results_dir=results_dir,
+    #         frame_duration=frame_duration,
+    #         cutoff=3.5,
+    #         min_duration=min_duration,
+    #         analysis_start_frame=start_frame,
+    #         no_window=True,
+    #         load_mode=load_mode,
+    #         channel1=ch1,
+    #         channel2=ch2,
+    #         force_rerun=args.force_pkl_generation   # n_sf uses the SF cylinder ch1
+    #     )
 
     # SITE-TO-SITE CHAIN: every permeating ion as visits to the GLU / ASN-ASP residues,
     # state = residue | K+ above | K+ below when it leaves; network, exit by K+ counts

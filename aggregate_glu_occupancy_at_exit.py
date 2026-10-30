@@ -34,6 +34,12 @@ Outputs (per folder; t = threshold, w = window or no_w; <at> = end_1 or touch):
                                             mean number of other K+ on each residue, and % of events with
                                             >= 1 / >= 2 of them, 95% CI bootstrapped over runs
     residue_ion_count_<at>_t*_w*.csv        the numbers behind it, one row per residue
+    region/                                 glu/asn_occupancy, first_touch_by_*_occupied and the ring time
+                                            course again, with the other K+ in the GLU / ASN region
+                                            (see analysis/glu_occupancy_at_exit.py) instead of the
+                                            occupied residues: *_region_occupancy_<at>,
+                                            first_touch_by_<glu|asn>_region_ions_<at>_<counts|percent>,
+                                            region_ion_timecourse (runs analysed before the regions: skipped)
     summary_t*_w*.xlsx                      sheets:
         <at>_glu_counts / _glu_pct_touch / _glu_pct_occ   GLU cross-tables (counts, row %, column %)
         <at>_asn_counts / ...                              the same for ASN/ASP
@@ -252,6 +258,7 @@ class GluOccupancyAggregator:
                 for key, name in (('glu', 'GLU'), ('asn', 'ASN')):
                     row[f'n_{key}_occupied_{at}'] = occ[f'n_{key}_occupied'] if occ else None
                     row[f'n_ions_on_{key}_{at}'] = occ[f'n_ions_on_{key}'] if occ else None
+                    row[f'n_{key}_region_{at}'] = occ.get(f'n_{key}_region') if occ else None
                 for res in self.residues:
                     v = occ['residues'].get(res['pdb']) if occ else None
                     row[f'{residue_tick(res)} occupied {at}'] = int(bool(v['ions'])) if v else None
