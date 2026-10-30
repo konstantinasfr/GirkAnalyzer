@@ -25,7 +25,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from analysis.site_chain import LEAVE_VISITS, leaving_by_visit_table
+from analysis.site_chain import LEAVE_VISITS, _ns_label, leaving_by_visit_table
 
 COLORS = ["#7f7f7f", "#4f81bd", "#c0504d", "#9bbb59", "#8064a2", "#f79646"]
 
@@ -56,13 +56,18 @@ def main(argv=None):
         ax1.bar(off, t["pct"], w, color=c, label=f"{lab} ({t['n_permeating'].iloc[0]} permeating ions)")
         for xi, (pc, n) in zip(off, zip(t["pct"], t["n_ions"])):
             if n:
-                ax1.text(xi, pc + 0.6, f"{pc:.0f}%", ha="center", va="bottom", fontsize=15)
+                ax1.text(xi, pc + 0.6, f"{pc:.0f}%", ha="center", va="bottom", fontsize=15, fontweight="bold")
         ax2.bar(off, t["mean_ns"], w, yerr=t["sem_ns"], capsize=4, color=c, error_kw=dict(lw=1.5))
+        for xi, (m, e) in zip(off, zip(t["mean_ns"], t["sem_ns"].fillna(0))):
+            if np.isfinite(m):
+                ax2.text(xi, m + e + 3, _ns_label(m).replace(" ns", ""), ha="center", va="bottom", fontsize=12,
+                         rotation=90)
     ax1.set_ylabel("% of permeating ions leaving", fontsize=19)
     ax1.set_ylim(0, max(t["pct"].max() for t in tabs.values()) * 1.25)
     ax1.legend(fontsize=16)
     ax1.set_title("ions leaving the cavity at each visit (visit 1 = no stop)", fontsize=19)
     ax2.set_ylabel("time SF to exit (ns)\nmean ± SE", fontsize=19)
+    ax2.set_ylim(0, max(np.nanmax((t["mean_ns"] + t["sem_ns"].fillna(0)).to_numpy()) for t in tabs.values()) * 1.3)
     ax2.set_xticks(x)
     ax2.set_xticklabels([f"visit {v}" for v in tabs[labels[0]]["visit"]], rotation=30, ha="right", fontsize=17)
     for ax in (ax1, ax2):

@@ -863,6 +863,10 @@ def leaving_by_visit_table(events, dt, max_visit=LEAVE_VISITS):
     return pd.DataFrame(rows)
 
 
+def _ns_label(t):
+    return f"{t:.1f} ns" if t < 10 else f"{t:.0f} ns"
+
+
 def plot_leaving_by_visit(tab, title, out_file):
     """Per visit k: % of the permeating ions that leave the cavity at visit k (left axis) and their
     mean time from leaving the SF to leaving the cavity, +- standard error (right axis)."""
@@ -873,17 +877,25 @@ def plot_leaving_by_visit(tab, title, out_file):
     b1 = ax.bar(x - w / 2, tab["pct"], w, color="#7f7f7f", label="% of ions leaving")
     b2 = ax2.bar(x + w / 2, tab["mean_ns"], w, yerr=tab["sem_ns"], capsize=4, color="#4f81bd",
                  error_kw=dict(lw=1.5), label="time SF to exit (mean ± SE)")
+    top = max(tab["pct"].max(), 10)
     for xi, (p, c) in enumerate(zip(tab["pct"], tab["n_ions"])):
         if c:
-            ax.text(xi - w / 2, p + 0.6, f"{p:.0f}%\n({c})", ha="center", va="bottom", fontsize=15)
+            ax.text(xi - w / 2, p + 0.01 * top, f"({c})", ha="center", va="bottom", fontsize=12)
+            ax.text(xi - w / 2, p + 0.065 * top, f"{p:.0f}%", ha="center", va="bottom", fontsize=17,
+                    fontweight="bold")
+    t_top = np.nanmax((tab["mean_ns"] + tab["sem_ns"].fillna(0)).to_numpy())
+    for xi, (m, e) in enumerate(zip(tab["mean_ns"], tab["sem_ns"].fillna(0))):
+        if np.isfinite(m):
+            ax2.text(xi + w / 2, m + e + 0.01 * t_top, _ns_label(m), ha="center", va="bottom", fontsize=13,
+                     color="#2f5597", fontweight="bold")
     ax.set_xticks(x)
     ax.set_xticklabels([f"visit {v}" for v in tab["visit"]], rotation=30, ha="right", fontsize=17)
     ax.tick_params(axis="y", labelsize=17)
     ax.set_ylabel("% of permeating ions leaving", fontsize=19)
     ax2.set_ylabel("time SF to exit (ns)", color="#4f81bd", fontsize=19)
     ax2.tick_params(axis="y", colors="#4f81bd", labelsize=17)
-    ax.set_ylim(0, max(tab["pct"].max() * 1.35, 10))
-    ax2.set_ylim(0, np.nanmax((tab["mean_ns"] + tab["sem_ns"].fillna(0)).to_numpy()) * 1.15)
+    ax.set_ylim(0, top * 1.4)
+    ax2.set_ylim(0, t_top * 1.25)
     ax.legend(handles=[b1, b2], loc="upper center", fontsize=16)
     ax.set_title(f"{title}\nions leaving the cavity at each visit (visit 1 = no stop)", fontsize=19)
     fig.tight_layout()
