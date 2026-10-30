@@ -230,7 +230,7 @@ def _histogram(values, title, xlabel, out_path, color,
     else:
         ax.hist(values, bins=bins, color=color, alpha=0.75,
                 edgecolor="black", linewidth=1.0)
-        ax.set_ylabel("Number of permeation events", fontsize=19)
+        ax.set_ylabel("Permeation events", fontsize=19)
 
     mean_val = np.mean(values)
     ax.axvline(mean_val, color="red", linewidth=2, linestyle="--",
@@ -316,7 +316,7 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
         ax.axvline(median_f, color="green", linewidth=2, linestyle="-.",
                    label=f"Median = {median_f:.1f} f ({median_ns:.3f} ns)")
         ax.set_xlabel("Frames", fontsize=20)
-        ax.set_ylabel("Number of permeation events", fontsize=20)
+        ax.set_ylabel("Permeation events", fontsize=20)
         ax.set_title(f"{channel_name}: frames spent in {label}\n({note + ', ' if note else ''}n = {len(arr)})",
                      fontsize=18, fontweight="bold", pad=10)
         ax.legend(fontsize=16)
@@ -339,7 +339,7 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
         ax.axvline(median_ns, color="green", linewidth=2, linestyle="-.",
                    label=f"Median = {median_ns:.3f} ns")
         ax.set_xlabel("Time (ns)", fontsize=20)
-        ax.set_ylabel("Number of permeation events", fontsize=20)
+        ax.set_ylabel("Permeation events", fontsize=20)
         ax.set_title(f"{channel_name}: time spent in {label}\n({note + ', ' if note else ''}n = {len(arr)})",
                      fontsize=18, fontweight="bold", pad=10)
         ax.legend(fontsize=16)
@@ -381,7 +381,7 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
         ax.axvline(med_pct,  color="green", linewidth=2, linestyle="-.",
                    label=f"Median = {med_pct:.1f} %")
         ax.set_xlabel("% of total permeation time (SF exit → HBC gate)", fontsize=18)
-        ax.set_ylabel("Number of permeation events", fontsize=20)
+        ax.set_ylabel("Permeation events", fontsize=20)
         ax.set_title(f"{channel_name}: {label}\n({note + ', ' if note else ''}n = {len(arr)})",
                      fontsize=18, fontweight="bold", pad=10)
         ax.legend(fontsize=16)
@@ -475,7 +475,7 @@ def plot_all(all_rows, output_dir, channel_name="", note=""):
         values=[n_yes, n_no],
         colors=["#E74C3C", "#95A5A6"],
         title=f"{channel_name}: " + "New ion enters GLU/ASN cavity\nwhile permeating ion passes HBC gate" + tail,
-        ylabel="Number of permeation events",
+        ylabel="Permeation events",
         out_path=output_dir / "yes_no_count.png",
         fmt="{}",
     )
