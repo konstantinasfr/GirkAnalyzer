@@ -317,7 +317,7 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
                    label=f"Median = {median_f:.1f} f ({median_ns:.3f} ns)")
         ax.set_xlabel("Frames", fontsize=20)
         ax.set_ylabel("Number of permeation events", fontsize=20)
-        ax.set_title(f"{channel_name}: frames spent in {label}\n({note}, n = {len(arr)})",
+        ax.set_title(f"{channel_name}: frames spent in {label}\n({note + ', ' if note else ''}n = {len(arr)})",
                      fontsize=18, fontweight="bold", pad=10)
         ax.legend(fontsize=16)
         ax.tick_params(labelsize=16)
@@ -340,7 +340,7 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
                    label=f"Median = {median_ns:.3f} ns")
         ax.set_xlabel("Time (ns)", fontsize=20)
         ax.set_ylabel("Number of permeation events", fontsize=20)
-        ax.set_title(f"{channel_name}: time spent in {label}\n({note}, n = {len(arr)})",
+        ax.set_title(f"{channel_name}: time spent in {label}\n({note + ', ' if note else ''}n = {len(arr)})",
                      fontsize=18, fontweight="bold", pad=10)
         ax.legend(fontsize=16)
         ax.tick_params(labelsize=16)
@@ -382,7 +382,7 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
                    label=f"Median = {med_pct:.1f} %")
         ax.set_xlabel("% of total permeation time (SF exit → HBC gate)", fontsize=18)
         ax.set_ylabel("Number of permeation events", fontsize=20)
-        ax.set_title(f"{channel_name}: {label}\n({note}, n = {len(arr)})",
+        ax.set_title(f"{channel_name}: {label}\n({note + ', ' if note else ''}n = {len(arr)})",
                      fontsize=18, fontweight="bold", pad=10)
         ax.legend(fontsize=16)
         ax.set_xlim(0, 100)
@@ -444,7 +444,7 @@ def plot_pct_bar_aggregated(all_rows, output_dir, channel_name="", note="all run
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=17)
     ax.set_ylabel("% of total transit time", fontsize=17)
-    ax.set_title(f"{channel_name}: % transit time per cavity region\n(n = {n} events, {note})",
+    ax.set_title(f"{channel_name}: % transit time per cavity region\n(n = {n} events{', ' + note if note else ''})",
                  fontsize=17, fontweight="bold", pad=10)
     ax.spines[["top", "right"]].set_visible(False)
     ax.grid(True, alpha=0.25, axis="y")
@@ -648,12 +648,10 @@ def write_group(name, rows, flux_rows, out_dir, channel_name, frame_duration, eq
     plot_all(rows, out_dir / "old", channel_name=channel_name, note="old: all ions")
     plot_pct_bar_aggregated(rows, out_dir / "old", channel_name=channel_name, note="old: all ions")
     # new: without the frame-0 / pre-equilibration ions
-    new = "without frame-0 / pre-equilibration ions"
-    plot_transit_histograms(kept, out_dir, frame_duration=frame_duration, channel_name=channel_name,
-                            note=new)
+    plot_transit_histograms(kept, out_dir, frame_duration=frame_duration, channel_name=channel_name, note="")
     if kept:
-        plot_all(kept, out_dir, channel_name=channel_name, note=new)
-        plot_pct_bar_aggregated(kept, out_dir, channel_name=channel_name, note="without frame-0 / pre-eq. ions")
+        plot_all(kept, out_dir, channel_name=channel_name, note="")
+        plot_pct_bar_aggregated(kept, out_dir, channel_name=channel_name, note="")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
