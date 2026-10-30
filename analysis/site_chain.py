@@ -77,10 +77,10 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
         exit_heatmaps.png, first_step.png, time_budget.png,
         time_to_exit.png, prediction.png
         visits/visits_histogram.png  visits per ion, all ions and by the other K+ at end_1
-        visits/visit_<k>.csv, visits/visit_<k>[_all|_by_k].png   k = 0-3 (visits.csv
-                             numbering): of the ions with a visit k-1, the residue of
+        visits/visit_<k>.csv, visits/visit_<k>[_all|_by_k].png   k = 1-4 (counted from 1;
+                             visits.csv counts from 0): of the ions with a visit k-1, the residue of
                              visit k or out (left before it); all ions and one panel per
-                             other K+ in the cavity (visit 0: at end_1; visit k: above +
+                             other K+ in the cavity (visit 1: at end_1; visit k: above +
                              below when leaving visit k-1). _all only all ions, _by_k only
                              the K+ panels
 Over runs: aggregate_site_chain.py (repo root).
@@ -110,6 +110,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch
+
+plt.rcParams.update({"font.size": 14, "axes.titlesize": 15, "axes.labelsize": 15, "xtick.labelsize": 13,
+                     "ytick.labelsize": 13, "legend.fontsize": 12, "legend.title_fontsize": 13,
+                     "figure.titlesize": 16})   # large enough to read when the figures are shrunk
 
 from analysis.stay_chain import (PoreFrames, CONTROL_SHIFTS, default_min_duration, settings_folder,
                                  ks_gap, _Report)
@@ -517,12 +521,12 @@ def _layout(sites, ring):
         cols = sorted(set(suffixes), key=lambda x: (not x.upper().startswith("G"), x))
         col = {c: i for i, c in enumerate(cols)}
         for s, sx in zip(sites, suffixes):
-            pos[s] = ((col[sx] - (len(cols) - 1) / 2) * 2.0, 2.6 if ring[s] == "GLU" else 0.6)
+            pos[s] = ((col[sx] - (len(cols) - 1) / 2) * 2.4, 2.7 if ring[s] == "GLU" else 0.5)
     else:
         for r, y in (("GLU", 2.6), ("LOWER", 0.6)):
             row = [s for s in sites if (ring[s] == "GLU") == (r == "GLU")]
             for i, s in enumerate(row):
-                pos[s] = ((i - (len(row) - 1) / 2) * 2.6, y)
+                pos[s] = ((i - (len(row) - 1) / 2) * 3.0, y)
     pos[SF] = (0.0, 4.3)
     pos[EXIT] = (0.0, -1.1)
     return pos
@@ -551,8 +555,8 @@ def draw_network(ax, steps, sites, ring, dt, title, min_prob=0.05, label_prob=0.
     med = steps.groupby("from_site")["residue_frames"].median() * dt
     n_ions = n_ions or max(int(totals.get(SF, 0)), 1)
     top = max([totals.get(s, 0) for s in sites] + [1])
-    size = {s: 1700 + 2800 * np.sqrt(totals.get(s, 0) / top) for s in sites}
-    size[SF] = size[EXIT] = 2600
+    size = {s: 5000 + 4000 * np.sqrt(totals.get(s, 0) / top) for s in sites}   # big enough for the node text
+    size[SF] = size[EXIT] = 5000
     radius = {s: np.sqrt(a) / 2 for s, a in size.items()}
     arrows = []
     for (a, b), c in counts.items():
@@ -582,7 +586,7 @@ def draw_network(ax, steps, sites, ring, dt, title, min_prob=0.05, label_prob=0.
             mx, my = (x1 + x2) / 2, (y1 + y2) / 2
             if not straight:
                 mx, my = mx + 0.075 * (y2 - y1), my - 0.075 * (x2 - x1)
-            ax.text(mx, my, text, fontsize=8, ha="center", va="center", zorder=4, color=color,
+            ax.text(mx, my, text, fontsize=12, ha="center", va="center", zorder=4, color=color,
                     fontweight="bold", bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85))
     exits = int(counts.xs(EXIT, level=1).sum()) if len(counts) and EXIT in counts.index.get_level_values(1) else 0
     for s, (x, y) in pos.items():
@@ -599,18 +603,18 @@ def draw_network(ax, steps, sites, ring, dt, title, min_prob=0.05, label_prob=0.
             text = (f"{s}\n{int(dep)} visits\n" + (f"{m:.1f} ns" if np.isfinite(m) else "-")
                     + f"\nexit {100 * counts.get((s, EXIT), 0) / max(dep, 1):.0f}%"
                     + (f"\nloop {100 * loop / max(dep, 1):.0f}%" if loop else ""))
-        ax.text(x, y, text, ha="center", va="center", fontsize=8, fontweight="bold", zorder=5)
+        ax.text(x, y, text, ha="center", va="center", fontsize=11, fontweight="bold", zorder=5)
     xs = [x for x, _ in pos.values()]
-    ax.set_xlim(min(xs) - 1.2, max(xs) + 1.2)
-    ax.set_ylim(-2.2, 5.3)
+    ax.set_xlim(min(xs) - 1.5, max(xs) + 1.5)
+    ax.set_ylim(-2.4, 5.5)
     ax.set_aspect("equal")
     ax.axis("off")
-    ax.set_title(title, fontsize=10)
+    ax.set_title(title, fontsize=14)
 
 
 def plot_network(steps, sites, ring, dt, title, out_file, min_prob=0.05, label_prob=0.10):
     """Sites as nodes; arrows: P(next site | site), all K+ counts together."""
-    fig, ax = plt.subplots(figsize=(13, 9))
+    fig, ax = plt.subplots(figsize=(17, 12))
     draw_network(ax, steps, sites, ring, dt,
                  f"{title}\narrow width = P(next site | site), all K+ counts together, shown if "
                  f">= {100 * min_prob:.0f}%; node size = visits; in the node: visits, median residue "
@@ -623,7 +627,7 @@ def plot_network(steps, sites, ring, dt, title, out_file, min_prob=0.05, label_p
 def plot_network_crowding(steps, sites, ring, dt, title, out_file, crowded=4, min_prob=0.05, label_prob=0.10):
     """Two networks: departures with < crowded other K+ in the cavity, and with >= crowded."""
     k = steps["from_state"].map(crowding)
-    fig, axes = plt.subplots(1, 2, figsize=(9 + 1.3 * len(sites), 9.5))
+    fig, axes = plt.subplots(2, 1, figsize=(17, 23))   # stacked: text stays readable when shrunk
     for ax, sel, name in ((axes[0], k < crowded, f"{crowded - 1} or fewer other K+"),
                           (axes[1], k >= crowded, f"{crowded} or more other K+")):
         g = steps[sel]
@@ -631,8 +635,8 @@ def plot_network_crowding(steps, sites, ring, dt, title, out_file, crowded=4, mi
                     f"{100 * (g['to_site'] == EXIT).mean():.0f}% to Exit)")
         draw_network(ax, g, sites, ring, dt, ax_title, min_prob, label_prob)
     fig.suptitle(f"{title}\nP(next site | site) split by how full the cavity is when the ion leaves "
-                 f"(SF: when it enters); arrows >= {100 * min_prob:.0f}%", fontsize=12)
-    fig.subplots_adjust(wspace=0.02)
+                 f"(SF: when it enters); arrows >= {100 * min_prob:.0f}%", fontsize=16)
+    fig.subplots_adjust(hspace=0.1, top=0.92)
     fig.savefig(out_file, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
@@ -640,7 +644,7 @@ def plot_network_crowding(steps, sites, ring, dt, title, out_file, crowded=4, mi
 def plot_network_net(steps, sites, ring, dt, title, out_file, min_flow=0.02, label_flow=0.05):
     """Net flow: hops a -> b minus b -> a, per permeating ion."""
     n_ions = int((steps["from_site"] == SF).sum())
-    fig, ax = plt.subplots(figsize=(13, 9))
+    fig, ax = plt.subplots(figsize=(17, 12))
     draw_network(ax, steps, sites, ring, dt,
                  f"{title}\nNET FLOW: arrow = (hops a -> b minus b -> a) per permeating ion ({n_ions} ions), "
                  f"in the net direction, shown if >= {min_flow:g}; back-and-forth exchange cancels",
@@ -667,7 +671,7 @@ def plot_exit_sources(steps, sites, title, out_file, crowded=4):
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=30, ha="right")
     ax.set_ylabel("% of exits")
-    ax.legend(title="exits", fontsize=8)
+    ax.legend(title="exits", fontsize=12)
     ax.set_title(f"{title}: where the exits come from (last site before Exit)")
     fig.tight_layout()
     fig.savefig(out_file, dpi=150)
@@ -695,7 +699,7 @@ def exit_grid(steps, site, max_above, max_below):
 def plot_exit_heatmaps(real, ctrl, sites, max_above, max_below, title, out_file):
     if not sites:
         return
-    fig, axes = plt.subplots(2, len(sites), figsize=(2.9 * len(sites) + 1, 8.5), squeeze=False)
+    fig, axes = plt.subplots(2, len(sites), figsize=(3.8 * len(sites) + 1, 10), squeeze=False)
     a_lab = [bin_label(a, max_above) for a in range(max_above + 1)]
     b_lab = [bin_label(b, max_below) for b in range(max_below + 1)]
     for i, (steps, name) in enumerate(((real, "real"), (ctrl, "control"))):
@@ -708,7 +712,7 @@ def plot_exit_heatmaps(real, ctrl, sites, max_above, max_below, title, out_file)
                 for b in range(max_below + 1):
                     if N[a, b]:
                         ax.text(b, a, f"{P[a, b]:.0f}%\nn={int(N[a, b])}", ha="center", va="center",
-                                fontsize=7, color="black" if N[a, b] >= 5 else "#777777")
+                                fontsize=11, color="black" if N[a, b] >= 5 else "#777777")
             ax.set_xticks(range(max_below + 1))
             ax.set_xticklabels(b_lab)
             ax.set_yticks(range(max_above + 1))
@@ -716,7 +720,7 @@ def plot_exit_heatmaps(real, ctrl, sites, max_above, max_below, title, out_file)
             ax.set_xlabel("K+ below")
             if j == 0:
                 ax.set_ylabel(f"{name}\nK+ above")
-            ax.set_title(s, fontsize=10)
+            ax.set_title(s, fontsize=14)
     fig.subplots_adjust(hspace=0.4, wspace=0.3)
     fig.colorbar(im, ax=axes, fraction=0.02, label="% going to Exit next")
     fig.suptitle(f"{title}\nP(Exit next | site, K+ above, K+ below when leaving); n = departures "
@@ -744,13 +748,13 @@ def plot_first_step(steps, sites, max_sf, title, out_file):
                hatch="//" if t == EXIT else None, label=t)
         bottom += vals
     for xi, ni in zip(x, n):
-        ax.text(xi, 101, f"n={ni}", ha="center", va="bottom", fontsize=8)
+        ax.text(xi, 101, f"n={ni}", ha="center", va="bottom", fontsize=12)
     ax.set_xticks(x)
     ax.set_xticklabels(bins)
     ax.set_ylim(0, 110)
-    ax.set_xlabel("other K+ in the cavity when the ion leaves the SF (end_1)")
+    ax.set_xlabel("other K+ in the cavity when the ion leaves the SF")
     ax.set_ylabel("% of ions")
-    ax.legend(title="first site", fontsize=8, bbox_to_anchor=(1.01, 1), loc="upper left")
+    ax.legend(title="first site", fontsize=12, bbox_to_anchor=(1.01, 1), loc="upper left")
     ax.set_title(title)
     fig.tight_layout()
     fig.savefig(out_file, dpi=150)
@@ -794,12 +798,11 @@ def plot_visit(table, sites, title, out_file, visit=0, which=None):
               and (which is None or s in which)]
     if not starts:
         return
-    when = "at end_1" if visit == 0 else f"when leaving visit {visit - 1}"
-    what = "first visit after the SF" if visit == 0 else f"ions with a visit {visit - 1}"
+    when = "when the ion leaves the SF" if visit == 0 else f"when leaving visit {visit}"   # labels count from 1
     targets = sites + [EXIT]
     ncol = min(3, len(starts))
     nrow = int(np.ceil(len(starts) / ncol))
-    size = (8, 5) if len(starts) == 1 else (5 * ncol, 3.6 * nrow)
+    size = (9, 6) if len(starts) == 1 else (6 * ncol, 4.6 * nrow)
     fig, axes = plt.subplots(nrow, ncol, figsize=size, squeeze=False)
     for ax in axes.flat[len(starts):]:
         ax.axis("off")
@@ -810,23 +813,23 @@ def plot_visit(table, sites, title, out_file, visit=0, which=None):
                hatch=["////" if t == EXIT else None for t in targets], edgecolor="#555555", linewidth=0.5)
         for xi, (c, p) in enumerate(zip(g["count"], g["pct"])):
             if c:
-                ax.text(xi, p + 1, f"{p:.0f}%\n({int(c)})", ha="center", va="bottom", fontsize=7)
+                ax.text(xi, p + 1, f"{p:.0f}%\n({int(c)})", ha="center", va="bottom", fontsize=11)
         ax.set_xticks(x)
-        ax.set_xticklabels([t if t != EXIT else "out" for t in targets], rotation=60, ha="right", fontsize=8)
-        ax.set_ylim(0, 115)
+        ax.set_xticklabels([t if t != EXIT else "out" for t in targets], rotation=60, ha="right", fontsize=12)
+        ax.set_ylim(0, 135)
+        ax.set_yticks(range(0, 101, 20))
         ax.set_ylabel("% of ions")
-        ax.set_xlabel(f"visit {visit}")
+        ax.set_xlabel(f"visit {visit + 1}")
         name = "all ions" if start == "all" else f"{start} other K+ in the cavity {when}"
-        ax.set_title(f"{name}\n(n = {int(g['n_ions'].iloc[0])} ions, {int(g['n_runs'].iloc[0])} runs)", fontsize=10)
+        ax.set_title(f"{name}\n(n = {int(g['n_ions'].iloc[0])} ions, {int(g['n_runs'].iloc[0])} runs)", fontsize=14)
     from matplotlib.patches import Patch
     kinds = [(k, v) for k, v in (("GLU", "E"), ("GLN", "Q"), ("ASP", "D"), ("ASN", "N"))
              if any(t[:1] == v for t in sites)]
-    out = "out (no visit)" if visit == 0 else f"out (left after visit {visit - 1})"
     handles = [Patch(color=COLORS[v], label=k) for k, v in kinds] + \
-              [Patch(facecolor="#d9d9d9", hatch="////", edgecolor="#555555", label=out)]
-    fig.legend(handles=handles, title=f"visit {visit}", loc="center left", bbox_to_anchor=(1.0, 0.5))
+              [Patch(facecolor="#d9d9d9", hatch="////", edgecolor="#555555", label="out")]
+    fig.legend(handles=handles, title=f"visit {visit + 1}", loc="center left", bbox_to_anchor=(1.0, 0.5))
     split = "" if starts == ["all"] else f", by the other K+ in the cavity {when}"
-    fig.suptitle(f"{title}\nvisit {visit} ({what}){split}")
+    fig.suptitle(f"{title}\nvisit {visit + 1}{split}")
     fig.tight_layout()
     fig.savefig(out_file, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -844,8 +847,8 @@ def plot_visit_histogram(events, max_sf, title, out_file):
     ax1.bar(b, cnt, color="#555555")
     for bi, c in zip(b, cnt):
         if c:
-            ax1.text(bi, c, str(c), ha="center", va="bottom", fontsize=7)
-    ax1.set_xlabel("visits per ion (0 = SF -> Exit without a visit)")
+            ax1.text(bi, c, str(c), ha="center", va="bottom", fontsize=11)
+    ax1.set_xlabel("visits per ion")
     ax1.set_ylabel("ions")
     ax1.set_title(f"all ions (n={len(n)}, mean {n.mean():.2f}, median {np.median(n):.0f})")
     lab = events["sf_count"].map(lambda v: bin_label(v, max_sf)).to_numpy()
@@ -863,7 +866,7 @@ def plot_visit_histogram(events, max_sf, title, out_file):
     ax2.set_xticklabels([g for g, _ in groups])
     ax2.set_xlabel("visits per ion")
     ax2.set_ylabel("% of ions")
-    ax2.legend(title="other K+ at end_1", fontsize=8)
+    ax2.legend(title="other K+ when leaving the SF", fontsize=12)
     ax2.set_title("by the other K+ in the cavity when the ion leaves the SF")
     fig.suptitle(title)
     fig.tight_layout()
@@ -881,7 +884,7 @@ def plot_time_budget(ev, visits_site, sites, dt, title, out_file):
     ax1.set_xscale("log")
     ax1.set_xlabel("time per ion (ns)")
     ax1.set_ylabel("fraction of ions with >= t")
-    ax1.legend(fontsize=8)
+    ax1.legend(fontsize=12)
     per_ion = {s: visits_site.loc[visits_site["site"] == s, "residue_frames"].sum() * dt / len(ev) for s in sites}
     names = sites + ["moving"]
     vals = [per_ion[s] for s in sites] + [ev["moving_frames"].mean() * dt]
@@ -910,8 +913,8 @@ def plot_time_to_exit(st, title, out_file):
     ax.set_ylim(lim)
     ax.set_xlabel("mean time to Exit, chain (ns)")
     ax.set_ylabel("mean time to Exit, measured (ns)")
-    ax.legend(fontsize=7, title="site (size: departures)", bbox_to_anchor=(1.01, 1), loc="upper left")
-    ax.set_title(title, fontsize=10)
+    ax.legend(fontsize=11, title="site (size: departures)", bbox_to_anchor=(1.01, 1), loc="upper left")
+    ax.set_title(title, fontsize=14)
     fig.tight_layout()
     fig.savefig(out_file, dpi=150)
     plt.close(fig)
@@ -923,7 +926,7 @@ def plot_prediction(obs_t, sim_t, obs_n, sim_n, title, out_file):
         x = np.sort(np.maximum(arr, 1e-3))
         ax1.step(x, np.arange(1, len(x) + 1) / len(x), where="post", color=c, label=lab)
     ax1.set_xscale("log")
-    ax1.set_xlabel("transit time end_1 -> end_2 (ns)")
+    ax1.set_xlabel("transit time, SF to exit (ns)")
     ax1.set_ylabel("fraction of ions out by t")
     ax1.legend()
     hi = int(max(obs_n.max(initial=0), np.percentile(sim_n, 99.5))) + 1
@@ -1235,6 +1238,8 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     ev_out["residue_ns"] = ev_out["residue_frames"] * dt
     ev_out["moving_ns"] = ev_out["moving_frames"] * dt
     ev_out.to_csv(out_dir / "events.csv", index=False, float_format="%.3f")
+    n_perm = f"{len(events)} permeating ions"
+    head = f"{head[:-1]}, {n_perm})" if head.endswith(")") else f"{head} ({n_perm})"   # plot titles
     busy = len(sites) > 5                        # 8 residues: only the main hops drawn
     mp, lp = (0.10, 0.15) if busy else (0.05, 0.10)
     plot_network(steps, sites, ring, dt, f"{head}: {model} model", out_dir / "network.png", mp, lp)
@@ -1251,11 +1256,12 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     plot_visit_histogram(events, max_sf, f"{head}: visits per ion", vis_dir / "visits_histogram.png")
     for k in PLOT_VISITS:
         tab = visit_table(events, vs, sites, max_sf, k)
-        tab.to_csv(vis_dir / f"visit_{k}.csv", index=False, float_format="%.2f")
+        name = f"visit_{k + 1}"                   # files and labels count visits from 1
+        tab.to_csv(vis_dir / f"{name}.csv", index=False, float_format="%.2f")
         head_k = f"{head}: {model} model"
-        plot_visit(tab, sites, head_k, vis_dir / f"visit_{k}.png", k)
-        plot_visit(tab, sites, head_k, vis_dir / f"visit_{k}_all.png", k, which=["all"])
-        plot_visit(tab, sites, head_k, vis_dir / f"visit_{k}_by_k.png", k,
+        plot_visit(tab, sites, head_k, vis_dir / f"{name}.png", k)
+        plot_visit(tab, sites, head_k, vis_dir / f"{name}_all.png", k, which=["all"])
+        plot_visit(tab, sites, head_k, vis_dir / f"{name}_by_k.png", k,
                    which=[b for b in tab["start"].unique() if b != "all"])
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
@@ -1326,14 +1332,14 @@ def equilibration(rmsd, dt, out_base, max_slope=EQ_MAX_SLOPE, window_ns=EQ_WINDO
             ax.axvline(used * dt, color="#c0504d", lw=1.5, label=f"start {used * dt:.0f} ns")
             if used != auto:
                 ax.axvline(auto * dt, color="#c0504d", lw=1, ls="--", label=f"automatic {auto * dt:.0f} ns")
-            ax.set_title(f"RUN{run}" + ("" if flat else "  (never flat: nothing cut)"), fontsize=9)
-            ax.legend(fontsize=7)
-            ax.set_xlabel("time (ns)", fontsize=8)
-            ax.set_ylabel("Ca RMSD, fitted (A)", fontsize=8)
+            ax.set_title(f"RUN{run}" + ("" if flat else "  (never flat: nothing cut)"), fontsize=13)
+            ax.legend(fontsize=11)
+            ax.set_xlabel("time (ns)", fontsize=12)
+            ax.set_ylabel("Ca RMSD, fitted (A)", fontsize=12)
         for ax in list(axes.flat)[n:]:
             ax.axis("off")
         fig.suptitle(f"Equilibration: start of the first {window_ns:g} ns window (grey) in which\n"
-                     f"the smoothed RMSD is flat (|slope| <= {max_slope:g} A per 100 ns)", fontsize=10)
+                     f"the smoothed RMSD is flat (|slope| <= {max_slope:g} A per 100 ns)", fontsize=14)
         fig.tight_layout()
         fig.savefig(Path(out_base) / "equilibration.png", dpi=130)
         plt.close(fig)
