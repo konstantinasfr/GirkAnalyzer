@@ -76,6 +76,10 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
         exit_sources.png     last site before Exit, all and by cavity filling
         exit_heatmaps.png, first_step.png, time_budget.png,
         time_to_exit.png, prediction.png
+        visits_histogram.png  visits per ion, all ions and by the other K+ at end_1
+        visit_steps.csv, visit_steps/visit_steps_<all|sf0..sf5+>.png
+                             visit k = 1 .. 10: of the ions still in the cavity, % at
+                             each site or gone to Exit; all ions and by the K+ at end_1
 Over runs: aggregate_site_chain.py (repo root).
 
 USAGE - from main.py (after ch1, ch2 and analyzer exist)
@@ -115,6 +119,7 @@ COLORS = {"E": "#e8766f", "Q": "#f2a35e", "N": "#5aa5d6", "D": "#5cbf6a"}
 GREY = "#9a9a9a"
 MIN_TEST = 20                     # departures needed for the memory test of a state
 N_SIM = 20000
+VISIT_STEPS = 10                  # visit_steps plots: visits 1 .. VISIT_STEPS
 FROM_NEXT = "from \\ next"
 EQ_MAX_SLOPE = 0.5                # A per 100 ns: a smoothed RMSD this flat over EQ_WINDOW_NS = settled
 EQ_WINDOW_NS = 30.0
@@ -749,6 +754,102 @@ def plot_first_step(steps, sites, max_sf, title, out_file):
     plt.close(fig)
 
 
+def visit_steps_table(events, visits_site, sites, max_sf, max_step=VISIT_STEPS):
+    """
+    Where the ions are at visit k (k = 1 .. max_step): of the ions still in the
+    cavity before visit k (n_visits >= k - 1), the % at each site, or gone to
+    Exit (n_visits == k - 1). For all ions and split by the other K+ in the
+    cavity at end_1. Columns: start (all, 0 .. max_sf+), step, n_ions, target,
+    count, pct.
+    """
+    by_event = {k: g.sort_values("visit")["site"].tolist()
+                for k, g in visits_site.groupby(["run", "event"])} if len(visits_site) else {}
+    paths = [(bin_label(e["sf_count"], max_sf), by_event.get((e["run"], e["event"]), []))
+             for e in events.to_dict("records")]
+    targets = sites + [EXIT]
+    rows = []
+    for start in ["all"] + [bin_label(k, max_sf) for k in range(max_sf + 1)]:
+        ps = [p for b, p in paths if start in ("all", b)]
+        for k in range(1, max_step + 1):
+            here = [p[k - 1] if len(p) >= k else EXIT for p in ps if len(p) >= k - 1]
+            c = Counter(here)
+            for t in targets:
+                rows.append(dict(start=start, step=k, n_ions=len(here), target=t, count=c.get(t, 0),
+                                 pct=100 * c.get(t, 0) / len(here) if here else np.nan))
+    return pd.DataFrame(rows, columns=["start", "step", "n_ions", "target", "count", "pct"])
+
+
+def plot_visit_steps(table, sites, title, out_file):
+    """One panel per visit k: % of the ions still in the cavity that are at each site or go to Exit."""
+    steps = sorted(table.loc[table["n_ions"] > 0, "step"].unique())
+    if not steps:
+        return
+    targets = sites + [EXIT]
+    ncol = min(4, len(steps))
+    nrow = int(np.ceil(len(steps) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4.2 * ncol, 3.4 * nrow), squeeze=False, sharey=True)
+    for ax in axes.flat[len(steps):]:
+        ax.axis("off")
+    x = np.arange(len(targets))
+    for ax, k in zip(axes.flat, steps):
+        g = table[table["step"] == k].set_index("target").reindex(targets)
+        ax.bar(x, g["pct"].fillna(0), color=[site_color(t) if t != EXIT else "#bbbbbb" for t in targets],
+               hatch=["//" if t == EXIT else None for t in targets], edgecolor="white")
+        for xi, (c, p) in enumerate(zip(g["count"], g["pct"].fillna(0))):
+            if c:
+                ax.text(xi, p + 1, str(int(c)), ha="center", va="bottom", fontsize=7)
+        ax.set_xticks(x)
+        ax.set_xticklabels(targets, rotation=60, ha="right", fontsize=7)
+        ax.set_ylim(0, 110)
+        ax.set_title(f"visit {k}  (n={int(g['n_ions'].iloc[0])} ions still in the cavity)", fontsize=9)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("% of these ions")
+    fig.suptitle(f"{title}\nvisit k: where the ions still in the cavity go (number above bar = ions; "
+                 "Exit = left without a k-th visit)")
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150)
+    plt.close(fig)
+
+
+def plot_visit_histogram(events, max_sf, title, out_file):
+    """Number of visits per ion: all ions (counts), and % per K+ count at end_1."""
+    n = events["n_visits"].astype(int).to_numpy()
+    if not len(n):
+        return
+    hi = int(n.max())
+    b = np.arange(hi + 1)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 4.8))
+    cnt = np.bincount(n, minlength=hi + 1)
+    ax1.bar(b, cnt, color="#555555")
+    for bi, c in zip(b, cnt):
+        if c:
+            ax1.text(bi, c, str(c), ha="center", va="bottom", fontsize=7)
+    ax1.set_xlabel("visits per ion (0 = SF -> Exit without a visit)")
+    ax1.set_ylabel("ions")
+    ax1.set_title(f"all ions (n={len(n)}, mean {n.mean():.2f}, median {np.median(n):.0f})")
+    lab = events["sf_count"].map(lambda v: bin_label(v, max_sf)).to_numpy()
+    cmap = plt.get_cmap("viridis")
+    bins = [bin_label(k, max_sf) for k in range(max_sf + 1)]
+    groups = [("0", n == 0), ("1", n == 1), ("2", n == 2), ("3", n == 3), ("4", n == 4),
+              ("5-9", (n >= 5) & (n <= 9)), ("10+", n >= 10)]
+    used = [s for s in bins if (lab == s).any()]
+    w = 0.8 / max(len(used), 1)
+    for i, s in enumerate(used):
+        m = lab == s
+        ax2.bar(np.arange(len(groups)) - 0.4 + w * (i + 0.5), [100 * (g & m).sum() / m.sum() for _, g in groups],
+                width=w, color=cmap(bins.index(s) / max(len(bins) - 1, 1)), label=f"{s} (n={m.sum()})")
+    ax2.set_xticks(range(len(groups)))
+    ax2.set_xticklabels([g for g, _ in groups])
+    ax2.set_xlabel("visits per ion")
+    ax2.set_ylabel("% of ions")
+    ax2.legend(title="other K+ at end_1", fontsize=8)
+    ax2.set_title("by the other K+ in the cavity when the ion leaves the SF")
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150)
+    plt.close(fig)
+
+
 def plot_time_budget(ev, visits_site, sites, dt, title, out_file):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
     for col, c, lab in (("residue_frames", "#c0504d", "residue time"), ("moving_frames", "#4f81bd", "moving time"),
@@ -1124,6 +1225,13 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     plot_exit_heatmaps(steps, ctrl, sites, max_above, max_below, f"{head}: {model} model",
                        out_dir / "exit_heatmaps.png")
     plot_first_step(steps, sites, max_sf, f"{head}: first site after the SF", out_dir / "first_step.png")
+    plot_visit_histogram(events, max_sf, f"{head}: visits per ion", out_dir / "visits_histogram.png")
+    vsteps = visit_steps_table(events, vs, sites, max_sf)
+    vsteps.to_csv(out_dir / "visit_steps.csv", index=False, float_format="%.2f")
+    (out_dir / "visit_steps").mkdir(exist_ok=True)
+    for start, g in vsteps.groupby("start", sort=False):
+        name, label = ("all", "all ions") if start == "all" else (f"sf{start}", f"{start} other K+ at end_1")
+        plot_visit_steps(g, sites, f"{head}: {model} model, {label}", out_dir / "visit_steps" / f"visit_steps_{name}.png")
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
     plot_prediction(obs_t * dt, sim_t * dt, obs_n, sim_n, f"{head}: chain against real ions",
