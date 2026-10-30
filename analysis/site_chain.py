@@ -68,6 +68,7 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
         states.csv        per state: departures, P(next site / Exit), times
         transitions.csv   per arrow: count, P, moving time
         exit_by_counts.csv  P(Exit next) per site x K+ above x K+ below, real and control
+        exit_by_cavity_k.csv  P(Exit next) by the number of other K+ in the cavity, real and control
         crowding_within_blocks.csv, crowding_per_run.csv   the crowding checks of the summary
         network.png          P(next site | site), all K+ counts together
         network_crowding.png the same, split: departures with <= 3 / >= 4 other K+ in the cavity
@@ -119,6 +120,11 @@ EQ_MAX_SLOPE = 0.5                # A per 100 ns: a smoothed RMSD this flat over
 EQ_WINDOW_NS = 30.0
 EQ_SMOOTH_NS = 7.5
 N_C = len(CONTROL_SHIFTS)
+
+
+def default_crowded(channel_type):
+    """Other K+ in the cavity counted as 'crowded': 3 for G2 (its cavity holds one K+ fewer), else 4."""
+    return 3 if str(channel_type).upper().startswith("G2") else 4
 
 
 def default_window(channel_type):
@@ -818,8 +824,8 @@ def plot_prediction(obs_t, sim_t, obs_n, sim_n, title, out_file):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def analyze_model(visits, events, out_dir, head, frame_duration, model="residue", max_above=5,
-                  max_below=3, max_sf=5, include_frame0=False, include_preequil=False, n_sim=N_SIM,
-                  seed=0):
+                  max_below=3, max_sf=5, include_frame0=False, include_preequil=False, crowded=4,
+                  n_sim=N_SIM, seed=0):
     """Tables, tests and plots of one model; see the module docstring. events may carry
     eq_start_frame (per run): ions leaving the SF before it are left out unless include_preequil."""
     out_dir = Path(out_dir)
@@ -1010,8 +1016,24 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
 
     # ── memory ──
     rep("")
-    rep("CROWDING CHECKS: is 'more K+ in the cavity -> more exits' real?   crowded = 4+ other K+ in the "
-        "cavity when the ion leaves (SF: when it enters), uncrowded = 3 or fewer")
+    rep("EXIT BY OTHER K+ IN THE CAVITY (when the ion leaves; SF: when it enters), real vs control")
+    rep(f"    {'':<14}{'other K+':>9}{'departures':>12}{'exit %':>8}{'control %':>11}")
+    by_tot = []
+    for part, r_sub, c_sub in (("SF entries", steps[steps["from_site"] == SF], ctrl[ctrl["from_site"] == SF]),
+                               ("site visits", steps[steps["from_site"] != SF], ctrl[ctrl["from_site"] != SF])):
+        kr, kc = r_sub["from_state"].map(crowding).clip(upper=5), c_sub["from_state"].map(crowding).clip(upper=5)
+        for k in range(6):
+            g, gc = r_sub[kr == k], c_sub[kc == k]
+            if not len(g):
+                continue
+            pr, pc = 100 * (g["to_site"] == EXIT).mean(), 100 * (gc["to_site"] == EXIT).mean() if len(gc) else np.nan
+            by_tot.append(dict(part=part, other_k=f"{k}" if k < 5 else "5+", n=len(g), p_exit=pr,
+                               n_control=len(gc), p_exit_control=pc))
+            rep(f"    {part:<14}{by_tot[-1]['other_k']:>9}{len(g):>12}{pr:>7.0f}%{pc:>10.0f}%")
+    pd.DataFrame(by_tot).to_csv(out_dir / "exit_by_cavity_k.csv", index=False, float_format="%.2f")
+    rep("")
+    rep(f"CROWDING CHECKS: is 'more K+ in the cavity -> more exits' real?   crowded = {crowded}+ other K+ in the "
+        f"cavity when the ion leaves (SF: when it enters), uncrowded = {crowded - 1} or fewer (--crowded)")
     rep("  1 within the same time: crowded vs uncrowded departures compared only inside the same block of "
         "the same run (Cochran-Mantel-Haenszel), so slow changes of the protein cannot cause it")
     rep(f"    {'':<14}{'block':>7}{'blocks':>8}{'crowded':>9}{'exit %':>8}{'uncrowded':>11}{'exit %':>8}"
@@ -1020,13 +1042,13 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     for part, sub in (("all", steps), ("SF entries", steps[steps["from_site"] == SF]),
                       ("site visits", steps[steps["from_site"] != SF])):
         for block in (25, 50, 100):
-            r = crowding_within_blocks(sub, dt, block)
+            r = crowding_within_blocks(sub, dt, block, crowded)
             rows_chk.append(dict(part=part, **r))
             rep(f"    {part:<14}{block:>5} ns{r['blocks']:>8}{r['crowded_n']:>9}{r['crowded_exit_pct']:>7.0f}%"
                 f"{r['uncrowded_n']:>11}{r['uncrowded_exit_pct']:>7.0f}%"
                 f"{r['crowded_exits']:>20} / {r['expected']:>9.1f}{r['p']:>9.2g}")
     pd.DataFrame(rows_chk).to_csv(out_dir / "crowding_within_blocks.csv", index=False, float_format="%.4f")
-    per = crowding_per_run(steps)
+    per = crowding_per_run(steps, crowded)
     per.to_csv(out_dir / "crowding_per_run.csv", index=False, float_format="%.2f")
     cmp_ = per[per["compared"]]
     if len(cmp_):
@@ -1094,11 +1116,11 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     busy = len(sites) > 5                        # 8 residues: only the main hops drawn
     mp, lp = (0.10, 0.15) if busy else (0.05, 0.10)
     plot_network(steps, sites, ring, dt, f"{head}: {model} model", out_dir / "network.png", mp, lp)
-    plot_network_crowding(steps, sites, ring, dt, f"{head}: {model} model", out_dir / "network_crowding.png",
+    plot_network_crowding(steps, sites, ring, dt, f"{head}: {model} model", out_dir / "network_crowding.png", crowded,
                           min_prob=mp, label_prob=lp)
     plot_network_net(steps, sites, ring, dt, f"{head}: {model} model", out_dir / "network_net.png",
                      min_flow=0.03 if busy else 0.02, label_flow=0.06 if busy else 0.05)
-    plot_exit_sources(steps, sites, f"{head}: {model} model", out_dir / "exit_sources.png")
+    plot_exit_sources(steps, sites, f"{head}: {model} model", out_dir / "exit_sources.png", crowded)
     plot_exit_heatmaps(steps, ctrl, sites, max_above, max_below, f"{head}: {model} model",
                        out_dir / "exit_heatmaps.png")
     plot_first_step(steps, sites, max_sf, f"{head}: first site after the SF", out_dir / "first_step.png")
@@ -1188,7 +1210,7 @@ def equilibration(rmsd, dt, out_base, max_slope=EQ_MAX_SLOPE, window_ns=EQ_WINDO
 def analyze_all(frames, stays, events, out_base, head, frame_duration, window, models=MODELS,
                 max_above=5, max_below=3, max_sf=5, include_frame0=False, rmsd=None, eq_max_slope=EQ_MAX_SLOPE,
                 eq_window_ns=EQ_WINDOW_NS,
-                start_frames=None, include_preequil=False):
+                start_frames=None, include_preequil=False, crowded=4):
     eq = equilibration(rmsd, frame_duration, out_base, eq_max_slope, eq_window_ns, start_frames)
     events = events.assign(eq_start_frame=events["run"].map(eq).fillna(0).astype(int))
     visits, ev = build_visits(frames, stays, events, window)
@@ -1196,7 +1218,8 @@ def analyze_all(frames, stays, events, out_base, head, frame_duration, window, m
         analyze_model(visits, ev, Path(out_base) / analysis_folder(model, max_above, max_below, include_frame0,
                                                                      include_preequil),
                       head, frame_duration, model=model, max_above=max_above, max_below=max_below,
-                      max_sf=max_sf, include_frame0=include_frame0, include_preequil=include_preequil)
+                      max_sf=max_sf, include_frame0=include_frame0, include_preequil=include_preequil,
+                      crowded=crowded)
     return visits, ev
 
 
@@ -1216,12 +1239,13 @@ def run_site_chain(universe, permeation_events, asn_residues, glu_residues, chan
                    results_dir, run, channel_type="G12", frame_duration=0.075, cutoff=3.5,
                    min_duration=None, window=None, models=MODELS, max_above=5, max_below=3, max_sf=5,
                    include_frame0=False, start_frame=None, eq_max_slope=EQ_MAX_SLOPE,
-                   eq_window_ns=EQ_WINDOW_NS, include_preequil=False,
+                   eq_window_ns=EQ_WINDOW_NS, include_preequil=False, crowded=None,
                    analysis_start_frame=0, force_rerun=False):
     """Collect the data of one run (cached in CSVs) and analyse it; see the module docstring.
     start_frame: equilibration start of this run, instead of the one found from the RMSD."""
     min_duration = default_min_duration(channel_type) if min_duration is None else int(min_duration)
     window = default_window(channel_type) if window is None else int(window)
+    crowded = default_crowded(channel_type) if crowded is None else int(crowded)
     out_dir = Path(results_dir) / OUT_FOLDER / settings_folder(cutoff, min_duration)
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = {k: out_dir / f"{k}_run{run}.csv" for k in ("frames", "stays", "events")}
@@ -1249,7 +1273,7 @@ def run_site_chain(universe, permeation_events, asn_residues, glu_residues, chan
                 models=models, max_above=max_above, max_below=max_below, max_sf=max_sf,
                 include_frame0=include_frame0, rmsd=rmsd, eq_max_slope=eq_max_slope, eq_window_ns=eq_window_ns,
                 start_frames=None if start_frame is None else {run: start_frame},
-                include_preequil=include_preequil)
+                include_preequil=include_preequil, crowded=crowded)
     return frames, stays, events
 
 
@@ -1266,6 +1290,8 @@ def add_analysis_args(p):
                    help="A per 100 ns: the smoothed RMSD this flat counts as equilibrated")
     p.add_argument("--eq_window_ns", type=float, default=EQ_WINDOW_NS,
                    help="ns: length of the window that has to be that flat")
+    p.add_argument("--crowded", type=int, help="other K+ in the cavity counted as crowded in the crowding checks "
+                                               "(default 3 for G2, 4 for the other systems)")
     p.add_argument("--include_preequil", action="store_true",
                    help="also analyse the ions entering before equilibration")
 
@@ -1319,7 +1345,7 @@ def main(argv=None):
                        max_above=args.max_above, max_below=args.max_below, max_sf=args.max_sf,
                        include_frame0=args.include_frame0, start_frame=args.start_frame,
                        eq_max_slope=args.eq_max_slope, eq_window_ns=args.eq_window_ns,
-                       include_preequil=args.include_preequil,
+                       include_preequil=args.include_preequil, crowded=args.crowded,
                        force_rerun=args.force_rerun)
 
 

@@ -20,6 +20,7 @@ USAGE
         [/path/girk_analyser_results/G2 ...] [--models residue grouped]
         [--max_above 5] [--max_below 3] [--max_sf 5] [--window N] [--include_frame0]
         [--start_frames starts.csv] [--eq_max_slope 0.5] [--eq_window_ns 30] [--include_preequil]
+        [--crowded N]   (crowding checks: N+ other K+ = crowded; default 3 for G2, 4 otherwise)
 Each system folder is aggregated on its own, for every <settings> folder found in its runs.
 """
 
@@ -30,7 +31,8 @@ from pathlib import Path
 import pandas as pd
 
 from aggregate_duration_results import run_sort_key
-from analysis.site_chain import OUT_FOLDER, add_analysis_args, analyze_all, default_window, read_csv_or_empty
+from analysis.site_chain import (OUT_FOLDER, add_analysis_args, analyze_all, default_crowded, default_window,
+                                 read_csv_or_empty)
 
 FRAME_DURATION = {"G2": 0.4}                 # ns per frame; everything else 0.075
 
@@ -86,6 +88,7 @@ def main():
         system = base.name
         dt = FRAME_DURATION.get(system.upper(), 0.075)
         window = default_window(system) if args.window is None else args.window
+        crowded = default_crowded(system) if args.crowded is None else args.crowded
         for settings in settings_folders(base):
             data = load(base, settings)
             if data is None:
@@ -102,7 +105,7 @@ def main():
                             max_sf=args.max_sf, include_frame0=args.include_frame0, rmsd=data["rmsd"],
                             eq_max_slope=args.eq_max_slope,
                             eq_window_ns=args.eq_window_ns, start_frames=starts,
-                            include_preequil=args.include_preequil)
+                            include_preequil=args.include_preequil, crowded=crowded)
 
 
 if __name__ == "__main__":
