@@ -77,8 +77,9 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
         exit_heatmaps.png, first_step.png, time_budget.png,
         time_to_exit.png, prediction.png
         visits/visits_histogram.png  visits per ion, all ions and by the other K+ at end_1
-        visits/first_visit.csv, visits/first_visit.png   visit 0 of every ion (residue, or out = no
+        visits/first_visit.csv, visits/first_visit[_all|_by_k].png   visit 0 of every ion (residue, or out = no
                              visit): all ions and one panel per other K+ in the cavity at end_1
+                             (first_visit.png both, _all only all ions, _by_k only the K+ panels)
 Over runs: aggregate_site_chain.py (repo root).
 
 USAGE - from main.py (after ch1, ch2 and analyzer exist)
@@ -771,15 +772,18 @@ def first_visit_table(events, visits_site, sites, max_sf):
     return pd.DataFrame(rows, columns=["start", "n_ions", "n_runs", "target", "count", "pct"])
 
 
-def plot_first_visit(table, sites, title, out_file):
-    """One panel for all ions and one per K+ count at end_1: % of the ions whose visit 0 is each residue, or out."""
-    starts = [s for s in table["start"].unique() if table.loc[table["start"] == s, "n_ions"].iloc[0] > 0]
+def plot_first_visit(table, sites, title, out_file, which=None):
+    """One panel for all ions and one per K+ count at end_1: % of the ions whose visit 0 is each residue, or out.
+    which: the panels to draw (e.g. ["all"]); default all of them."""
+    starts = [s for s in table["start"].unique() if table.loc[table["start"] == s, "n_ions"].iloc[0] > 0
+              and (which is None or s in which)]
     if not starts:
         return
     targets = sites + [EXIT]
     ncol = min(3, len(starts))
     nrow = int(np.ceil(len(starts) / ncol))
-    fig, axes = plt.subplots(nrow, ncol, figsize=(5 * ncol, 3.6 * nrow), squeeze=False)
+    size = (8, 5) if len(starts) == 1 else (5 * ncol, 3.6 * nrow)
+    fig, axes = plt.subplots(nrow, ncol, figsize=size, squeeze=False)
     for ax in axes.flat[len(starts):]:
         ax.axis("off")
     x = np.arange(len(targets))
@@ -803,7 +807,8 @@ def plot_first_visit(table, sites, title, out_file):
     handles = [Patch(color=COLORS[v], label=k) for k, v in kinds] + \
               [Patch(facecolor="#d9d9d9", hatch="////", edgecolor="#555555", label="out (no visit)")]
     fig.legend(handles=handles, title="visit 0", loc="center left", bbox_to_anchor=(1.0, 0.5))
-    fig.suptitle(f"{title}\nvisit 0 (first visit after the SF), by the other K+ in the cavity when the ion leaves the SF (end_1)")
+    split = "" if starts == ["all"] else ", by the other K+ in the cavity when the ion leaves the SF (end_1)"
+    fig.suptitle(f"{title}\nvisit 0 (first visit after the SF){split}")
     fig.tight_layout()
     fig.savefig(out_file, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -1229,6 +1234,9 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     fv = first_visit_table(events, vs, sites, max_sf)
     fv.to_csv(vis_dir / "first_visit.csv", index=False, float_format="%.2f")
     plot_first_visit(fv, sites, f"{head}: {model} model", vis_dir / "first_visit.png")
+    plot_first_visit(fv, sites, f"{head}: {model} model", vis_dir / "first_visit_all.png", which=["all"])
+    plot_first_visit(fv, sites, f"{head}: {model} model", vis_dir / "first_visit_by_k.png",
+                     which=[k for k in fv["start"].unique() if k != "all"])
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
     plot_prediction(obs_t * dt, sim_t * dt, obs_n, sim_n, f"{head}: chain against real ions",
