@@ -48,7 +48,7 @@ def main(argv=None):
     labels = list(tabs)
     x = np.arange(args.max_visit)
     w = 0.8 / len(labels)
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 11), sharex=True)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 12), sharex=True)
     for i, lab in enumerate(labels):
         t = tabs[lab]
         off = x - 0.4 + w * (i + 0.5)
@@ -56,15 +56,17 @@ def main(argv=None):
         ax1.bar(off, t["pct"], w, color=c, label=f"{lab} ({t['n_permeating'].iloc[0]} permeating ions)")
         for xi, (pc, n) in zip(off, zip(t["pct"], t["n_ions"])):
             if n:
-                ax1.text(xi, pc + 0.6, f"{pc:.0f}%", ha="center", va="bottom", fontsize=12)
+                ax1.text(xi, pc + 0.6, f"{pc:.0f}%", ha="center", va="bottom", fontsize=15)
         ax2.bar(off, t["mean_ns"], w, yerr=t["sem_ns"], capsize=4, color=c, error_kw=dict(lw=1.5))
-    ax1.set_ylabel("% of permeating ions leaving")
+    ax1.set_ylabel("% of permeating ions leaving", fontsize=19)
     ax1.set_ylim(0, max(t["pct"].max() for t in tabs.values()) * 1.25)
-    ax1.legend()
-    ax1.set_title("ions leaving the cavity at each visit (visit 1 = no stop)")
-    ax2.set_ylabel("time SF to exit (ns)\nmean ± SE")
+    ax1.legend(fontsize=16)
+    ax1.set_title("ions leaving the cavity at each visit (visit 1 = no stop)", fontsize=19)
+    ax2.set_ylabel("time SF to exit (ns)\nmean ± SE", fontsize=19)
     ax2.set_xticks(x)
-    ax2.set_xticklabels([f"visit {v}" for v in tabs[labels[0]]["visit"]], rotation=30, ha="right")
+    ax2.set_xticklabels([f"visit {v}" for v in tabs[labels[0]]["visit"]], rotation=30, ha="right", fontsize=17)
+    for ax in (ax1, ax2):
+        ax.tick_params(axis="y", labelsize=17)
     fig.tight_layout()
     out = Path(args.out)
     fig.savefig(out, dpi=150, bbox_inches="tight")
