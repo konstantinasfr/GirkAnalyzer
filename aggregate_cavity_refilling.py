@@ -4,9 +4,15 @@ aggregate_cavity_refilling.py
 Aggregates cavity_refilling_results.csv from all RUN directories and
 produces combined plots and a merged CSV.
 
-Transit-time histograms twice: transit_times_old/ (all ions, files *_old.png) and
-transit_times/ (without the ions present at frame 0 and those leaving the SF before
-their run's equilibration start, taken from the site chain's equilibration.csv).
+The runs are aggregated four times, each into its own folder of the output directory:
+ALL/ (every run) and HIGH/, TYPICAL/, LOW/ (the runs of that permeation category, from
+<base>/permeation_summary/run_categories_full_permeations_total.csv written by
+analyze_permeation_summary.py; --categories for another file, --no_categories for ALL/ only).
+
+In each folder the plots come twice: with all ions (old: transit_times_old/*_old.png and
+old/) and without the ions present at frame 0 and those leaving the SF before their run's
+equilibration start, taken from the site chain's equilibration.csv (transit_times/ and the
+folder itself). The flux per run counts all permeations.
 
 Usage:
     python aggregate_cavity_refilling.py /path/to/G12
@@ -23,6 +29,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from pathlib import Path
 
+from aggregate_duration_results import CATEGORIES, load_categories, run_sort_key
+
+plt.rcParams.update({"font.size": 15, "xtick.labelsize": 16, "ytick.labelsize": 16})   # readable when shrunk
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Load data
@@ -34,8 +44,8 @@ def load_all_runs(base_dir, run_numbers=None):
     if run_numbers:
         run_dirs = [base_dir / f"RUN{n}" for n in run_numbers]
     else:
-        run_dirs = sorted(d for d in base_dir.iterdir()
-                          if d.is_dir() and d.name.startswith("RUN"))
+        run_dirs = sorted((d for d in base_dir.iterdir()
+                           if d.is_dir() and d.name.startswith("RUN")), key=lambda d: run_sort_key(d.name))
 
     all_rows = []
     all_flux_rows = []
@@ -159,22 +169,22 @@ def plot_flux(flux_rows, output_dir, aggregated_flux=None, channel_name=""):
         return
 
     mean_flux = aggregated_flux if aggregated_flux is not None else np.mean(fluxes)
-    fig, ax = plt.subplots(figsize=(max(6, len(runs) * 0.6), 4))
+    fig, ax = plt.subplots(figsize=(max(8, len(runs) * 0.7), 5.5))
     colors = ["#E74C3C" if f > mean_flux else "#4878CF" for f in fluxes]
     bars = ax.bar(runs, fluxes, color=colors, alpha=0.75,
                   edgecolor="black", linewidth=1.0)
     for bar, val in zip(bars, fluxes):
         ax.text(bar.get_x() + bar.get_width()/2.,
                 bar.get_height() + max(fluxes)*0.01,
-                f"{val:.4f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+                f"{val:.4f}", ha="center", va="bottom", fontsize=14, fontweight="bold")
     ax.axhline(mean_flux, color="red", linewidth=2, linestyle="--",
                label=f"Aggregated flux = {mean_flux:.4f} ions/ns")
-    ax.set_ylabel("Flux (ions/ns)", fontsize=13)
-    ax.set_title(f"{channel_name} — Ion permeation flux per run", fontsize=13, fontweight="bold", pad=10)
+    ax.set_ylabel("Flux (ions/ns)", fontsize=17)
+    ax.set_title(f"{channel_name} — Ion permeation flux per run", fontsize=17, fontweight="bold", pad=10)
     ax.set_xticks(range(len(runs)))
     ax.set_xticks(range(len(runs)))
-    ax.set_xticklabels(runs, rotation=45, ha="right", fontsize=9)
-    ax.legend(fontsize=11)
+    ax.set_xticklabels(runs, rotation=45, ha="right", fontsize=14)
+    ax.legend(fontsize=15)
     ax.set_ylim(0, max(fluxes) * 1.25)
     ax.grid(True, alpha=0.25, axis="y")
     ax.spines[["top", "right"]].set_visible(False)
@@ -186,16 +196,16 @@ def plot_flux(flux_rows, output_dir, aggregated_flux=None, channel_name=""):
 
 
 def _bar_plot(labels, values, colors, title, ylabel, out_path, fmt="{}"):
-    fig, ax = plt.subplots(figsize=(5, 4))
+    fig, ax = plt.subplots(figsize=(6, 5))
     bars = ax.bar(labels, values, color=colors, alpha=0.75,
                   edgecolor="black", linewidth=1.2, width=0.5)
     for bar, val in zip(bars, values):
         ax.text(bar.get_x() + bar.get_width() / 2.,
                 bar.get_height() + max(values) * 0.02,
                 fmt.format(val),
-                ha="center", va="bottom", fontsize=13, fontweight="bold")
-    ax.set_ylabel(ylabel, fontsize=14)
-    ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
+                ha="center", va="bottom", fontsize=17, fontweight="bold")
+    ax.set_ylabel(ylabel, fontsize=19)
+    ax.set_title(title, fontsize=17, fontweight="bold", pad=10)
     ax.set_ylim(0, max(values) * 1.22)
     ax.grid(True, alpha=0.25, axis="y")
     ax.spines[["top", "right"]].set_visible(False)
@@ -210,24 +220,24 @@ def _histogram(values, title, xlabel, out_path, color,
     if not values:
         print(f"  No data for {out_path.name} — skipping")
         return
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(7.5, 5.2))
     n_total = total or len(values)
     if pct:
         weights = np.ones(len(values)) / n_total * 100
         ax.hist(values, bins=bins, color=color, alpha=0.75,
                 edgecolor="black", linewidth=1.0, weights=weights)
-        ax.set_ylabel("% of permeation events", fontsize=14)
+        ax.set_ylabel("% of permeation events", fontsize=19)
     else:
         ax.hist(values, bins=bins, color=color, alpha=0.75,
                 edgecolor="black", linewidth=1.0)
-        ax.set_ylabel("Number of permeation events", fontsize=14)
+        ax.set_ylabel("Number of permeation events", fontsize=19)
 
     mean_val = np.mean(values)
     ax.axvline(mean_val, color="red", linewidth=2, linestyle="--",
                label=f"Mean = {mean_val:.1f}")
-    ax.set_xlabel(xlabel, fontsize=14)
-    ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
-    ax.legend(fontsize=11)
+    ax.set_xlabel(xlabel, fontsize=19)
+    ax.set_title(title, fontsize=17, fontweight="bold", pad=10)
+    ax.legend(fontsize=15)
     ax.grid(True, alpha=0.25, axis="y")
     ax.spines[["top", "right"]].set_visible(False)
     plt.tight_layout()
@@ -298,18 +308,18 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
         print(f"    Range  = {arr.min():.0f} – {arr.max():.0f} frames")
 
         # frames histogram
-        fig, ax = plt.subplots(figsize=(9, 6))
+        fig, ax = plt.subplots(figsize=(7.5, 5.2))
         ax.hist(arr, bins=30, color=color, alpha=0.75,
                 edgecolor="black", linewidth=1.0)
         ax.axvline(mean_f,   color="red",    linewidth=2, linestyle="--",
                    label=f"Mean = {mean_f:.1f} f ({mean_ns:.3f} ns)")
         ax.axvline(median_f, color="green", linewidth=2, linestyle="-.",
                    label=f"Median = {median_f:.1f} f ({median_ns:.3f} ns)")
-        ax.set_xlabel("Frames", fontsize=19)
-        ax.set_ylabel("Number of permeation events", fontsize=19)
+        ax.set_xlabel("Frames", fontsize=20)
+        ax.set_ylabel("Number of permeation events", fontsize=20)
         ax.set_title(f"{channel_name}: frames spent in {label}\n({note}, n = {len(arr)})",
-                     fontsize=17, fontweight="bold", pad=10)
-        ax.legend(fontsize=15)
+                     fontsize=18, fontweight="bold", pad=10)
+        ax.legend(fontsize=16)
         ax.tick_params(labelsize=16)
         ax.grid(True, alpha=0.25, axis="y")
         ax.spines[["top", "right"]].set_visible(False)
@@ -321,18 +331,18 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
 
         # ns histogram
         vals_ns = arr * frame_duration
-        fig, ax = plt.subplots(figsize=(9, 6))
+        fig, ax = plt.subplots(figsize=(7.5, 5.2))
         ax.hist(vals_ns, bins=30, color=color, alpha=0.75,
                 edgecolor="black", linewidth=1.0)
         ax.axvline(mean_ns,   color="red",    linewidth=2, linestyle="--",
                    label=f"Mean = {mean_ns:.3f} ns")
         ax.axvline(median_ns, color="green", linewidth=2, linestyle="-.",
                    label=f"Median = {median_ns:.3f} ns")
-        ax.set_xlabel("Time (ns)", fontsize=19)
-        ax.set_ylabel("Number of permeation events", fontsize=19)
+        ax.set_xlabel("Time (ns)", fontsize=20)
+        ax.set_ylabel("Number of permeation events", fontsize=20)
         ax.set_title(f"{channel_name}: time spent in {label}\n({note}, n = {len(arr)})",
-                     fontsize=17, fontweight="bold", pad=10)
-        ax.legend(fontsize=15)
+                     fontsize=18, fontweight="bold", pad=10)
+        ax.legend(fontsize=16)
         ax.tick_params(labelsize=16)
         ax.grid(True, alpha=0.25, axis="y")
         ax.spines[["top", "right"]].set_visible(False)
@@ -363,18 +373,18 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
         print(f"    Mean   = {mean_pct:.1f} ± {std_pct:.1f} %")
         print(f"    Median = {med_pct:.1f} %")
 
-        fig, ax = plt.subplots(figsize=(9, 6))
+        fig, ax = plt.subplots(figsize=(7.5, 5.2))
         ax.hist(arr, bins=20, color=color, alpha=0.75,
                 edgecolor="black", linewidth=1.0)
         ax.axvline(mean_pct, color="red",    linewidth=2, linestyle="--",
                    label=f"Mean = {mean_pct:.1f} ± {std_pct:.1f} %")
         ax.axvline(med_pct,  color="green", linewidth=2, linestyle="-.",
                    label=f"Median = {med_pct:.1f} %")
-        ax.set_xlabel("% of total permeation time (SF exit → HBC gate)", fontsize=17)
-        ax.set_ylabel("Number of permeation events", fontsize=19)
+        ax.set_xlabel("% of total permeation time (SF exit → HBC gate)", fontsize=18)
+        ax.set_ylabel("Number of permeation events", fontsize=20)
         ax.set_title(f"{channel_name}: {label}\n({note}, n = {len(arr)})",
-                     fontsize=17, fontweight="bold", pad=10)
-        ax.legend(fontsize=15)
+                     fontsize=18, fontweight="bold", pad=10)
+        ax.legend(fontsize=16)
         ax.set_xlim(0, 100)
         ax.tick_params(labelsize=16)
         ax.grid(True, alpha=0.25, axis="y")
@@ -388,7 +398,7 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
     print("="*60)
 
 
-def plot_pct_bar_aggregated(all_rows, output_dir, channel_name=""):
+def plot_pct_bar_aggregated(all_rows, output_dir, channel_name="", note="all runs pooled"):
     """
     Bar plot of mean % transit time in GLU/ASN vs ASN→HBC
     pooling ALL individual percentages from all runs.
@@ -412,7 +422,7 @@ def plot_pct_bar_aggregated(all_rows, output_dir, channel_name=""):
     all_vals= [r2_pcts, r3_pcts]
     n       = len(r2_pcts)
 
-    fig, ax = plt.subplots(figsize=(6, 5))
+    fig, ax = plt.subplots(figsize=(7, 6))
     x = np.arange(len(labels))
 
     ax.bar(x, means, yerr=stds, capsize=7, width=0.5,
@@ -427,24 +437,28 @@ def plot_pct_bar_aggregated(all_rows, output_dir, channel_name=""):
 
     for i, (m, s) in enumerate(zip(means, stds)):
         ax.text(i, m + s + 2, f"{m:.1f}\n\u00b1{s:.1f}",
-                ha="center", va="bottom", fontsize=11)
+                ha="center", va="bottom", fontsize=15)
 
-    ax.set_ylim(0, 115)
+    ax.set_ylim(0, 135)
+    ax.set_yticks(range(0, 101, 20))
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=13)
-    ax.set_ylabel("% of total transit time", fontsize=13)
-    ax.set_title(f"% transit time per cavity region\n(n = {n} events, all runs pooled)",
-                 fontsize=13, fontweight="bold", pad=10)
+    ax.set_xticklabels(labels, fontsize=17)
+    ax.set_ylabel("% of total transit time", fontsize=17)
+    ax.set_title(f"{channel_name}: % transit time per cavity region\n(n = {n} events, {note})",
+                 fontsize=17, fontweight="bold", pad=10)
     ax.spines[["top", "right"]].set_visible(False)
     ax.grid(True, alpha=0.25, axis="y")
     plt.tight_layout()
+    output_dir.mkdir(parents=True, exist_ok=True)
     out = output_dir / "pct_transit_bar.png"
     plt.savefig(out, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"✓ Saved: {out}")
 
-def plot_all(all_rows, output_dir, channel_name=""):
+def plot_all(all_rows, output_dir, channel_name="", note=""):
+    output_dir.mkdir(parents=True, exist_ok=True)
     n_total = len(all_rows)
+    tail = f"\n({note}, n = {n_total})" if note else f"\n(n = {n_total})"
     if n_total == 0:
         print("No data to plot.")
         return
@@ -460,7 +474,7 @@ def plot_all(all_rows, output_dir, channel_name=""):
         labels=["New ion entered", "No new ion"],
         values=[n_yes, n_no],
         colors=["#E74C3C", "#95A5A6"],
-        title="New ion enters GLU/ASN cavity\nwhile permeating ion passes HBC gate",
+        title=f"{channel_name}: " + "New ion enters GLU/ASN cavity\nwhile permeating ion passes HBC gate" + tail,
         ylabel="Number of permeation events",
         out_path=output_dir / "yes_no_count.png",
         fmt="{}",
@@ -472,7 +486,7 @@ def plot_all(all_rows, output_dir, channel_name=""):
         values=[round(n_yes / n_total * 100, 1),
                 round(n_no  / n_total * 100, 1)],
         colors=["#E74C3C", "#95A5A6"],
-        title="New ion enters GLU/ASN cavity\nwhile permeating ion passes HBC gate — %",
+        title=f"{channel_name}: " + "New ion enters GLU/ASN cavity\nwhile permeating ion passes HBC gate — %" + tail,
         ylabel="% of permeation events",
         out_path=output_dir / "yes_no_pct.png",
         fmt="{:.1f}%",
@@ -494,40 +508,40 @@ def plot_all(all_rows, output_dir, channel_name=""):
 
     # ── Raw frames after end_2 ──
     _histogram(frames_after,
-        title="Frames after ion leaves GLU/ASN cavity\nuntil new ion enters",
+        title=f"{channel_name}: " + "Frames after ion leaves GLU/ASN cavity\nuntil new ion enters" + tail,
         xlabel="Frames after ion leaves GLU/ASN cavity",
         out_path=output_dir / "frames_until_new_ion.png",
         color="#E74C3C", bins=20)
 
     _histogram(frames_after,
-        title="Frames after ion leaves GLU/ASN cavity\nuntil new ion enters — %",
+        title=f"{channel_name}: " + "Frames after ion leaves GLU/ASN cavity\nuntil new ion enters — %" + tail,
         xlabel="Frames after ion leaves GLU/ASN cavity",
         out_path=output_dir / "frames_until_new_ion_pct.png",
         color="#E74C3C", bins=20, pct=True, total=n_total)
 
     # ── Time (ns) after end_2 ──
     _histogram(time_after,
-        title="Time after ion leaves GLU/ASN cavity\nuntil new ion enters (ns)",
+        title=f"{channel_name}: " + "Time after ion leaves GLU/ASN cavity\nuntil new ion enters (ns)" + tail,
         xlabel="Time after ion leaves GLU/ASN cavity (ns)",
         out_path=output_dir / "time_until_new_ion_ns.png",
         color="#E74C3C", bins=20)
 
     # ── Relative position ──
     _histogram(rel_pos,
-        title="Relative entry timing of new ion\n(0% = just left GLU/ASN, 100% = ion passes HBC gate)",
+        title=f"{channel_name}: " + "Relative entry timing of new ion\n(0% = just left GLU/ASN, 100% = ion passes HBC gate)" + tail,
         xlabel="Relative position in journey (%)",
         out_path=output_dir / "relative_entry_timing.png",
         color="#8E44AD", bins=20)
 
     _histogram(rel_pos,
-        title="Relative entry timing of new ion — %\n(0% = just left GLU/ASN, 100% = ion passes HBC gate)",
+        title=f"{channel_name}: " + "Relative entry timing of new ion — %\n(0% = just left GLU/ASN, 100% = ion passes HBC gate)" + tail,
         xlabel="Relative position in journey (%)",
         out_path=output_dir / "relative_entry_timing_pct.png",
         color="#8E44AD", bins=20, pct=True, total=n_total)
 
     # ── Window length for yes-events ──
     _histogram(window_lens,
-        title="Window length (GLU/ASN exit → HBC gate)\nfor events where new ion entered",
+        title=f"{channel_name}: " + "Window length (GLU/ASN exit → HBC gate)\nfor events where new ion entered" + tail,
         xlabel="Frames (GLU/ASN exit → HBC gate)",
         out_path=output_dir / "window_length.png",
         color="#2980B9", bins=20)
@@ -614,6 +628,34 @@ def drop_frame0_preequil(all_rows, eq_starts):
     return kept, n0, npre
 
 
+def write_group(name, rows, flux_rows, out_dir, channel_name, frame_duration, eq_starts, eq_path):
+    """All outputs of one group of runs (ALL, HIGH, TYPICAL, LOW) in out_dir: the plots with
+    all ions (old: transit_times_old/, old/) and without the frame-0 / pre-equilibration ions."""
+    print("\n" + "#" * 70 + f"\n# {name}: {len({r['run'] for r in rows})} runs, {len(rows)} events\n" + "#" * 70)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    save_aggregated_csv(rows, out_dir)
+    flux_result = save_flux_summary(flux_rows, out_dir)
+    agg_flux = flux_result[1] if flux_result else None
+    plot_flux(flux_rows, out_dir, aggregated_flux=agg_flux, channel_name=channel_name)
+    print_summary(rows)
+    kept, n0, npre = drop_frame0_preequil(rows, eq_starts)
+    print(f"\nWithout {n0} ions present at frame 0 and {npre} entering before equilibration "
+          f"({eq_path}): {len(kept)} of {len(rows)} ions")
+    save_aggregated_csv(kept, out_dir, "cavity_refilling_aggregated_equilibrated.csv")
+    # old: all ions
+    plot_transit_histograms(rows, out_dir, frame_duration=frame_duration, channel_name=channel_name,
+                            subdir="transit_times_old", suffix="_old", note="old: all ions")
+    plot_all(rows, out_dir / "old", channel_name=channel_name, note="old: all ions")
+    plot_pct_bar_aggregated(rows, out_dir / "old", channel_name=channel_name, note="old: all ions")
+    # new: without the frame-0 / pre-equilibration ions
+    new = "without frame-0 / pre-equilibration ions"
+    plot_transit_histograms(kept, out_dir, frame_duration=frame_duration, channel_name=channel_name,
+                            note=new)
+    if kept:
+        plot_all(kept, out_dir, channel_name=channel_name, note=new)
+        plot_pct_bar_aggregated(kept, out_dir, channel_name=channel_name, note="without frame-0 / pre-eq. ions")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
@@ -636,6 +678,10 @@ def main():
                         help="equilibration.csv (run, used_start_frame) for leaving out the ions "
                              "entering before equilibration (default: the site chain's one in "
                              "base_dir/aggregated_site_chain/*/)")
+    parser.add_argument("--categories", default=None,
+                        help="run_categories CSV from analyze_permeation_summary.py (default: "
+                             "base_dir/permeation_summary/run_categories_full_permeations_total.csv)")
+    parser.add_argument("--no_categories", action="store_true", help="ALL/ only")
     args = parser.parse_args()
 
     base_dir   = Path(args.base_dir)
@@ -657,30 +703,31 @@ def main():
         print("No data found. Exiting.")
         return
 
-    save_aggregated_csv(all_rows, output_dir)
-    flux_result = save_flux_summary(flux_rows, output_dir)
-    agg_flux = flux_result[1] if flux_result else None
-    plot_flux(flux_rows, output_dir, aggregated_flux=agg_flux, channel_name=channel_name)
-    print_summary(all_rows)
-    plot_all(all_rows, output_dir, channel_name=channel_name)
-    plot_pct_bar_aggregated(all_rows, output_dir, channel_name=channel_name)
-    # transit times: all ions (old) and without the frame-0 / pre-equilibration ions (new)
-    plot_transit_histograms(all_rows, output_dir,
-                             frame_duration=args.frame_duration,
-                             channel_name=channel_name,
-                             subdir="transit_times_old", suffix="_old", note="old: all ions")
     eq_starts, eq_path = load_equilibration(base_dir, args.equilibration)
     if eq_path is None:
         print("\n  [WARN] no equilibration.csv found (run aggregate_site_chain.py first, or give "
               "--equilibration): only the ions present at frame 0 are left out")
-    kept, n0, npre = drop_frame0_preequil(all_rows, eq_starts)
-    print(f"\nTransit times without {n0} ions present at frame 0 and {npre} entering before "
-          f"equilibration ({eq_path}): {len(kept)} of {len(all_rows)} ions")
-    save_aggregated_csv(kept, output_dir, "cavity_refilling_aggregated_equilibrated.csv")
-    plot_transit_histograms(kept, output_dir,
-                             frame_duration=args.frame_duration,
-                             channel_name=channel_name,
-                             note="without frame-0 / pre-equilibration ions")
+
+    # ALL runs, then the HIGH / TYPICAL / LOW runs (permeation categories), each in its own folder
+    groups = [("ALL", {r["run"] for r in all_rows})]
+    if not args.no_categories:
+        cat_file = Path(args.categories) if args.categories else \
+            base_dir / "permeation_summary" / "run_categories_full_permeations_total.csv"
+        if cat_file.exists():
+            cats = load_categories(cat_file)
+            print(f"\nCategories from: {cat_file}")
+            groups += [(c, {r for r, v in cats.items() if v == c}) for c in CATEGORIES]
+        else:
+            print(f"\n⚠ Categories file not found: {cat_file}\n  No HIGH/TYPICAL/LOW folders "
+                  f"(run analyze_permeation_summary.py first, or pass --categories).")
+    for name, runs in groups:
+        rows = [r for r in all_rows if r["run"] in runs]
+        if not rows:
+            print(f"\n--- {name}: no runs with cavity refilling results, folder skipped")
+            continue
+        write_group(name, rows, [r for r in flux_rows if r["run"] in runs], output_dir / name,
+                    f"{channel_name} {name}" if name != "ALL" else channel_name,
+                    args.frame_duration, eq_starts, eq_path)
 
     print(f"\n✓ Done. All outputs in: {output_dir}/")
 
