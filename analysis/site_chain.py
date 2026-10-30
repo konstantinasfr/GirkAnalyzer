@@ -77,6 +77,9 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
         exit_heatmaps.png, first_step.png, time_budget.png,
         time_to_exit.png, prediction.png
         visits/visits_histogram.png  visits per ion, all ions and by the other K+ at end_1
+        visits/leaving_by_visit.csv, .png   per visit k (1 = no stop .. 10+): % of the
+                             permeating ions leaving at visit k and their mean transit
+                             end_1 -> end_2 +- SE (compare systems: compare_leaving_by_visit.py)
         visits/visit_<k>.csv, visits/visit_<k>[_all|_by_k].png   k = 1-4 (counted from 1;
                              visits.csv counts from 0): of the ions with a visit k-1, the residue of
                              visit k or out (left before it); all ions and one panel per
@@ -126,6 +129,7 @@ COLORS = {"E": "#e8766f", "Q": "#f2a35e", "N": "#5aa5d6", "D": "#5cbf6a"}
 GREY = "#9a9a9a"
 MIN_TEST = 20                     # departures needed for the memory test of a state
 N_SIM = 20000
+LEAVE_VISITS = 10                 # leaving_by_visit: visits 1 .. 9 and 10+
 PLOT_VISITS = (0, 1, 2, 3)            # visits/visit_<k>*.png: visits.csv numbering, 0 = first visit
 FROM_NEXT = "from \\ next"
 EQ_MAX_SLOPE = 0.5                # A per 100 ns: a smoothed RMSD this flat over EQ_WINDOW_NS = settled
@@ -835,6 +839,57 @@ def plot_visit(table, sites, title, out_file, visit=0, which=None):
     plt.close(fig)
 
 
+def leaving_by_visit_table(events, dt, max_visit=LEAVE_VISITS):
+    """
+    The ions grouped by the visit at which they leave the cavity: visit k = left
+    with k-1 visits (visit 1 = no visit, SF -> Exit), the last group max_visit+ =
+    max_visit-1 or more visits. Columns: visit (label), n_visits_min, n_ions,
+    pct (of all permeating ions), mean_ns / sem_ns / sd_ns / median_ns of the
+    transit end_1 -> end_2.
+    """
+    n = events["n_visits"].astype(int).to_numpy()
+    t = events["transit_frames"].to_numpy() * dt
+    rows = []
+    for k in range(1, max_visit + 1):
+        last = k == max_visit
+        m = n >= k - 1 if last else n == k - 1
+        x = t[m]
+        rows.append(dict(visit=f"{k}+" if last else str(k), n_visits_min=k - 1, n_ions=int(m.sum()),
+                         pct=100 * m.sum() / max(len(n), 1),
+                         mean_ns=x.mean() if len(x) else np.nan,
+                         sem_ns=x.std(ddof=1) / np.sqrt(len(x)) if len(x) > 1 else np.nan,
+                         sd_ns=x.std(ddof=1) if len(x) > 1 else np.nan,
+                         median_ns=np.median(x) if len(x) else np.nan))
+    return pd.DataFrame(rows)
+
+
+def plot_leaving_by_visit(tab, title, out_file):
+    """Per visit k: % of the permeating ions that leave the cavity at visit k (left axis) and their
+    mean time from leaving the SF to leaving the cavity, +- standard error (right axis)."""
+    x = np.arange(len(tab))
+    w = 0.38
+    fig, ax = plt.subplots(figsize=(14, 6.5))
+    ax2 = ax.twinx()
+    b1 = ax.bar(x - w / 2, tab["pct"], w, color="#7f7f7f", label="% of ions leaving")
+    b2 = ax2.bar(x + w / 2, tab["mean_ns"], w, yerr=tab["sem_ns"], capsize=4, color="#4f81bd",
+                 error_kw=dict(lw=1.5), label="time SF to exit (mean ± SE)")
+    for xi, (p, c) in enumerate(zip(tab["pct"], tab["n_ions"])):
+        if c:
+            ax.text(xi - w / 2, p + 0.6, f"{p:.0f}%\n({c})", ha="center", va="bottom", fontsize=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"visit {v}" for v in tab["visit"]], rotation=30, ha="right")
+    ax.set_ylabel("% of permeating ions leaving")
+    ax2.set_ylabel("time SF to exit (ns)", color="#4f81bd")
+    ax2.tick_params(axis="y", colors="#4f81bd")
+    ax.set_ylim(0, max(tab["pct"].max() * 1.3, 10))
+    ax2.set_ylim(0, np.nanmax((tab["mean_ns"] + tab["sem_ns"].fillna(0)).to_numpy()) * 1.15)
+    ax.legend(handles=[b1, b2], loc="upper right")
+    ax.set_title(f"{title}\nions leaving the cavity at each visit (visit 1 = no stop)")
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_visit_histogram(events, max_sf, title, out_file):
     """Number of visits per ion: all ions (counts), and % per K+ count at end_1."""
     n = events["n_visits"].astype(int).to_numpy()
@@ -1254,6 +1309,9 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     vis_dir = out_dir / "visits"
     vis_dir.mkdir(exist_ok=True)
     plot_visit_histogram(events, max_sf, f"{head}: visits per ion", vis_dir / "visits_histogram.png")
+    leave = leaving_by_visit_table(events, dt)
+    leave.to_csv(vis_dir / "leaving_by_visit.csv", index=False, float_format="%.3f")
+    plot_leaving_by_visit(leave, f"{head}", vis_dir / "leaving_by_visit.png")
     for k in PLOT_VISITS:
         tab = visit_table(events, vs, sites, max_sf, k)
         name = f"visit_{k + 1}"                   # files and labels count visits from 1
