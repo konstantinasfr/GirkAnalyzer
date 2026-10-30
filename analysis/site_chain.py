@@ -77,7 +77,7 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
         exit_heatmaps.png, first_step.png, time_budget.png,
         time_to_exit.png, prediction.png
         visits/visits_histogram.png  visits per ion, all ions and by the other K+ at end_1
-        visits/visit_<k>.csv, visits/visit_<k>[_all|_by_k].png   k = 0, 1 (visits.csv
+        visits/visit_<k>.csv, visits/visit_<k>[_all|_by_k].png   k = 0-3 (visits.csv
                              numbering): of the ions with a visit k-1, the residue of
                              visit k or out (left before it); all ions and one panel per
                              other K+ in the cavity (visit 0: at end_1; visit k: above +
@@ -122,7 +122,7 @@ COLORS = {"E": "#e8766f", "Q": "#f2a35e", "N": "#5aa5d6", "D": "#5cbf6a"}
 GREY = "#9a9a9a"
 MIN_TEST = 20                     # departures needed for the memory test of a state
 N_SIM = 20000
-PLOT_VISITS = (0, 1)              # visits/visit_<k>*.png: visits.csv numbering, 0 = first visit
+PLOT_VISITS = (0, 1, 2, 3)            # visits/visit_<k>*.png: visits.csv numbering, 0 = first visit
 FROM_NEXT = "from \\ next"
 EQ_MAX_SLOPE = 0.5                # A per 100 ns: a smoothed RMSD this flat over EQ_WINDOW_NS = settled
 EQ_WINDOW_NS = 30.0
