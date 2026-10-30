@@ -1007,16 +1007,19 @@ def main():
     #     frame_duration      = frame_duration,
     # )
 
-    # from analysis.cavity_refilling_analysis import run_cavity_refilling_analysis
+    # CAVITY REFILLING / TRANSIT TIMES per run -> RUN*/cavity_refilling/cavity_refilling_results.csv;
+    # pool the runs with aggregate_cavity_refilling.py (transit-time histograms, with and without
+    # the frame-0 / pre-equilibration ions)
+    from analysis.cavity_refilling_analysis import run_cavity_refilling_analysis
 
-    # run_cavity_refilling_analysis(
-    #     permeation_events = analyzer.permeation_events,
-    #     results_dir       = results_dir,
-    #     channel_type      = args.channel_type,
-    #     frame_duration    = frame_duration,
-    #     end_frame         = end_frame,   # ← add this
-    #     force_rerun       = True,
-    # )
+    run_cavity_refilling_analysis(
+        permeation_events = analyzer.permeation_events,
+        results_dir       = results_dir,
+        channel_type      = args.channel_type,
+        frame_duration    = frame_duration,
+        end_frame         = end_frame,   # ← add this
+        force_rerun       = True,
+    )
 
     # # only these channel types have a bound ligand
     # # only these channel types have a bound ligand — each may use a different resname
@@ -1912,17 +1915,17 @@ def main():
     # protein has equilibrated (fitted Ca RMSD flat) are analysed. Stays >= 10 frames
     # for G12, 2 for G2. -> site_chain/t3.5_d10/ (G2: t3.5_d2/); pool the runs with
     # aggregate_site_chain.py. Needs ch1 / ch2 (regions 1 and 2) for the K+ counts.
-    from analysis.site_chain import run_site_chain
-    run_site_chain(
-        u, analyzer.permeation_events, asn_residues, glu_residues,
-        channel1=ch1, channel2=ch2,
-        results_dir=results_dir,
-        run=run_number,
-        channel_type=channel_type,
-        frame_duration=frame_duration,
-        analysis_start_frame=start_frame,
-        force_rerun=args.force_pkl_generation   # recollect the frames (reads the trajectory again)
-    )
+    # from analysis.site_chain import run_site_chain
+    # run_site_chain(
+    #     u, analyzer.permeation_events, asn_residues, glu_residues,
+    #     channel1=ch1, channel2=ch2,
+    #     results_dir=results_dir,
+    #     run=run_number,
+    #     channel_type=channel_type,
+    #     frame_duration=frame_duration,
+    #     analysis_start_frame=start_frame,
+    #     force_rerun=args.force_pkl_generation   # recollect the frames (reads the trajectory again)
+    # )
 
 #     #  NEW: Add proximity analysis
 #     print("\n" + "="*70)

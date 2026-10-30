@@ -4,6 +4,10 @@ aggregate_cavity_refilling.py
 Aggregates cavity_refilling_results.csv from all RUN directories and
 produces combined plots and a merged CSV.
 
+Transit-time histograms twice: transit_times_old/ (all ions, files *_old.png) and
+transit_times/ (without the ions present at frame 0 and those leaving the SF before
+their run's equilibration start, taken from the site chain's equilibration.csv).
+
 Usage:
     python aggregate_cavity_refilling.py /path/to/G12
     python aggregate_cavity_refilling.py /path/to/G12 --runs 1 2 3
@@ -66,8 +70,8 @@ def load_all_runs(base_dir, run_numbers=None):
 # Save aggregated CSV
 # ─────────────────────────────────────────────────────────────────────────────
 
-def save_aggregated_csv(all_rows, output_dir):
-    out = output_dir / "cavity_refilling_aggregated.csv"
+def save_aggregated_csv(all_rows, output_dir, name="cavity_refilling_aggregated.csv"):
+    out = output_dir / name
     if not all_rows:
         return
     fieldnames = ["run"] + [k for k in all_rows[0].keys() if k != "run"]
@@ -233,7 +237,8 @@ def _histogram(values, title, xlabel, out_path, color,
 
 
 
-def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_name=""):
+def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_name="",
+                            subdir="transit_times", suffix="", note="all runs combined"):
     """
     Aggregated histograms of frames/ns spent in each cavity region
     across all runs combined.
@@ -245,6 +250,8 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
         convert frame counts into nanoseconds for the "_transit_ns.png"
         plots. Pass the value matching how your trajectories were saved
         (e.g. --frame_duration 0.075 for a frame saved every 0.075 ns).
+    subdir, suffix, note : output subfolder, ending of the file names, and the
+        second title line (which ions the histograms hold).
     """
     regions = [
         ("r2_transit_frames",    "GLU/ASN cavity (SF exit \u2192 GLU/ASN exit)",     "#E67E22"),
@@ -256,7 +263,7 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
         ("r3_pct", "% of transit time in ASN\u2192HBC region","#2980B9"),
     ]
 
-    transit_dir = output_dir / "transit_times"
+    transit_dir = output_dir / subdir
     transit_dir.mkdir(parents=True, exist_ok=True)
     output_dir = transit_dir  # redirect all saves into subdir
 
@@ -291,44 +298,46 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
         print(f"    Range  = {arr.min():.0f} – {arr.max():.0f} frames")
 
         # frames histogram
-        fig, ax = plt.subplots(figsize=(6, 4))
+        fig, ax = plt.subplots(figsize=(9, 6))
         ax.hist(arr, bins=30, color=color, alpha=0.75,
                 edgecolor="black", linewidth=1.0)
         ax.axvline(mean_f,   color="red",    linewidth=2, linestyle="--",
                    label=f"Mean = {mean_f:.1f} f ({mean_ns:.3f} ns)")
         ax.axvline(median_f, color="green", linewidth=2, linestyle="-.",
                    label=f"Median = {median_f:.1f} f ({median_ns:.3f} ns)")
-        ax.set_xlabel("Frames", fontsize=14)
-        ax.set_ylabel("Number of permeation events", fontsize=14)
-        ax.set_title(f"Frames spent in {label}\n(all runs combined)",
-                     fontsize=13, fontweight="bold", pad=10)
-        ax.legend(fontsize=11)
+        ax.set_xlabel("Frames", fontsize=19)
+        ax.set_ylabel("Number of permeation events", fontsize=19)
+        ax.set_title(f"{channel_name}: frames spent in {label}\n({note}, n = {len(arr)})",
+                     fontsize=17, fontweight="bold", pad=10)
+        ax.legend(fontsize=15)
+        ax.tick_params(labelsize=16)
         ax.grid(True, alpha=0.25, axis="y")
         ax.spines[["top", "right"]].set_visible(False)
         plt.tight_layout()
-        fname = key.replace("_frames", "") + "_transit.png"
+        fname = key.replace("_frames", "") + f"_transit{suffix}.png"
         plt.savefig(output_dir / fname, dpi=150, bbox_inches="tight")
         plt.close()
         print(f"    Saved: {output_dir / fname}")
 
         # ns histogram
         vals_ns = arr * frame_duration
-        fig, ax = plt.subplots(figsize=(6, 4))
+        fig, ax = plt.subplots(figsize=(9, 6))
         ax.hist(vals_ns, bins=30, color=color, alpha=0.75,
                 edgecolor="black", linewidth=1.0)
         ax.axvline(mean_ns,   color="red",    linewidth=2, linestyle="--",
                    label=f"Mean = {mean_ns:.3f} ns")
         ax.axvline(median_ns, color="green", linewidth=2, linestyle="-.",
                    label=f"Median = {median_ns:.3f} ns")
-        ax.set_xlabel("Time (ns)", fontsize=14)
-        ax.set_ylabel("Number of permeation events", fontsize=14)
-        ax.set_title(f"Time spent in {label} (ns)\n(all runs combined)",
-                     fontsize=13, fontweight="bold", pad=10)
-        ax.legend(fontsize=11)
+        ax.set_xlabel("Time (ns)", fontsize=19)
+        ax.set_ylabel("Number of permeation events", fontsize=19)
+        ax.set_title(f"{channel_name}: time spent in {label}\n({note}, n = {len(arr)})",
+                     fontsize=17, fontweight="bold", pad=10)
+        ax.legend(fontsize=15)
+        ax.tick_params(labelsize=16)
         ax.grid(True, alpha=0.25, axis="y")
         ax.spines[["top", "right"]].set_visible(False)
         plt.tight_layout()
-        fname = key.replace("_frames", "") + "_transit_ns.png"
+        fname = key.replace("_frames", "") + f"_transit_ns{suffix}.png"
         plt.savefig(output_dir / fname, dpi=150, bbox_inches="tight")
         plt.close()
         print(f"    Saved: {output_dir / fname}")
@@ -354,23 +363,24 @@ def plot_transit_histograms(all_rows, output_dir, frame_duration=0.075, channel_
         print(f"    Mean   = {mean_pct:.1f} ± {std_pct:.1f} %")
         print(f"    Median = {med_pct:.1f} %")
 
-        fig, ax = plt.subplots(figsize=(6, 4))
+        fig, ax = plt.subplots(figsize=(9, 6))
         ax.hist(arr, bins=20, color=color, alpha=0.75,
                 edgecolor="black", linewidth=1.0)
         ax.axvline(mean_pct, color="red",    linewidth=2, linestyle="--",
                    label=f"Mean = {mean_pct:.1f} ± {std_pct:.1f} %")
         ax.axvline(med_pct,  color="green", linewidth=2, linestyle="-.",
                    label=f"Median = {med_pct:.1f} %")
-        ax.set_xlabel("% of total permeation time (SF exit → HBC gate)", fontsize=12)
-        ax.set_ylabel("Number of permeation events", fontsize=14)
-        ax.set_title(f"{channel_name} — {label}\n(all runs combined)",
-                     fontsize=13, fontweight="bold", pad=10)
-        ax.legend(fontsize=11)
+        ax.set_xlabel("% of total permeation time (SF exit → HBC gate)", fontsize=17)
+        ax.set_ylabel("Number of permeation events", fontsize=19)
+        ax.set_title(f"{channel_name}: {label}\n({note}, n = {len(arr)})",
+                     fontsize=17, fontweight="bold", pad=10)
+        ax.legend(fontsize=15)
         ax.set_xlim(0, 100)
+        ax.tick_params(labelsize=16)
         ax.grid(True, alpha=0.25, axis="y")
         ax.spines[["top", "right"]].set_visible(False)
         plt.tight_layout()
-        fname = key + "_histogram.png"
+        fname = key + f"_histogram{suffix}.png"
         plt.savefig(output_dir / fname, dpi=150, bbox_inches="tight")
         plt.close()
         print(f"    Saved: {output_dir / fname}")
@@ -565,6 +575,46 @@ def print_summary(all_rows):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Ions present at frame 0 / entering before equilibration
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_equilibration(base_dir, path=None):
+    """{run number: equilibration start frame} from the site chain's equilibration.csv
+    (default: the first <base>/aggregated_site_chain/*/equilibration.csv), or {} if none."""
+    if path is None:
+        found = sorted(Path(base_dir).glob("aggregated_site_chain/*/equilibration.csv"))
+        if not found:
+            return {}, None
+        path = found[0]
+    starts = {}
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            if str(row.get("used_start_frame", "")).strip() != "":
+                starts[int(float(row["run"]))] = int(float(row["used_start_frame"]))
+    return starts, path
+
+
+def drop_frame0_preequil(all_rows, eq_starts):
+    """The rows without the ions already in the cavity at frame 0 (r1_end == 0) and
+    without the ions leaving the SF (r1_end) before their run's equilibration start."""
+    kept, n0, npre = [], 0, 0
+    for r in all_rows:
+        try:
+            r1 = int(float(r["r1_end"]))
+        except (ValueError, TypeError, KeyError):
+            kept.append(r)
+            continue
+        run = int("".join(ch for ch in r["run"] if ch.isdigit()) or -1)
+        if r1 == 0:
+            n0 += 1
+        elif r1 < eq_starts.get(run, 0):
+            npre += 1
+        else:
+            kept.append(r)
+    return kept, n0, npre
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -578,13 +628,19 @@ def main():
                         help="Specific run numbers (e.g. --runs 1 2 3)")
     parser.add_argument("--output_dir", default=None,
                         help="Output directory (default: base_dir/cavity_refilling_aggregated)")
-    parser.add_argument("--frame_duration", type=float, default=0.075,
+    parser.add_argument("--frame_duration", type=float, default=None,
                         help="Time (ns) represented by one trajectory frame, "
                              "used to convert frame counts to ns in the "
-                             "transit-time histograms (default: 0.075)")
+                             "transit-time histograms (default: 0.4 for a G2 folder, else 0.075)")
+    parser.add_argument("--equilibration", default=None,
+                        help="equilibration.csv (run, used_start_frame) for leaving out the ions "
+                             "entering before equilibration (default: the site chain's one in "
+                             "base_dir/aggregated_site_chain/*/)")
     args = parser.parse_args()
 
     base_dir   = Path(args.base_dir)
+    if args.frame_duration is None:
+        args.frame_duration = 0.4 if base_dir.name.upper() == "G2" else 0.075
     output_dir = Path(args.output_dir) if args.output_dir \
                  else base_dir / "cavity_refilling_aggregated"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -608,9 +664,23 @@ def main():
     print_summary(all_rows)
     plot_all(all_rows, output_dir, channel_name=channel_name)
     plot_pct_bar_aggregated(all_rows, output_dir, channel_name=channel_name)
+    # transit times: all ions (old) and without the frame-0 / pre-equilibration ions (new)
     plot_transit_histograms(all_rows, output_dir,
                              frame_duration=args.frame_duration,
-                             channel_name=channel_name)
+                             channel_name=channel_name,
+                             subdir="transit_times_old", suffix="_old", note="old: all ions")
+    eq_starts, eq_path = load_equilibration(base_dir, args.equilibration)
+    if eq_path is None:
+        print("\n  [WARN] no equilibration.csv found (run aggregate_site_chain.py first, or give "
+              "--equilibration): only the ions present at frame 0 are left out")
+    kept, n0, npre = drop_frame0_preequil(all_rows, eq_starts)
+    print(f"\nTransit times without {n0} ions present at frame 0 and {npre} entering before "
+          f"equilibration ({eq_path}): {len(kept)} of {len(all_rows)} ions")
+    save_aggregated_csv(kept, output_dir, "cavity_refilling_aggregated_equilibrated.csv")
+    plot_transit_histograms(kept, output_dir,
+                             frame_duration=args.frame_duration,
+                             channel_name=channel_name,
+                             note="without frame-0 / pre-equilibration ions")
 
     print(f"\n✓ Done. All outputs in: {output_dir}/")
 
