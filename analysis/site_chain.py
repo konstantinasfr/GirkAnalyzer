@@ -114,7 +114,8 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              to it / out, free -> occupied, for all ions and per K+ count
             robustness/visit_<k>_free_vs_occupied_rules.csv, .png  the same table with two other
                              occupancy rules, to check the result does not come from the trip length:
-                             fixed frames (another K+ there in >= half of the same 10 / 2 frames
+                             half of trip (another K+ there in >= half of the trip's frames, whatever
+                             its length), fixed frames (another K+ there in >= half of the same 10 / 2 frames
                              right after leaving, for every ion) and leave frame (the frame it leaves)
             arrival_sharing.csv   visits starting while the residue holds another K+, and
                              how often that K+ has gone when the ion leaves (knock-on)
@@ -343,6 +344,12 @@ def _fixed_occupancy(occupied, f0, leave, last, n):
     return _window_occupancy(occupied, f0, leave + 1, b, leave, (max(b - leave, 1) + 1) // 2)
 
 
+def _half_occupancy(occupied, f0, a, b, decision):
+    """Robustness rule over the whole trip: residues holding another K+ in at least half of the frames
+    a..b, whatever the trip length (the frame it leaves when the trip is empty)."""
+    return _window_occupancy(occupied, f0, a, b, decision, (max(b - a + 1, 1) + 1) // 2)
+
+
 def build_visits(frames, stays, events, window, occ_frames=10):
     """
     (visits, events) DataFrames: visits one row per visit (see the module
@@ -398,6 +405,8 @@ def build_visits(frames, stays, events, window, occ_frames=10):
         e_out["occupied_sf"] = (_window_occupancy(occupied, f0, end_1 + 1, first - 1, end_1, occ_frames)
                                 if occupied is not None else np.nan)
         e_out["occupied_sf_frame"] = occupied[end_1 - f0] if occupied is not None else np.nan
+        e_out["occupied_sf_half"] = (_half_occupancy(occupied, f0, end_1 + 1, first - 1, end_1)
+                                     if occupied is not None else np.nan)
         e_out["occupied_sf_fixed"] = (_fixed_occupancy(occupied, f0, end_1, end_2, occ_frames)
                                       if occupied is not None else np.nan)
 
@@ -421,6 +430,8 @@ def build_visits(frames, stays, events, window, occ_frames=10):
                 row["occupied_leave"] = _window_occupancy(occupied, f0, v["end"] + 1,
                                                           (nxt["start"] if nxt else end_2 + 1) - 1, v["end"],
                                                           occ_frames)
+                row["occupied_leave_half"] = _half_occupancy(occupied, f0, v["end"] + 1,
+                                                             (nxt["start"] if nxt else end_2 + 1) - 1, v["end"])
                 row["occupied_leave_fixed"] = _fixed_occupancy(occupied, f0, v["end"], end_2, occ_frames)
             for j, (ac, bc) in enumerate(zip(a_cols, b_cols)):
                 pair = _mode_last([(at(f, ac), at(f, bc)) for f in range(lo, v["end"] + 1)])
@@ -1153,7 +1164,7 @@ def occupancy_steps(events, visits_raw, visits_site, max_k, visit=0, rule=""):
     One row per ion reaching visit `visit` (as in visit_table): start (other K+ bin at the
     step), occupied (residue groups holding another K+ at that moment: when the ion leaves
     the SF for visit 0, when it leaves visit-1 otherwise) and target (residue group of the
-    visit, or Exit). rule: occupancy column suffix ("" trip window, "_fixed" the same fixed
+    visit, or Exit). rule: occupancy column suffix ("" trip window, "_half" half of the trip, "_fixed" the same fixed
     frames after leaving for every ion, "_frame" the frame it leaves).
     """
     ev = events[events["n_visits"] >= visit]
@@ -1546,7 +1557,7 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
         rtest.to_csv(od / f"{name}_free_vs_occupied_residue.csv", index=False, float_format="%.2f")
         plot_free_vs_occupied_table(rtest, all_members, title, od / f"{name}_free_vs_occupied_table.png", k)
         rob = {"trip (main)": rtest}                           # robustness: other occupancy rules
-        for rule, lab in (("_fixed", "fixed frames"), ("_frame", "leave frame")):
+        for rule, lab in (("_half", "half of trip"), ("_fixed", "fixed frames"), ("_frame", "leave frame")):
             st_r = occupancy_steps(events, visits_raw, visits_site, max_k, k, rule)
             if len(st_r):
                 rob[lab] = residue_test(st_r, all_members, max_k)
@@ -1559,7 +1570,7 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
             plot_free_vs_occupied_table(
                 rob, all_members, title, rd / f"{name}_free_vs_occupied_rules.png", k,
                 note=f"occupancy rules: trip (main) = another K+ there ≥ {occ_frames} frames of the "
-                     f"trip to the next stop (all if shorter); fixed frames = there in ≥ half of the same "
+                     f"trip to the next stop (all if shorter); half of trip = there in ≥ half of the trip's frames; fixed frames = there in ≥ half of the same "
                      f"{occ_frames} frames after leaving {when} for every ion; leave frame = there "
                      f"at the frame it leaves {when}")
             rep_rob.append((k, rob))
@@ -1590,6 +1601,7 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
     if rep_rob:
         rep(f"\nROBUSTNESS: the same per-residue test with other occupancy rules (all K+ counts together;\n"
             f"trip (main) = another K+ there >= {occ_frames} frames of the trip to the next stop, all if shorter;\n"
+            f"half of trip = there in >= half of the frames of the trip, whatever its length;\n"
             f"fixed frames = there in >= half of the same {occ_frames} frames after leaving, for every ion;\n"
             f"leave frame = there at the frame the ion leaves); to it / out: free -> occupied")
         for k, rob in rep_rob:
