@@ -560,7 +560,7 @@ def main():
 
 
 
-    elif args.channel_type == "G12_D173N":
+    elif args.channel_type == "G12_D173N" or args.channel_type == "G12_D173N_4fs":
         # upper1 = [107, 431, 757, 1082]
         # upper1 = [105, 429, 755, 1080]   755 is the R after GYGY in subunit C; the Y is 754
         upper1 = [105, 429, 754, 1080]  # Y after GYG in every subunit (checked on a frame PDB)
@@ -631,14 +631,17 @@ def main():
         #     1303: "2a",
         #     1304: "2b"
         # }
-
-        top_file =    Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_D173N/RUN{run_number}/com.prmtop")
-        traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_D173N/RUN{run_number}/protein.nc")
+        if args.channel_type == "G12_D173N":
+            top_file =    Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_D173N/RUN{run_number}/com.prmtop")
+            traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_D173N/RUN{run_number}/protein.nc")
+        else:
+            top_file =    Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_D173N_4fs/RUN{run_number}/com_4fs.prmtop")
+            traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_D173N_4fs/RUN{run_number}/protein.nc")
         results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
         results_dir.mkdir(parents=True, exist_ok=True)
 
 
-    elif args.channel_type == "G12_E141Q":
+    elif args.channel_type == "G12_E141Q" or args.channel_type == "G12_E141Q_4fs":
         # upper1 = [107, 431, 757, 1082]
         # upper1 = [105, 429, 755, 1080]   755 is the R after GYGY in subunit C (as in GAT / D173N)
         upper1 = [105, 429, 754, 1080]  # Y after GYG; assumes the GAT / D173N numbering (no frame checked)
@@ -711,9 +714,14 @@ def main():
         #     1304: "2b"
         # }
 
-        top_file =    Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_E141Q/RUN{run_number}/com.prmtop")
-        traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_E141Q/RUN{run_number}/protein.nc")
-        results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
+        if args.channel_type == "G12_E141Q":
+            top_file =    Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_E141Q/RUN{run_number}/com.prmtop")
+            traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_E141Q/RUN{run_number}/protein.nc")
+            results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
+        else:
+            top_file =    Path(f"/media/ziyue/0ee8ca64-ce91-46ac-a5e9-713084eedfed/mutant/G12_E141Q/RUN{run_number}/com_4fs.prmtop")
+            traj_file =   Path(f"/media/ziyue/0ee8ca64-ce91-46ac-a5e9-713084eedfed/mutant/G12_E141Q/RUN{run_number}/traj/protein.nc")
+            results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
         results_dir.mkdir(parents=True, exist_ok=True)
 
 
