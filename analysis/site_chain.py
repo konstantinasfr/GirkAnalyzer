@@ -112,6 +112,10 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              occupied -> going to E152.2a, ...)
             visit_<k>_free_vs_occupied_table.png  the same per-residue test as one table:
                              to it / out, free -> occupied, for all ions and per K+ count
+            robustness/visit_<k>_free_vs_occupied_rules.csv, .png  the same table with two other
+                             occupancy rules, to check the result does not come from the trip length:
+                             fixed frames (another K+ there in >= half of the same 10 / 2 frames
+                             right after leaving, for every ion) and leave frame (the frame it leaves)
             arrival_sharing.csv   visits starting while the residue holds another K+, and
                              how often that K+ has gone when the ion leaves (knock-on)
             occupancy_summary.txt
@@ -328,6 +332,14 @@ def _window_occupancy(occupied, f0, a, b, decision, need):
     return ";".join(sorted(r for r, c in cnt.items() if c >= need))
 
 
+def _fixed_occupancy(occupied, f0, leave, last, n):
+    """Robustness rule, the same frames for every ion whatever it does next: residues holding another
+    K+ in at least half of the n frames right after it leaves (leave+1..leave+n; cut at the frame it
+    leaves the cavity, then half of those; the frame it leaves when none are left)."""
+    b = min(leave + n, last, f0 + len(occupied) - 1)
+    return _window_occupancy(occupied, f0, leave + 1, b, leave, (max(b - leave, 1) + 1) // 2)
+
+
 def build_visits(frames, stays, events, window, occ_frames=10):
     """
     (visits, events) DataFrames: visits one row per visit (see the module
@@ -383,6 +395,8 @@ def build_visits(frames, stays, events, window, occ_frames=10):
         e_out["occupied_sf"] = (_window_occupancy(occupied, f0, end_1 + 1, first - 1, end_1, occ_frames)
                                 if occupied is not None else np.nan)
         e_out["occupied_sf_frame"] = occupied[end_1 - f0] if occupied is not None else np.nan
+        e_out["occupied_sf_fixed"] = (_fixed_occupancy(occupied, f0, end_1, end_2, occ_frames)
+                                      if occupied is not None else np.nan)
 
         for i, v in enumerate(visits):
             nxt = visits[i + 1] if i + 1 < len(visits) else None
@@ -404,6 +418,7 @@ def build_visits(frames, stays, events, window, occ_frames=10):
                 row["occupied_leave"] = _window_occupancy(occupied, f0, v["end"] + 1,
                                                           (nxt["start"] if nxt else end_2 + 1) - 1, v["end"],
                                                           occ_frames)
+                row["occupied_leave_fixed"] = _fixed_occupancy(occupied, f0, v["end"], end_2, occ_frames)
             for j, (ac, bc) in enumerate(zip(a_cols, b_cols)):
                 pair = _mode_last([(at(f, ac), at(f, bc)) for f in range(lo, v["end"] + 1)])
                 suffix = "" if j == 0 else f"_c{j}"
@@ -1130,12 +1145,13 @@ def _occ_set(text):
     return set(t for t in str(text).split(";") if t and t != "nan")
 
 
-def occupancy_steps(events, visits_raw, visits_site, max_k, visit=0):
+def occupancy_steps(events, visits_raw, visits_site, max_k, visit=0, rule=""):
     """
     One row per ion reaching visit `visit` (as in visit_table): start (other K+ bin at the
     step), occupied (residue groups holding another K+ at that moment: when the ion leaves
     the SF for visit 0, when it leaves visit-1 otherwise) and target (residue group of the
-    visit, or Exit).
+    visit, or Exit). rule: occupancy column suffix ("" trip window, "_fixed" the same fixed
+    frames after leaving for every ion, "_frame" the frame it leaves).
     """
     ev = events[events["n_visits"] >= visit]
     keys = list(zip(ev["run"], ev["event"]))
@@ -1143,11 +1159,15 @@ def occupancy_steps(events, visits_raw, visits_site, max_k, visit=0):
     here = visits_site.set_index(["run", "event", "visit"])["site"] if len(visits_site) else {}
     here_raw = raw["site"] if raw is not None else {}
     if visit == 0:
-        total, occ = ev["sf_count"].to_numpy(), ev["occupied_sf"].to_numpy()
+        if f"occupied_sf{rule}" not in ev:
+            return pd.DataFrame()
+        total, occ = ev["sf_count"].to_numpy(), ev[f"occupied_sf{rule}"].to_numpy()
     else:
         tot = raw["above"] + raw["below"]
         total = [tot[(r, e, visit - 1)] for r, e in keys]
-        occ = [raw["occupied_leave"][(r, e, visit - 1)] for r, e in keys]
+        if f"occupied_leave{rule}" not in raw:
+            return pd.DataFrame()
+        occ = [raw[f"occupied_leave{rule}"][(r, e, visit - 1)] for r, e in keys]
     st = pd.DataFrame(dict(
         start=[bin_label(k, max_k) for k in total],
         known=[isinstance(o, str) for o in occ],
@@ -1281,27 +1301,36 @@ def plot_free_vs_occupied(test, groups, title, out_file, visit=0, min_n=5):
     plt.close(fig)
 
 
-def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_bin=15, min_n=5):
+def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_bin=15, min_n=5, note=None):
     """Table, one row per residue: % of the ions going to it and % going out when that residue is free
     -> holds another K+, for all ions and per other-K+ count (counts with >= min_bin ions); cells from
     fewer than min_n ions on a side in grey; effects from all ions (going to it: occupied / free >= 1.5
-    attracts, <= 0.67 blocks; going out: a change of 8 points or more)."""
-    t = rtest[rtest["group"].isin(residues)]
+    attracts, <= 0.67 blocks; going out: a change of 8 points or more). rtest can also be a dict
+    {occupancy rule: table}: one row per residue and rule (the robustness comparison)."""
+    tests = rtest if isinstance(rtest, dict) else {None: rtest}
+    tests = {k: v[v["group"].isin(residues)] for k, v in tests.items()}
+    t = next(iter(tests.values()))
     if not len(t):
         return
     n_bin = t.groupby("start")[["n_free", "n_occupied"]].first().sum(axis=1)
     bins = ["all"] + [b for b in dict.fromkeys(t["start"]) if b != "all" and n_bin.get(b, 0) >= min_bin]
     when = "when the ion leaves the SF" if visit == 0 else f"when leaving visit {visit}"
     lab = lambda b: "all ions" if b == "all" else f"{b} other K+"
-    cols = ["residue", "ions\nfree / occ."] + [f"→ it\n{lab(b)}" for b in bins] + \
+    multi = len(tests) > 1
+    cols = ["residue"] + (["occupancy\nrule"] if multi else []) + ["ions\nfree / occ."] + \
+           [f"→ it\n{lab(b)}" for b in bins] + \
            [f"out\n{lab(b)}" for b in bins] + ["K+ there:\ngoing to it", "K+ there:\ngoing out"]
-    cells, grey = [], []
-    for res in residues:
-        g = t[t["group"] == res].set_index("start")
+    cells, grey, shade = [], [], []
+    for ri, (res, rule) in enumerate((r, k) for r in residues for k in tests):
+        tt = tests[rule]
+        g = tt[tt["group"] == res].set_index("start")
         if "all" not in g.index:
             continue
         a = g.loc["all"]
-        c, gr = [res, f"{int(a['n_free'])} / {int(a['n_occupied'])}"], [False, False]
+        first = rule == next(iter(tests))
+        c = [res if first else ""] + ([rule] if multi else []) + [f"{int(a['n_free'])} / {int(a['n_occupied'])}"]
+        gr = [False] * len(c)
+        shade.append(residues.index(res) % 2 == 1)
         for what in ("to_group", "out"):
             for b in bins:
                 if b not in g.index or not g.loc[b, "n_free"] or not g.loc[b, "n_occupied"]:
@@ -1331,7 +1360,8 @@ def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_b
         cells.append(c); grey.append(gr)
     if not cells:
         return
-    widths = [1.6, 1.6] + [2.0] * (2 * len(bins)) + [2.2, 2.2]
+    off = 1 if multi else 0                                     # the extra "occupancy rule" column
+    widths = [1.6] + ([2.3] if multi else []) + [1.6] + [2.0] * (2 * len(bins)) + [2.2, 2.2]
     fig, ax = plt.subplots(figsize=(1.0 * sum(widths), 1.0 + 0.42 * (len(cells) + 2)))
     ax.axis("off")
     tb = ax.table(cellText=cells, colLabels=cols, loc="upper center", cellLoc="center",
@@ -1339,7 +1369,7 @@ def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_b
     tb.auto_set_font_size(False)
     tb.set_fontsize(16)
     tb.scale(1, 2.3)
-    out_cols = set(range(2 + len(bins), 2 + 2 * len(bins)))
+    out_cols = set(range(2 + off + len(bins), 2 + off + 2 * len(bins)))
     eff_cols = (len(cols) - 2, len(cols) - 1)
     for (i, j), cell in tb.get_celld().items():
         cell.set_edgecolor("#C9D3D8")
@@ -1351,7 +1381,9 @@ def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_b
             continue
         if j in out_cols:
             cell.set_facecolor("#EEF3F5")
-        if j in (0, 2, 2 + len(bins)) or j in eff_cols:
+        elif multi and shade[i - 1]:
+            cell.set_facecolor("#F6F6F6")
+        if j in (0, 2 + off, 2 + off + len(bins)) or j in eff_cols:
             cell.get_text().set_fontweight("bold")
         if j in eff_cols:
             cell.get_text().set_color({"attracts": "#1a7f37", "blocks": "#c0392b", "more leave": "#1a7f37",
@@ -1362,7 +1394,7 @@ def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_b
                  f"residue is free → already holds another K+, by the other K+ in the cavity {when}\n"
                  f"(K+ there, from all ions: going to it occupied ≥ 1.5× free attracts, ≤ free / 1.5 blocks (– below 5%); "
                  f"going out ± 8 points; grey: fewer than "
-                 f"{min_n} ions on a side)", fontsize=16)
+                 f"{min_n} ions on a side)" + (f"\n{note}" if note else ""), fontsize=16)
     fig.tight_layout()
     fig.savefig(out_file, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -1471,7 +1503,7 @@ def plot_occupancy_summary(summary, occ, groups, title, out_file, visit=0, min_n
     return pd.DataFrame(rows)
 
 
-def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out_dir, dt=None):
+def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out_dir, dt=None, occ_frames=10):
     """Residue occupancy by the other K+ at each step, written to out_dir/occupancy/."""
     if "occupied_sf" not in events or events["occupied_sf"].isna().all():
         print("site_chain: no residue occupancy in the frames (collected with an older version); "
@@ -1496,6 +1528,7 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
         "contact) for at least as many frames as a stay (or all of them when shorter) while the ion moves from where it\n"
         "leaves - the SF (visit 1) or its previous visit (visit k) - to its next visit or the exit; if it goes straight\n"
         "on, at the frame it leaves")
+    rep_rob = []
     for k in PLOT_VISITS:
         st = occupancy_steps(events, visits_raw, visits_site, max_k, k)
         if not len(st):
@@ -1509,6 +1542,24 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
         rtest = residue_test(st, all_members, max_k)          # each residue against itself
         rtest.to_csv(od / f"{name}_free_vs_occupied_residue.csv", index=False, float_format="%.2f")
         plot_free_vs_occupied_table(rtest, all_members, title, od / f"{name}_free_vs_occupied_table.png", k)
+        rob = {"trip (main)": rtest}                           # robustness: other occupancy rules
+        for rule, lab in (("_fixed", "fixed frames"), ("_frame", "leave frame")):
+            st_r = occupancy_steps(events, visits_raw, visits_site, max_k, k, rule)
+            if len(st_r):
+                rob[lab] = residue_test(st_r, all_members, max_k)
+        if len(rob) > 1:
+            rd = od / "robustness"
+            rd.mkdir(exist_ok=True)
+            pd.concat([v.assign(rule=lab) for lab, v in rob.items()]).to_csv(
+                rd / f"{name}_free_vs_occupied_rules.csv", index=False, float_format="%.2f")
+            when = "the SF" if k == 0 else f"visit {k}"
+            plot_free_vs_occupied_table(
+                rob, all_members, title, rd / f"{name}_free_vs_occupied_rules.png", k,
+                note=f"occupancy rules: trip (main) = another K+ there ≥ {occ_frames} frames of the "
+                     f"trip to the next stop (all if shorter); fixed frames = there in ≥ half of the same "
+                     f"{occ_frames} frames after leaving {when} for every ion; leave frame = there "
+                     f"at the frame it leaves {when}")
+            rep_rob.append((k, rob))
         for g in groups:
             if len(members[g]) > 1:
                 plot_free_vs_occupied(rtest, members[g], title, od / f"{name}_free_vs_occupied_{g}.png", k)
@@ -1533,6 +1584,24 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
             rep(f"    {r['group']:>8}: free (n={r['n_free']:>3}) to it {r['to_group_free']:5.1f}%  out "
                 f"{r['out_free']:5.1f}%   |   occupied (n={r['n_occupied']:>3}) to it {r['to_group_occupied']:5.1f}%"
                 f"  out {r['out_occupied']:5.1f}%")
+    if rep_rob:
+        rep(f"\nROBUSTNESS: the same per-residue test with other occupancy rules (all K+ counts together;\n"
+            f"trip (main) = another K+ there >= {occ_frames} frames of the trip to the next stop, all if shorter;\n"
+            f"fixed frames = there in >= half of the same {occ_frames} frames after leaving, for every ion;\n"
+            f"leave frame = there at the frame the ion leaves); to it / out: free -> occupied")
+        for k, rob in rep_rob:
+            rep(f"  VISIT {k + 1}")
+            rep("    residue    " + "".join(f"{lab:>34}" for lab in rob))
+            for res in all_members:
+                cells = []
+                for v in rob.values():
+                    r = v[(v["group"] == res) & (v["start"] == "all")]
+                    if not len(r):
+                        cells.append(f"{'-':>34}"); continue
+                    r = r.iloc[0]
+                    cells.append(f"{r['to_group_free']:>5.1f} -> {r['to_group_occupied']:>5.1f} | "
+                                 f"{r['out_free']:>5.1f} -> {r['out_occupied']:>5.1f}".rjust(34))
+                rep(f"    {res:<11}" + "".join(cells))
     sh = arrival_sharing(visits_raw, None)
     sh.to_csv(od / "arrival_sharing.csv", index=False, float_format="%.2f")
     rep("\nSHARED ARRIVALS: visits that start while the same residue already holds another K+, and of those the %\n"
@@ -1722,7 +1791,7 @@ def plot_prediction(obs_t, sim_t, obs_n, sim_n, title, out_file):
 
 def analyze_model(visits, events, out_dir, head, frame_duration, model="residue", max_above=5,
                   max_below=3, max_sf=5, include_frame0=False, include_preequil=False, crowded=4,
-                  n_sim=N_SIM, seed=0):
+                  n_sim=N_SIM, seed=0, occ_frames=10):
     """Tables, tests and plots of one model; see the module docstring. events may carry
     eq_start_frame (per run): ions leaving the SF before it are left out unless include_preequil."""
     out_dir = Path(out_dir)
@@ -2044,7 +2113,7 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
         summ.to_csv(vis_dir / f"{name}_summary.csv", index=False, float_format="%.2f")
         plot_visit_summary(summ, head_k, vis_dir / f"{name}_summary.png", k)
         plot_visit_k_time(kt, head_k, vis_dir / f"{name}_k_time.png", k)
-    occupancy_analysis(events, visits, vs, sites, max_sf, f"{head}: {model} model", out_dir, dt)
+    occupancy_analysis(events, visits, vs, sites, max_sf, f"{head}: {model} model", out_dir, dt, occ_frames)
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
     plot_prediction(obs_t * dt, sim_t * dt, obs_n, sim_n, f"{head}: chain against real ions",
@@ -2140,7 +2209,7 @@ def analyze_all(frames, stays, events, out_base, head, frame_duration, window, m
                                                                      include_preequil),
                       head, frame_duration, model=model, max_above=max_above, max_below=max_below,
                       max_sf=max_sf, include_frame0=include_frame0, include_preequil=include_preequil,
-                      crowded=crowded)
+                      crowded=crowded, occ_frames=occ_frames)
     return visits, ev
 
 
