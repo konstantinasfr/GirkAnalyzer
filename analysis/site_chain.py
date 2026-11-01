@@ -119,6 +119,9 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
             arrival_sharing.csv   visits starting while the residue holds another K+, and
                              how often that K+ has gone when the ion leaves (knock-on)
             occupancy_summary.txt
+        stops/stops.csv, .png, .txt   per residue (a stop): visits, time there, next stop (out / GLU
+                             ring / lower ring), time still needed to leave the cavity from the visit,
+                             and the SF -> exit time of the ions stopping there vs never (is it a trap?)
 Over runs: aggregate_site_chain.py (repo root).
 
 USAGE - from main.py (after ch1, ch2 and analyzer exist)
@@ -1612,6 +1615,112 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
     rep.write(od / "occupancy_summary.txt")
 
 
+def _mse(x):
+    """'mean ± SE (median)' of a series (ns), '–' when empty."""
+    x = pd.Series(x).dropna()
+    if not len(x):
+        return "–", np.nan, np.nan, np.nan
+    se = x.std(ddof=1) / np.sqrt(len(x)) if len(x) > 1 else np.nan
+    txt = f"{x.mean():.1f} ± {se:.1f} ({x.median():.1f})" if np.isfinite(se) else f"{x.mean():.1f} ({x.median():.1f})"
+    return txt, x.mean(), se, x.median()
+
+
+def stop_table(events, visits, sites, ring, dt):
+    """Per site (a stop): its visits, how long ions stay, where they go next (out, the GLU ring, the
+    lower ring), how long they still need to leave the cavity from the start of the visit, and the
+    SF -> exit time of the ions stopping there at least once vs never."""
+    raw_ring = dict(zip(visits["site"], visits["ring"]))        # raw residue names (next_site is raw)
+    nxt_ring = visits["next_site"].map(lambda x: "Exit" if x == EXIT else raw_ring.get(x, "LOWER"))
+    v = visits.assign(next_ring=nxt_ring.values,
+                      site=visits["model_site"] if "model_site" in visits else visits["site"])
+    transit = events.set_index(["run", "event"])["transit_frames"] * dt
+    n_ions = len(events)
+    rows = []
+    for site in sites:
+        g = v[v["site"] == site]
+        if not len(g):
+            continue
+        ions = set(zip(g["run"], g["event"]))
+        at = transit[[k in ions for k in transit.index]]
+        never = transit[[k not in ions for k in transit.index]]
+        nv = events.set_index(["run", "event"])["n_visits"]
+        row = dict(site=site, ring=ring.get(site, ""), visits=len(g), ions=len(ions), pct_ions=100 * len(ions) / n_ions)
+        for col, x in (("stay", g["residue_frames"] * dt), ("to_exit", g["to_exit_frames"] * dt),
+                       ("transit_stop", at), ("transit_never", never)):
+            row[f"{col}_txt"], row[f"{col}_mean_ns"], row[f"{col}_sem_ns"], row[f"{col}_median_ns"] = _mse(x)
+        for t, name in (("Exit", "out"), ("GLU", "to_glu"), ("LOWER", "to_lower")):
+            row[f"pct_{name}"] = 100 * (g["next_ring"] == t).mean()
+        row["visits_per_ion_stop"] = nv[[k in ions for k in nv.index]].mean()
+        row["visits_per_ion_never"] = nv[[k not in ions for k in nv.index]].mean()
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def plot_stop_table(tab, title, out_file, min_n=15):
+    """The stop table as a figure; rows from fewer than min_n visits in grey."""
+    if not len(tab):
+        return
+    cols = ["stop", "visits", "ions\n(% of ions)", "time there (ns)\nmean ± SE (median)", "next:\nout",
+            "next:\nGLU ring", "next:\nlower ring", "time to leave the cavity\nfrom the visit (ns)",
+            "SF → exit (ns)\nions stopping here", "SF → exit (ns)\nions never here"]
+    cells = [[r["site"], str(r["visits"]), f"{r['ions']} ({r['pct_ions']:.0f}%)", r["stay_txt"],
+              f"{r['pct_out']:.0f}%", f"{r['pct_to_glu']:.0f}%", f"{r['pct_to_lower']:.0f}%", r["to_exit_txt"],
+              r["transit_stop_txt"], r["transit_never_txt"]] for r in tab.to_dict("records")]
+    widths = [1.5, 1.0, 1.5, 2.6, 1.0, 1.2, 1.2, 3.0, 2.6, 2.6]
+    fig, ax = plt.subplots(figsize=(1.0 * sum(widths), 1.0 + 0.42 * (len(cells) + 2)))
+    ax.axis("off")
+    tb = ax.table(cellText=cells, colLabels=cols, loc="upper center", cellLoc="center",
+                  colWidths=[x / sum(widths) for x in widths])
+    tb.auto_set_font_size(False)
+    tb.set_fontsize(16)
+    tb.scale(1, 2.3)
+    for (i, j), cell in tb.get_celld().items():
+        cell.set_edgecolor("#C9D3D8")
+        if i == 0:
+            cell.set_facecolor("#5B6770" if j in (4, 5, 6) else "#123B4A")
+            cell.get_text().set_color("white")
+            cell.get_text().set_fontweight("bold")
+            cell.set_height(cell.get_height() * 1.9)
+            continue
+        r = tab.iloc[i - 1]
+        if j in (4, 5, 6):
+            cell.set_facecolor("#EEF3F5")
+        if j in (0, 3, 7):
+            cell.get_text().set_fontweight("bold")
+        if r["visits"] < min_n:
+            cell.get_text().set_color("#9a9a9a")
+    ax.set_title(f"{title}\nstops: how long ions stay at each residue, where they go next, and how long they still need "
+                 f"to leave the cavity (from the start of the visit)\n(SF → exit: whole cavity time of the ions that "
+                 f"stop here at least once vs never; grey: fewer than {min_n} visits)", fontsize=16)
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def stop_analysis(events, visits, sites, ring, title, out_dir, dt):
+    """Is a residue a trap? Writes out_dir/stops/stops.csv, .png, .txt."""
+    if not len(visits):
+        return
+    od = Path(out_dir) / "stops"
+    od.mkdir(exist_ok=True)
+    tab = stop_table(events, visits, sites, ring, dt)
+    keep = [c for c in tab.columns if not c.endswith("_txt")]
+    tab[keep].to_csv(od / "stops.csv", index=False, float_format="%.2f")
+    plot_stop_table(tab, title, od / "stops.png")
+    rep = _Report()
+    rep(f"STOPS  {title}")
+    rep("per residue: visits; ions stopping there (% of ions); time there; next stop; time still needed to leave the\n"
+        "cavity from the start of the visit; SF -> exit time of the ions stopping there at least once vs never\n"
+        "(with their visits per ion: ions with more stops take longer anyway)")
+    for r in tab.to_dict("records"):
+        rep(f"  {r['site']:<9} {r['visits']:>4} visits, {r['ions']:>4} ions ({r['pct_ions']:4.0f}%)  there "
+            f"{r['stay_txt']:<22} next out {r['pct_out']:3.0f}%  GLU {r['pct_to_glu']:3.0f}%  lower "
+            f"{r['pct_to_lower']:3.0f}%  to leave {r['to_exit_txt']:<22} SF->exit {r['transit_stop_txt']} "
+            f"({r['visits_per_ion_stop']:.1f} visits/ion) vs never {r['transit_never_txt']} "
+            f"({r['visits_per_ion_never']:.1f})")
+    rep.write(od / "stops.txt")
+
+
 def leaving_by_visit_table(events, dt, max_visit=LEAVE_VISITS):
     """
     The ions grouped by the visit at which they leave the cavity: visit k = left
@@ -2114,6 +2223,7 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
         plot_visit_summary(summ, head_k, vis_dir / f"{name}_summary.png", k)
         plot_visit_k_time(kt, head_k, vis_dir / f"{name}_k_time.png", k)
     occupancy_analysis(events, visits, vs, sites, max_sf, f"{head}: {model} model", out_dir, dt, occ_frames)
+    stop_analysis(events, visits, sites, ring, f"{head}: {model} model", out_dir, dt)
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
     plot_prediction(obs_t * dt, sim_t * dt, obs_n, sim_n, f"{head}: chain against real ions",
