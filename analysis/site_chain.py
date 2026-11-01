@@ -101,6 +101,8 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              occupied, per other-K+ count
             visit_<k>_free_vs_occupied.csv, .png  per residue group and K+ count: % going to
                              it and % going out when it is free vs occupied
+            visit_<k>_summary_occupancy.csv, .png  the visit summary table with, next to each
+                             residue group's % going to it, the % seeing it occupied
             arrival_sharing.csv   visits starting while the residue holds another K+, and
                              how often that K+ has gone when the ion leaves (knock-on)
             occupancy_summary.txt
@@ -1240,7 +1242,67 @@ def arrival_sharing(visits_raw, model_names):
     return pd.DataFrame(rows)
 
 
-def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out_dir):
+def plot_occupancy_summary(summary, occ, groups, title, out_file, visit=0, min_n=15):
+    """The visit summary table with, next to each residue group's % of the ions going to it, the % of
+    the ions that saw it already holding another K+ (from the ions of runs with occupancy)."""
+    occ = occ.set_index("start")
+    when = "when the ion leaves the SF" if visit == 0 else f"when leaving visit {visit}"
+    cols = ["other K+", "ions", "% of ions", f"visit {visit + 1}\ntime (ns)", "out\ntime (ns)", "out"]
+    for g in groups:
+        cols += [f"→ {g}", f"{g}\noccupied"]
+    cols.append("ions with\noccupancy")
+    rows, cells = [], []
+    for r in summary.to_dict("records"):
+        o = occ.loc[r["start"]] if r["start"] in occ.index else None
+        t = "–" if not r["n_visits"] else (f"{r['mean_ns']:.1f} ± {r['sem_ns']:.1f}" if np.isfinite(r["sem_ns"])
+                                           else f"{r['mean_ns']:.1f}")
+        ot = "–" if not r["n_out"] else (f"{r['out_mean_ns']:.1f} ± {r['out_sem_ns']:.1f}"
+                                         if np.isfinite(r["out_sem_ns"]) else f"{r['out_mean_ns']:.1f}")
+        c = ["all ions" if r["start"] == "all" else r["start"], str(r["n_ions"]), f"{r['pct_ions']:.0f}%", t, ot,
+             f"{r['out']:.0f}%"]
+        row = dict(start=r["start"], n_ions=r["n_ions"], pct_ions=r["pct_ions"], out=r["out"])
+        for g in groups:
+            occ_v = o[g] if o is not None else np.nan
+            c += [f"{r.get(g, 0):.0f}%", "–" if not np.isfinite(occ_v) else f"{occ_v:.0f}%"]
+            row[f"to_{g}"], row[f"{g}_occupied"] = r.get(g, np.nan), occ_v
+        n_occ = int(o["n_ions"]) if o is not None else 0
+        c.append(str(n_occ))
+        row["n_ions_occupancy"] = n_occ
+        cells.append(c)
+        rows.append(row)
+    widths = [1.3, 0.9, 1.15, 1.9, 1.7, 0.95] + [1.0, 1.25] * len(groups) + [1.35]
+    fig, ax = plt.subplots(figsize=(1.0 * sum(widths), 0.9 + 0.36 * (len(cells) + 2)))
+    ax.axis("off")
+    tb = ax.table(cellText=cells, colLabels=cols, loc="upper center", cellLoc="center",
+                  colWidths=[x / sum(widths) for x in widths])
+    tb.auto_set_font_size(False)
+    tb.set_fontsize(15)
+    tb.scale(1, 2.2)
+    occ_cols = {6 + 2 * i + 1 for i in range(len(groups))}
+    for (i, j), cell in tb.get_celld().items():
+        cell.set_edgecolor("#C9D3D8")
+        if i == 0:
+            cell.set_facecolor("#5B6770" if j in occ_cols else "#123B4A")
+            cell.get_text().set_color("white")
+            cell.get_text().set_fontweight("bold")
+            cell.set_height(cell.get_height() * 1.6)
+            continue
+        if j in occ_cols:
+            cell.set_facecolor("#EEF3F5")
+        if rows[i - 1]["start"] == "all" or j in (2, 3, 4):
+            cell.get_text().set_fontweight("bold")
+        if rows[i - 1]["n_ions"] < min_n:
+            cell.get_text().set_color("#9a9a9a")
+    ax.set_title(f"{title}\nvisit {visit + 1}: where the ions go (→, % of the ions) and which residues already hold "
+                 f"another K+ (occupied, % of the ions), by the other K+ in the cavity {when}\n"
+                 f"(occupied from the ions of runs with occupancy; grey: fewer than {min_n} ions)", fontsize=16)
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return pd.DataFrame(rows)
+
+
+def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out_dir, dt=None):
     """Residue occupancy by the other K+ at each step, written to out_dir/occupancy/."""
     if "occupied_sf" not in events or events["occupied_sf"].isna().all():
         print("site_chain: no residue occupancy in the frames (collected with an older version); "
@@ -1267,6 +1329,11 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
         test.to_csv(od / f"{name}_free_vs_occupied.csv", index=False, float_format="%.2f")
         plot_occupancy_by_k(occ, groups, title, od / f"{name}_occupied_by_k.png", k)
         plot_free_vs_occupied(test, groups, title, od / f"{name}_free_vs_occupied.png", k)
+        if dt is not None:
+            summ = visit_summary_table(visit_table(events, visits_site, sites, max_k, k),
+                                       visit_k_time_table(events, visits_site, max_k, dt, k))
+            plot_occupancy_summary(summ, occ, groups, title, od / f"{name}_summary_occupancy.png", k).to_csv(
+                od / f"{name}_summary_occupancy.csv", index=False, float_format="%.2f")
         rep(f"\nVISIT {k + 1}: % of the ions seeing each residue group occupied, by other K+")
         rep("    other K+     n  " + "".join(f"{g:>8}" for g in groups))
         for r in occ.to_dict("records"):
@@ -1787,7 +1854,7 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
         summ.to_csv(vis_dir / f"{name}_summary.csv", index=False, float_format="%.2f")
         plot_visit_summary(summ, head_k, vis_dir / f"{name}_summary.png", k)
         plot_visit_k_time(kt, head_k, vis_dir / f"{name}_k_time.png", k)
-    occupancy_analysis(events, visits, vs, sites, max_sf, f"{head}: {model} model", out_dir)
+    occupancy_analysis(events, visits, vs, sites, max_sf, f"{head}: {model} model", out_dir, dt)
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
     plot_prediction(obs_t * dt, sim_t * dt, obs_n, sim_n, f"{head}: chain against real ions",
