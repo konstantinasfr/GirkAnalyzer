@@ -110,6 +110,8 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
             visit_<k>_free_vs_occupied_residue.csv, visit_<k>_free_vs_occupied_<E152|N184>.png
                              the same test for each residue against itself (E152.2a free vs
                              occupied -> going to E152.2a, ...)
+            visit_<k>_free_vs_occupied_table.png  the same per-residue test as one table:
+                             to it / out, free -> occupied, for all ions and per K+ count
             arrival_sharing.csv   visits starting while the residue holds another K+, and
                              how often that K+ has gone when the ion leaves (knock-on)
             occupancy_summary.txt
@@ -1279,6 +1281,93 @@ def plot_free_vs_occupied(test, groups, title, out_file, visit=0, min_n=5):
     plt.close(fig)
 
 
+def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_bin=15, min_n=5):
+    """Table, one row per residue: % of the ions going to it and % going out when that residue is free
+    -> holds another K+, for all ions and per other-K+ count (counts with >= min_bin ions); cells from
+    fewer than min_n ions on a side in grey; effects from all ions (going to it: occupied / free >= 1.5
+    attracts, <= 0.67 blocks; going out: a change of 8 points or more)."""
+    t = rtest[rtest["group"].isin(residues)]
+    if not len(t):
+        return
+    n_bin = t.groupby("start")[["n_free", "n_occupied"]].first().sum(axis=1)
+    bins = ["all"] + [b for b in dict.fromkeys(t["start"]) if b != "all" and n_bin.get(b, 0) >= min_bin]
+    when = "when the ion leaves the SF" if visit == 0 else f"when leaving visit {visit}"
+    lab = lambda b: "all ions" if b == "all" else f"{b} other K+"
+    cols = ["residue", "ions\nfree / occ."] + [f"→ it\n{lab(b)}" for b in bins] + \
+           [f"out\n{lab(b)}" for b in bins] + ["K+ there:\ngoing to it", "K+ there:\ngoing out"]
+    cells, grey = [], []
+    for res in residues:
+        g = t[t["group"] == res].set_index("start")
+        if "all" not in g.index:
+            continue
+        a = g.loc["all"]
+        c, gr = [res, f"{int(a['n_free'])} / {int(a['n_occupied'])}"], [False, False]
+        for what in ("to_group", "out"):
+            for b in bins:
+                if b not in g.index or not g.loc[b, "n_free"] or not g.loc[b, "n_occupied"]:
+                    c.append("–"); gr.append(False); continue
+                r = g.loc[b]
+                c.append(f"{r[f'{what}_free']:.0f}% → {r[f'{what}_occupied']:.0f}%")
+                gr.append(min(r["n_free"], r["n_occupied"]) < min_n)
+        f, o = a["to_group_free"], a["to_group_occupied"]
+        if not (a["n_free"] and a["n_occupied"]) or not np.isfinite(f) or not np.isfinite(o) or max(f, o) < 5:
+            eff = "–"
+        elif o >= 1.5 * max(f, 0.1):
+            eff = "attracts"
+        elif o <= f / 1.5:
+            eff = "blocks"
+        else:
+            eff = "no clear effect"
+        fo, oo = a["out_free"], a["out_occupied"]
+        if not (a["n_free"] and a["n_occupied"]) or not np.isfinite(fo) or not np.isfinite(oo):
+            eff_out = "–"
+        elif oo <= fo - 8:
+            eff_out = "fewer leave"
+        elif oo >= fo + 8:
+            eff_out = "more leave"
+        else:
+            eff_out = "no clear effect"
+        c += [eff, eff_out]; gr += [False, False]
+        cells.append(c); grey.append(gr)
+    if not cells:
+        return
+    widths = [1.6, 1.6] + [2.0] * (2 * len(bins)) + [2.2, 2.2]
+    fig, ax = plt.subplots(figsize=(1.0 * sum(widths), 1.0 + 0.42 * (len(cells) + 2)))
+    ax.axis("off")
+    tb = ax.table(cellText=cells, colLabels=cols, loc="upper center", cellLoc="center",
+                  colWidths=[x / sum(widths) for x in widths])
+    tb.auto_set_font_size(False)
+    tb.set_fontsize(16)
+    tb.scale(1, 2.3)
+    out_cols = set(range(2 + len(bins), 2 + 2 * len(bins)))
+    eff_cols = (len(cols) - 2, len(cols) - 1)
+    for (i, j), cell in tb.get_celld().items():
+        cell.set_edgecolor("#C9D3D8")
+        if i == 0:
+            cell.set_facecolor("#5B6770" if j in out_cols else "#123B4A")
+            cell.get_text().set_color("white")
+            cell.get_text().set_fontweight("bold")
+            cell.set_height(cell.get_height() * 1.9)
+            continue
+        if j in out_cols:
+            cell.set_facecolor("#EEF3F5")
+        if j in (0, 2, 2 + len(bins)) or j in eff_cols:
+            cell.get_text().set_fontweight("bold")
+        if j in eff_cols:
+            cell.get_text().set_color({"attracts": "#1a7f37", "blocks": "#c0392b", "more leave": "#1a7f37",
+                                       "fewer leave": "#c0392b"}.get(cells[i - 1][j], "#333333"))
+        if grey[i - 1][j]:
+            cell.get_text().set_color("#9a9a9a")
+    ax.set_title(f"{title}\nvisit {visit + 1}: % of the ions going to each residue (→ it) and going out, when that "
+                 f"residue is free → already holds another K+, by the other K+ in the cavity {when}\n"
+                 f"(K+ there, from all ions: going to it occupied ≥ 1.5× free attracts, ≤ free / 1.5 blocks (– below 5%); "
+                 f"going out ± 8 points; grey: fewer than "
+                 f"{min_n} ions on a side)", fontsize=16)
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def arrival_sharing(visits_raw, model_names):
     """Per site: visits, % arriving while the same residue already holds another K+, and of those
     the % where it is free again when the ion leaves (the other K+ has moved: knock-on)."""
@@ -1419,6 +1508,7 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
         plot_free_vs_occupied(test, groups, title, od / f"{name}_free_vs_occupied.png", k)
         rtest = residue_test(st, all_members, max_k)          # each residue against itself
         rtest.to_csv(od / f"{name}_free_vs_occupied_residue.csv", index=False, float_format="%.2f")
+        plot_free_vs_occupied_table(rtest, all_members, title, od / f"{name}_free_vs_occupied_table.png", k)
         for g in groups:
             if len(members[g]) > 1:
                 plot_free_vs_occupied(rtest, members[g], title, od / f"{name}_free_vs_occupied_{g}.png", k)
