@@ -1262,7 +1262,8 @@ def arrival_sharing(visits_raw, model_names):
         return pd.DataFrame(rows)
     for site, g in visits_raw[visits_raw["occupied_arrive"].map(lambda o: isinstance(o, str))].groupby("site"):
         shared = g["occupied_arrive"].map(lambda o: site in _occ_set(o))
-        still = g.loc[shared, "occupied_leave"].map(lambda o: site in _occ_set(o))
+        leave = "occupied_leave_frame" if "occupied_leave_frame" in g else "occupied_leave"   # same rule as arrival
+        still = g.loc[shared, leave].map(lambda o: site in _occ_set(o))
         rows.append(dict(site=site, visits=len(g), pct_shared_at_arrival=100 * shared.mean(),
                          n_shared=int(shared.sum()),
                          pct_other_gone_at_leave=100 * (~still).mean() if len(still) else np.nan))
