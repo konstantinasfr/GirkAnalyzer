@@ -800,6 +800,12 @@ def visit_table(events, visits_site, sites, max_k, visit=0):
     return pd.DataFrame(rows, columns=["start", "n_ions", "n_runs", "target", "count", "pct"])
 
 
+def _bold(text):
+    """Bold part of a matplotlib title (mathtext)."""
+    t = text.replace("%", r"\%").replace("±", r"\pm").replace(" ", r"\ ")
+    return r"$\bf{" + t + "}$"
+
+
 def _ktime_text(ktime, start):
     """'40% of the ions · visit 7.7 ± 1.2 ns (101)' for one K+ count ('all': every ion)."""
     if start == "all":
@@ -814,8 +820,9 @@ def _ktime_text(ktime, start):
         r = r.iloc[0]
         nv, mean, pct = int(r["n_visits"]), r["mean_ns"], r["pct"]
         if nv > 1 and np.isfinite(r["sem_ns"]):
-            return f"{pct:.0f}% of the ions · visit {mean:.1f} ± {r['sem_ns']:.1f} ns ({nv})"
-    return f"{pct:.0f}% of the ions" + (f" · visit {mean:.1f} ns ({nv})" if nv else " · no visit")
+            sem = r["sem_ns"]
+            return f"{_bold(f'{pct:.0f}%')} of the ions · visit {_bold(f'{mean:.1f} ± {sem:.1f} ns')} ({nv})"
+    return f"{_bold(f'{pct:.0f}%')} of the ions" + (f" · visit {_bold(f'{mean:.1f} ns')} ({nv})" if nv else " · no visit")
 
 
 def visit_summary_table(table, ktime):
@@ -874,10 +881,11 @@ def plot_visit_summary(summary, title, out_file, visit=0, min_n=15):
             c.set_facecolor("#123B4A")
             c.get_text().set_color("white")
             c.get_text().set_fontweight("bold")
-        elif summary.iloc[i - 1]["start"] == "all":
-            c.get_text().set_fontweight("bold")
-        elif summary.iloc[i - 1]["n_ions"] < min_n:
-            c.get_text().set_color("#9a9a9a")
+        else:
+            if summary.iloc[i - 1]["start"] == "all" or j in (2, 3):   # all ions, % of ions, visit time
+                c.get_text().set_fontweight("bold")
+            if summary.iloc[i - 1]["n_ions"] < min_n:
+                c.get_text().set_color("#9a9a9a")
     ax.set_title(f"{title}\nvisit {visit + 1}: where the ions go (% of the ions), by the other K+ in the cavity {when}"
                  f"\n(grey: fewer than {min_n} ions)", fontsize=16)
     fig.tight_layout()
