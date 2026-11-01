@@ -58,8 +58,10 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
     rmsd_run<run>.csv    fitted / unfitted Ca RMSD of every frame
     equilibration.csv, equilibration.png   start frame per run (automatic, given, used)
     frames_run<run>.csv  per frame end_1 .. end_2 of every event: residue in
-                         contact (closest within the cutoff), K+ above / below /
-                         in the SF, the same counts for the 3 control shifts
+                         contact (closest within the cutoff), residues occupied by
+                         the other K+ in the cavity (same rule; ';'-joined), K+ above /
+                         below / in the SF, the same counts for the 3 control shifts
+                         (frames from an older version without 'occupied' are collected again)
     stays_run<run>.csv, events_run<run>.csv
     <model>_a<max_above>b<max_below>[_frame0][_preeq]/
         summary.txt
@@ -93,6 +95,15 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              have no visit and count only in the %); out time = how long the
                              ions going out at visit k took to leave from where they were
                              (also in the visit plot titles and the summary table)
+        occupancy/           residues holding another K+ at each step (visit 1: when the ion
+                             leaves the SF; visit k: when it leaves visit k-1):
+            visit_<k>_occupied_by_k.csv, .png    % of the ions seeing each residue group
+                             occupied, per other-K+ count
+            visit_<k>_free_vs_occupied.csv, .png  per residue group and K+ count: % going to
+                             it and % going out when it is free vs occupied
+            arrival_sharing.csv   visits starting while the residue holds another K+, and
+                             how often that K+ has gone when the ion leaves (knock-on)
+            occupancy_summary.txt
 Over runs: aggregate_site_chain.py (repo root).
 
 USAGE - from main.py (after ch1, ch2 and analyzer exist)
@@ -210,13 +221,17 @@ def collect_run(universe, permeation_events, asn_residues, glu_residues, channel
         end_2 = int(ev["end_2"] if "end_2" in ev else ev["R2_end"])
         events.append(dict(run=run, event=k, ion_id=int(ev["ion_id"]), end_1=end_1, end_2=end_2,
                            starts_at_frame0=end_1 == 0))
-    wanted = set()
+    wanted, real = set(), set()
     for e in events:
         for f in range(e["end_1"], e["end_2"] + 1):
             wanted.add(f)
+            real.add(f)
             wanted.update((f + s) % n_frames for s in shifts)
+    occ = {}                                                   # frame -> {K+ resid: residue it occupies}
     for f in sorted(wanted):                                   # read the trajectory once, in order
-        pore.get(f)
+        _, cav, _ = pore.get(f)
+        if f in real:
+            occ[f] = _frame_occupancy(dur, pore.ions, cav)
 
     frames, stays = [], []
     for e in events:
@@ -234,17 +249,35 @@ def collect_run(universe, permeation_events, asn_residues, glu_residues, channel
         for i, f in enumerate(range(end_1, end_2 + 1)):
             info = dur._closest_from_row(D[i])[0] if D is not None else None
             row = dict(run=run, event=e["event"], frame=f,
-                       contact=site_label(info["residue_pdb"], info["residue_type"]) if info else "")
+                       contact=site_label(info["residue_pdb"], info["residue_type"]) if info else "",
+                       occupied=";".join(sorted(lab for r, lab in occ.get(f, {}).items() if r != ion)))
             row["n_above"], row["n_below"], row["n_sf"] = pore.neighbours(ion, f)
             for j, s in enumerate(shifts, start=1):
                 row[f"n_above_c{j}"], row[f"n_below_c{j}"], _ = pore.neighbours(ion, f, (f + s) % n_frames)
             frames.append(row)
     stay_cols = ["run", "event", "residue_id", "residue_pdb", "resname", "ring", "start_frame", "end_frame"]
-    frame_cols = ["run", "event", "frame", "contact", "n_above", "n_below", "n_sf"] + \
+    frame_cols = ["run", "event", "frame", "contact", "occupied", "n_above", "n_below", "n_sf"] + \
                  [f"n_{k}_c{j}" for j in range(1, N_C + 1) for k in ("above", "below")]
     event_cols = ["run", "event", "ion_id", "end_1", "end_2", "starts_at_frame0"]
     return (pd.DataFrame(frames, columns=frame_cols), pd.DataFrame(stays, columns=stay_cols),
             pd.DataFrame(events, columns=event_cols))
+
+
+def _frame_occupancy(dur, ions, in_cavity):
+    """{resid: site} of the K+ in the cavity bound to a residue at the current frame: the closest
+    residue within the cutoff (the same rule as the permeating ion's contact)."""
+    dist = dur.distances
+    idx = np.where(in_cavity)[0]
+    if not len(idx) or not dist.resids:
+        return {}
+    d = np.linalg.norm(dist.atoms.positions[None, :, :] - ions.positions[idx][:, None, :], axis=2)
+    D = np.minimum.reduceat(d, dist.starts, axis=1)
+    out = {}
+    for i, row in zip(idx, D):
+        info = dur._closest_from_row(row)[0]
+        if info:
+            out[int(ions.resids[i])] = site_label(info["residue_pdb"], info["residue_type"])
+    return out
 
 
 def read_csv_or_empty(path, **kw):
@@ -294,6 +327,7 @@ def build_visits(frames, stays, events, window):
         f0 = int(g["frame"].iloc[0])
         A = {c: g[c].to_numpy() for c in a_cols + b_cols + ["n_sf"]}
         contact = g["contact"].fillna("").astype(str).to_numpy()
+        occupied = g["occupied"].fillna("").astype(str).to_numpy() if "occupied" in g else None
 
         def at(f, col):
             return int(A[col][f - f0])
@@ -318,6 +352,7 @@ def build_visits(frames, stays, events, window):
         first = visits[0]["start"] if visits else end_2 + 1
         e_out["moving_first"] = first - end_1 - 1
         e_out["touches_first"] = _touches(contact[end_1 + 1 - f0:first - f0])
+        e_out["occupied_sf"] = occupied[end_1 - f0] if occupied is not None else np.nan
 
         for i, v in enumerate(visits):
             nxt = visits[i + 1] if i + 1 < len(visits) else None
@@ -333,6 +368,9 @@ def build_visits(frames, stays, events, window):
                        moving_after=(nxt["start"] if nxt else end_2 + 1) - v["end"] - 1,
                        to_exit_frames=end_2 - v["start"] + 1)
             row["touches_after"] = _touches(contact[v["end"] + 1 - f0:(nxt["start"] if nxt else end_2 + 1) - f0])
+            if occupied is not None:                      # residues holding another K+ (';'-joined)
+                row["occupied_arrive"] = occupied[v["start"] - f0]
+                row["occupied_leave"] = occupied[v["end"] - f0]
             for j, (ac, bc) in enumerate(zip(a_cols, b_cols)):
                 pair = _mode_last([(at(f, ac), at(f, bc)) for f in range(lo, v["end"] + 1)])
                 suffix = "" if j == 0 else f"_c{j}"
@@ -1054,6 +1092,190 @@ def plot_visit_k_time(tab, title, out_file, visit=0):
     plt.close(fig)
 
 
+def _occ_set(text):
+    """Residues holding another K+ ('E141.G1;D173.G1' -> {'E141.G1', 'D173.G1'})."""
+    return set(t for t in str(text).split(";") if t and t != "nan")
+
+
+def occupancy_steps(events, visits_raw, visits_site, max_k, visit=0):
+    """
+    One row per ion reaching visit `visit` (as in visit_table): start (other K+ bin at the
+    step), occupied (residue groups holding another K+ at that moment: when the ion leaves
+    the SF for visit 0, when it leaves visit-1 otherwise) and target (residue group of the
+    visit, or Exit).
+    """
+    ev = events[events["n_visits"] >= visit]
+    keys = list(zip(ev["run"], ev["event"]))
+    raw = visits_raw.set_index(["run", "event", "visit"]) if len(visits_raw) else None
+    here = visits_site.set_index(["run", "event", "visit"])["site"] if len(visits_site) else {}
+    if visit == 0:
+        total, occ = ev["sf_count"].to_numpy(), ev["occupied_sf"].to_numpy()
+    else:
+        tot = raw["above"] + raw["below"]
+        total = [tot[(r, e, visit - 1)] for r, e in keys]
+        occ = [raw["occupied_leave"][(r, e, visit - 1)] for r, e in keys]
+    return pd.DataFrame(dict(
+        start=[bin_label(k, max_k) for k in total],
+        occupied=[{group_label(x) for x in _occ_set(o)} for o in occ],
+        target=[group_label(here.get((r, e, visit), EXIT)) for r, e in keys]))
+
+
+def occupancy_tables(st, groups, max_k):
+    """(occupied, test): % of the ions seeing each group occupied, per K+ bin; and per group and
+    K+ bin, % going to the group and % going out when the group is free vs occupied."""
+    bins = ["all"] + [bin_label(k, max_k) for k in range(max_k + 1)]
+    occ_rows, test_rows = [], []
+    for b in bins:
+        g = st if b == "all" else st[st["start"] == b]
+        if not len(g):
+            continue
+        row = dict(start=b, n_ions=len(g))
+        for grp in groups:
+            row[grp] = 100 * g["occupied"].map(lambda o: grp in o).mean()
+        occ_rows.append(row)
+        for grp in groups:
+            busy = g["occupied"].map(lambda o: grp in o)
+            r = dict(group=grp, start=b)
+            for name, m in (("free", ~busy), ("occupied", busy)):
+                sub = g[m]
+                r[f"n_{name}"] = len(sub)
+                r[f"to_group_{name}"] = 100 * (sub["target"] == grp).mean() if len(sub) else np.nan
+                r[f"out_{name}"] = 100 * (sub["target"] == EXIT).mean() if len(sub) else np.nan
+            test_rows.append(r)
+    return pd.DataFrame(occ_rows), pd.DataFrame(test_rows)
+
+
+def plot_occupancy_by_k(occ, groups, title, out_file, visit=0):
+    """x = other K+ in the cavity, one bar per residue group = % of the ions that see it occupied."""
+    occ = occ[occ["start"] != "all"].reset_index(drop=True)
+    if not len(occ):
+        return
+    when = "when the ion leaves the SF" if visit == 0 else f"when leaving visit {visit}"
+    x = np.arange(len(occ))
+    w = 0.8 / len(groups)
+    fig, ax = plt.subplots(figsize=(max(9, 2.2 * len(occ) + 3), 6.5))
+    for i, grp in enumerate(groups):
+        off = x - 0.4 + w * (i + 0.5)
+        ax.bar(off, occ[grp], w, color=site_color(grp), edgecolor="#555555", linewidth=0.5,
+               alpha=1 - 0.18 * (i % 2), label=grp)
+        for xi, v in zip(off, occ[grp]):
+            ax.text(xi, v + 1, f"{v:.0f}", ha="center", va="bottom", fontsize=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{b}\n(n={n})" for b, n in zip(occ["start"], occ["n_ions"])], fontsize=15)
+    ax.set_xlabel(f"other K+ in the cavity {when}", fontsize=17)
+    ax.set_ylabel("% of ions seeing it occupied", fontsize=18)
+    ax.set_ylim(0, min(110, occ[groups].to_numpy().max() + 18))
+    ax.tick_params(axis="y", labelsize=15)
+    ax.legend(title="residue holding another K+", fontsize=14, title_fontsize=14, ncol=len(groups),
+              loc="upper left")
+    ax.set_title(f"{title}\nvisit {visit + 1}: which residues already hold another K+", fontsize=17)
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_free_vs_occupied(test, groups, title, out_file, visit=0, min_n=5):
+    """Per residue group (columns): % of the ions going to it (top) and going out (bottom) when it is
+    free vs occupied by another K+, per other-K+ count; bars from fewer than min_n ions left out."""
+    t = test[test["start"] != "all"]
+    starts = [b for b in dict.fromkeys(t["start"]) if
+              (t.loc[t["start"] == b, ["n_free", "n_occupied"]].to_numpy() >= min_n).any()]
+    if not starts:
+        return
+    when = "when the ion leaves the SF" if visit == 0 else f"when leaving visit {visit}"
+    fig, axes = plt.subplots(2, len(groups), figsize=(5.0 * len(groups), 10), squeeze=False, sharey="row")
+    x = np.arange(len(starts))
+    w = 0.38
+    for j, grp in enumerate(groups):
+        g = t[t["group"] == grp].set_index("start").reindex(starts)
+        for i, (what, ylab) in enumerate((("to_group", "% going to it"), ("out", "% going out"))):
+            ax = axes[i, j]
+            for k, (name, alpha, hatch) in enumerate((("free", 0.35, None), ("occupied", 1.0, "//"))):
+                n = g[f"n_{name}"].fillna(0).to_numpy()
+                v = np.where(n >= min_n, g[f"{what}_{name}"], np.nan)
+                col = site_color(grp) if what == "to_group" else "#7f7f7f"
+                ax.bar(x - w / 2 + k * w, v, w, color=col, alpha=alpha, hatch=hatch, edgecolor="#333333",
+                       linewidth=0.5, label=f"{grp} {name}")
+                for xi, vi, ni in zip(x - w / 2 + k * w, v, n):
+                    if np.isfinite(vi):
+                        ax.text(xi, vi + 1, f"{vi:.0f}%\n({int(ni)})", ha="center", va="bottom", fontsize=11)
+            ax.set_xticks(x)
+            ax.set_xticklabels(starts, fontsize=14)
+            if i == 0:
+                ax.set_title(grp, fontsize=18, fontweight="bold")
+            else:
+                ax.set_xlabel("other K+", fontsize=15)
+            if j == 0:
+                ax.set_ylabel(ylab, fontsize=16)
+            ax.tick_params(axis="y", labelsize=13)
+            ax.set_ylim(0, 118)
+            ax.set_xlim(-0.6, len(starts) - 0.4)
+    from matplotlib.patches import Patch
+    fig.legend(handles=[Patch(facecolor="#bbbbbb", alpha=0.35, edgecolor="#333333", label="residue free"),
+                        Patch(facecolor="#555555", hatch="//", edgecolor="#333333", label="residue holds another K+")],
+               loc="upper right", fontsize=14, ncol=2, bbox_to_anchor=(1.0, 1.0))
+    fig.suptitle(f"{title}\nvisit {visit + 1}: residue free vs already holding another K+, by the other K+ in "
+                 f"the cavity {when}\n(bars from < {min_n} ions left out; (n) = ions)", fontsize=16, x=0.4)
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def arrival_sharing(visits_raw, model_names):
+    """Per site: visits, % arriving while the same residue already holds another K+, and of those
+    the % where it is free again when the ion leaves (the other K+ has moved: knock-on)."""
+    rows = []
+    for site, g in visits_raw.groupby("site"):
+        shared = g["occupied_arrive"].map(lambda o: site in _occ_set(o))
+        still = g.loc[shared, "occupied_leave"].map(lambda o: site in _occ_set(o))
+        rows.append(dict(site=site, visits=len(g), pct_shared_at_arrival=100 * shared.mean(),
+                         n_shared=int(shared.sum()),
+                         pct_other_gone_at_leave=100 * (~still).mean() if len(still) else np.nan))
+    return pd.DataFrame(rows)
+
+
+def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out_dir):
+    """Residue occupancy by the other K+ at each step, written to out_dir/occupancy/."""
+    if "occupied_sf" not in events or events["occupied_sf"].isna().all():
+        print("site_chain: no residue occupancy in the frames (collected with an older version); "
+              "run the site chain from main.py again to add it")
+        return
+    od = Path(out_dir) / "occupancy"
+    od.mkdir(exist_ok=True)
+    groups = list(dict.fromkeys(group_label(s) for s in sites))
+    rep = _Report()
+    rep(f"RESIDUE OCCUPANCY  {title}")
+    rep("occupied = the residue is the closest one within the cutoff to another K+ in the cavity (the same rule\n"
+        "as a contact), taken when the ion leaves the SF (visit 1) or its previous visit (visit k)")
+    for k in PLOT_VISITS:
+        st = occupancy_steps(events, visits_raw, visits_site, max_k, k)
+        if not len(st):
+            continue
+        occ, test = occupancy_tables(st, groups, max_k)
+        name = f"visit_{k + 1}"
+        occ.to_csv(od / f"{name}_occupied_by_k.csv", index=False, float_format="%.2f")
+        test.to_csv(od / f"{name}_free_vs_occupied.csv", index=False, float_format="%.2f")
+        plot_occupancy_by_k(occ, groups, title, od / f"{name}_occupied_by_k.png", k)
+        plot_free_vs_occupied(test, groups, title, od / f"{name}_free_vs_occupied.png", k)
+        rep(f"\nVISIT {k + 1}: % of the ions seeing each residue group occupied, by other K+")
+        rep("    other K+     n  " + "".join(f"{g:>8}" for g in groups))
+        for r in occ.to_dict("records"):
+            rep(f"    {r['start']:>8} {r['n_ions']:>5}  " + "".join(f"{r[g]:>7.0f}%" for g in groups))
+        rep("  going to the group / going out, when it is free vs occupied (all K+ counts together):")
+        for r in test[test["start"] == "all"].to_dict("records"):
+            rep(f"    {r['group']:>8}: free (n={r['n_free']:>3}) to it {r['to_group_free']:5.1f}%  out "
+                f"{r['out_free']:5.1f}%   |   occupied (n={r['n_occupied']:>3}) to it {r['to_group_occupied']:5.1f}%"
+                f"  out {r['out_occupied']:5.1f}%")
+    sh = arrival_sharing(visits_raw, None)
+    sh.to_csv(od / "arrival_sharing.csv", index=False, float_format="%.2f")
+    rep("\nSHARED ARRIVALS: visits that start while the same residue already holds another K+, and of those the %\n"
+        "where that residue is free of other K+ when the ion leaves (the other K+ moved on: knock-on)")
+    for r in sh.to_dict("records"):
+        rep(f"    {r['site']:>9}: {r['visits']:>4} visits, shared at arrival {r['pct_shared_at_arrival']:5.1f}% "
+            f"({r['n_shared']}), other K+ gone when leaving {r['pct_other_gone_at_leave']:5.1f}%")
+    rep.write(od / "occupancy_summary.txt")
+
+
 def leaving_by_visit_table(events, dt, max_visit=LEAVE_VISITS):
     """
     The ions grouped by the visit at which they leave the cavity: visit k = left
@@ -1555,6 +1777,7 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
         summ.to_csv(vis_dir / f"{name}_summary.csv", index=False, float_format="%.2f")
         plot_visit_summary(summ, head_k, vis_dir / f"{name}_summary.png", k)
         plot_visit_k_time(kt, head_k, vis_dir / f"{name}_k_time.png", k)
+    occupancy_analysis(events, visits, vs, sites, max_sf, f"{head}: {model} model", out_dir)
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
     plot_prediction(obs_t * dt, sim_t * dt, obs_n, sim_n, f"{head}: chain against real ions",
@@ -1684,7 +1907,11 @@ def run_site_chain(universe, permeation_events, asn_residues, glu_residues, chan
         print(f"site_chain: using {paths['frames']}")
         frames = read_csv_or_empty(paths["frames"], keep_default_na=False)
         stays, events = read_csv_or_empty(paths["stays"]), read_csv_or_empty(paths["events"])
-    else:
+    recollect = force_rerun or not all(p.exists() for p in paths.values())
+    if not recollect and len(frames) and "occupied" not in frames.columns:
+        print("site_chain: frames without residue occupancy (older version): collecting again")
+        recollect = True
+    if recollect:
         frames, stays, events = collect_run(universe, permeation_events, asn_residues, glu_residues,
                                             channel1, channel2, run, channel_type, cutoff, min_duration,
                                             analysis_start_frame)
