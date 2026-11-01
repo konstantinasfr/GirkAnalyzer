@@ -105,7 +105,8 @@ def main():
                             max_sf=args.max_sf, include_frame0=args.include_frame0, rmsd=data["rmsd"],
                             eq_max_slope=args.eq_max_slope,
                             eq_window_ns=args.eq_window_ns, start_frames=starts,
-                            include_preequil=args.include_preequil, crowded=crowded)
+                            include_preequil=args.include_preequil, crowded=crowded,
+                            occ_frames=int(settings.split("_d")[-1]))   # occupancy: as long as a stay
 
 
 if __name__ == "__main__":
