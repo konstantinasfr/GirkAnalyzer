@@ -909,6 +909,20 @@ def plot_visit_summary(summary, title, out_file, visit=0, min_n=15):
     plt.close(fig)
 
 
+def panel_grid(n, max_col=4):
+    """(nrow, ncol, legend_inside) with the fewest empty panels: the legend fills one empty
+    panel when there is one; among equally full grids the one closest to 3:2 wins."""
+    best = None
+    for ncol in range(1, min(max_col, n) + 1):
+        nrow = int(np.ceil(n / ncol))
+        empty = nrow * ncol - n
+        waste = max(empty - 1, 0)
+        key = (waste, abs(ncol / nrow - 1.5))
+        if best is None or key < best[0]:
+            best = (key, nrow, ncol, empty >= 1)
+    return best[1], best[2], best[3]
+
+
 def plot_visit(table, sites, title, out_file, visit=0, which=None, ktime=None):
     """One panel for all ions and one per K+ count at the step: % of the ions whose visit `visit` is each
     residue, or out. which: the panels to draw (e.g. ["all"]); default all of them. ktime
@@ -919,13 +933,14 @@ def plot_visit(table, sites, title, out_file, visit=0, which=None, ktime=None):
         return
     when = "when the ion leaves the SF" if visit == 0 else f"when leaving visit {visit}"   # labels count from 1
     targets = sites + [EXIT]
-    ncol = min(3, len(starts))
-    nrow = int(np.ceil(len(starts) / ncol))
-    size = (9, 6.4) if len(starts) == 1 else (6.4 * ncol, 5.0 * nrow)
+    nrow, ncol, legend_inside = panel_grid(len(starts))
+    size = (9, 6.4) if len(starts) == 1 else (6.2 * ncol, 5.0 * nrow)
     fig, axes = plt.subplots(nrow, ncol, figsize=size, squeeze=False)
     for ax in axes.flat[len(starts):]:
         ax.axis("off")
     x = np.arange(len(targets))
+    top = table.loc[table["start"].isin(starts), "pct"].max()      # same y scale in every panel
+    ymax = min(135, (top if np.isfinite(top) else 100) + 22)
     for ax, start in zip(axes.flat, starts):
         g = table[table["start"] == start].set_index("target").reindex(targets)
         ax.bar(x, g["pct"], color=[site_color(t) if t != EXIT else "#d9d9d9" for t in targets],
@@ -935,8 +950,8 @@ def plot_visit(table, sites, title, out_file, visit=0, which=None, ktime=None):
                 ax.text(xi, p + 1, f"{p:.0f}%\n({int(c)})", ha="center", va="bottom", fontsize=11)
         ax.set_xticks(x)
         ax.set_xticklabels([t if t != EXIT else "out" for t in targets], rotation=60, ha="right", fontsize=12)
-        ax.set_ylim(0, 135)
-        ax.set_yticks(range(0, 101, 20))
+        ax.set_ylim(0, ymax)
+        ax.set_yticks(range(0, int(min(ymax - 10, 100)) + 1, 20))
         ax.set_ylabel("% of ions")
         ax.set_xlabel(f"visit {visit + 1}")
         name = "all ions" if start == "all" else f"{start} other K+ in the cavity {when}"
@@ -947,10 +962,14 @@ def plot_visit(table, sites, title, out_file, visit=0, which=None, ktime=None):
              if any(t[:1] == v for t in sites)]
     handles = [Patch(color=COLORS[v], label=k) for k, v in kinds] + \
               [Patch(facecolor="#d9d9d9", hatch="////", edgecolor="#555555", label="out")]
-    fig.legend(handles=handles, title=f"visit {visit + 1}", loc="center left", bbox_to_anchor=(1.0, 0.5))
     split = "" if starts == ["all"] else f", by the other K+ in the cavity {when}"
-    fig.suptitle(f"{title}\nvisit {visit + 1}{split}")
+    fig.suptitle(f"{title}\nvisit {visit + 1}{split}", fontsize=17)
     fig.tight_layout()
+    if legend_inside:                                            # in the first empty panel
+        axes.flat[len(starts)].legend(handles=handles, title=f"visit {visit + 1}", loc="center",
+                                      fontsize=16, title_fontsize=17)
+    else:
+        fig.legend(handles=handles, title=f"visit {visit + 1}", loc="center left", bbox_to_anchor=(1.0, 0.5))
     fig.savefig(out_file, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
