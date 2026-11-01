@@ -86,6 +86,11 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              other K+ in the cavity (visit 1: at end_1; visit k: above +
                              below when leaving visit k-1). _all only all ions, _by_k only
                              the K+ panels
+        visits/visit_<k>_lines.png   visit k: x = other K+ in the cavity, one line per
+                             residue (and out) = % of the ions
+        visits/visit_<k>_k_time.csv, .png   visit k, per other-K+ count: % of the ions
+                             and how long visit k lasted (mean +- SE; ions that go out
+                             have no visit and count only in the %)
 Over runs: aggregate_site_chain.py (repo root).
 
 USAGE - from main.py (after ch1, ch2 and analyzer exist)
@@ -839,6 +844,115 @@ def plot_visit(table, sites, title, out_file, visit=0, which=None):
     plt.close(fig)
 
 
+def _target_colors(targets):
+    """One colour per residue: shades of the residue type's colour (Glus reds, Asns blues, ...), Exit black."""
+    from matplotlib.colors import to_rgb
+    out, by_type = {}, {}
+    for t in targets:
+        by_type.setdefault("X" if t == EXIT else t[:1], []).append(t)
+    for typ, ts in by_type.items():
+        base = np.array(to_rgb("#222222" if typ == "X" else COLORS.get(typ, GREY)))
+        for i, t in enumerate(ts):
+            out[t] = tuple(base * (1 - 0.5 * i / max(len(ts) - 1, 1)))   # the type's colour -> darker
+    return out
+
+
+def plot_visit_lines(table, sites, title, out_file, visit=0):
+    """Visit `visit`: x = other K+ in the cavity, one line per residue (and out) = % of the ions."""
+    g = table[(table["start"] != "all") & (table["n_ions"] > 0)]
+    if not len(g):
+        return
+    starts = list(dict.fromkeys(g["start"]))
+    n = g.groupby("start", sort=False)["n_ions"].first()
+    targets = [t for t in sites + [EXIT] if g.loc[g["target"] == t, "count"].sum() > 0]
+    col = _target_colors(targets)
+    x = np.arange(len(starts))
+    fig, ax = plt.subplots(figsize=(11, 6.5))
+    for t in targets:
+        y = g[g["target"] == t].set_index("start").reindex(starts)["pct"]
+        ax.plot(x, y, marker="o", ms=8, lw=3 if t == EXIT else 2.2, ls="--" if t == EXIT else "-",
+                color=col[t], label="out" if t == EXIT else t)
+    when = "when the ion leaves the SF" if visit == 0 else f"when leaving visit {visit}"
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{s}\n(n={n[s]})" for s in starts], fontsize=15)
+    ax.tick_params(axis="y", labelsize=16)
+    ax.set_xlabel(f"other K+ in the cavity {when}", fontsize=18)
+    ax.set_ylabel("% of ions", fontsize=19)
+    ax.set_ylim(0, 100)
+    ax.legend(title=f"visit {visit + 1}", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=15, title_fontsize=16)
+    ax.set_title(f"{title}\nvisit {visit + 1}: where the ions go, by the other K+ in the cavity", fontsize=17)
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def visit_k_time_table(events, visits_site, max_k, dt, visit=0):
+    """
+    Visit `visit`, per other-K+ count at the step (as in visit_table): ions (n_ions, pct of
+    the ions reaching this visit) and how long the visit lasted for those that made it
+    (n_visits, mean_ns, sem_ns, median_ns of residue_frames).
+    """
+    ev = events[events["n_visits"] >= visit]
+    v = visits_site.set_index(["run", "event", "visit"]) if len(visits_site) else None
+    keys = list(zip(ev["run"], ev["event"]))
+    if visit == 0:
+        total = ev["sf_count"].to_numpy()
+    else:
+        tot = v["above"] + v["below"]
+        total = [tot[(r, e, visit - 1)] for r, e in keys]
+    res = v["residue_frames"] if v is not None else {}
+    dur = np.array([res.get((r, e, visit), np.nan) for r, e in keys], dtype=float) * dt
+    lab = np.array([bin_label(k, max_k) for k in total])
+    rows = []
+    for s in [bin_label(k, max_k) for k in range(max_k + 1)]:
+        m = lab == s
+        d = dur[m][np.isfinite(dur[m])]
+        rows.append(dict(start=s, n_ions=int(m.sum()), pct=100 * m.sum() / max(len(lab), 1), n_visits=len(d),
+                         mean_ns=d.mean() if len(d) else np.nan,
+                         sem_ns=d.std(ddof=1) / np.sqrt(len(d)) if len(d) > 1 else np.nan,
+                         median_ns=np.median(d) if len(d) else np.nan))
+    return pd.DataFrame(rows)
+
+
+def plot_visit_k_time(tab, title, out_file, visit=0):
+    """Per other-K+ count: % of the ions (left axis) and how long visit `visit` lasted, mean +- SE (right axis)."""
+    tab = tab[tab["n_ions"] > 0].reset_index(drop=True)
+    if not len(tab):
+        return
+    x = np.arange(len(tab))
+    w = 0.38
+    fig, ax = plt.subplots(figsize=(11, 6.5))
+    ax2 = ax.twinx()
+    b1 = ax.bar(x - w / 2, tab["pct"], w, color="#7f7f7f", label="% of ions")
+    b2 = ax2.bar(x + w / 2, tab["mean_ns"], w, yerr=tab["sem_ns"], capsize=4, color="#4f81bd",
+                 error_kw=dict(lw=1.5), label=f"visit {visit + 1} time (mean ± SE)")
+    top = max(tab["pct"].max(), 10)
+    for xi, (p, c) in enumerate(zip(tab["pct"], tab["n_ions"])):
+        ax.text(xi - w / 2, p + 0.01 * top, f"({c})", ha="center", va="bottom", fontsize=12)
+        ax.text(xi - w / 2, p + 0.065 * top, f"{p:.0f}%", ha="center", va="bottom", fontsize=17, fontweight="bold")
+    t_top = np.nanmax((tab["mean_ns"] + tab["sem_ns"].fillna(0)).to_numpy()) if tab["mean_ns"].notna().any() else 1
+    for xi, (m, e, nv) in enumerate(zip(tab["mean_ns"], tab["sem_ns"].fillna(0), tab["n_visits"])):
+        if np.isfinite(m):
+            ax2.text(xi + w / 2, m + e + 0.01 * t_top, f"{_ns_label(m)}\n({nv})", ha="center", va="bottom",
+                     fontsize=12, color="#2f5597", fontweight="bold")
+    when = "when the ion leaves the SF" if visit == 0 else f"when leaving visit {visit}"
+    ax.set_xticks(x)
+    ax.set_xticklabels(tab["start"], fontsize=17)
+    ax.set_xlabel(f"other K+ in the cavity {when}", fontsize=17)
+    ax.set_ylabel("% of ions", fontsize=19)
+    ax2.set_ylabel(f"visit {visit + 1} time (ns)", color="#4f81bd", fontsize=19)
+    ax.tick_params(axis="y", labelsize=17)
+    ax2.tick_params(axis="y", colors="#4f81bd", labelsize=17)
+    ax.set_ylim(0, top * 1.5)
+    ax2.set_ylim(0, t_top * 1.6)
+    ax.legend(handles=[b1, b2], loc="upper left", fontsize=15)
+    ax.set_title(f"{title}\nvisit {visit + 1}: ions by the other K+ in the cavity, and how long the visit lasted",
+                 fontsize=17)
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def leaving_by_visit_table(events, dt, max_visit=LEAVE_VISITS):
     """
     The ions grouped by the visit at which they leave the cavity: visit k = left
@@ -1334,6 +1448,10 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
         plot_visit(tab, sites, head_k, vis_dir / f"{name}_all.png", k, which=["all"])
         plot_visit(tab, sites, head_k, vis_dir / f"{name}_by_k.png", k,
                    which=[b for b in tab["start"].unique() if b != "all"])
+        plot_visit_lines(tab, sites, head_k, vis_dir / f"{name}_lines.png", k)
+        kt = visit_k_time_table(events, vs, max_sf, dt, k)
+        kt.to_csv(vis_dir / f"{name}_k_time.csv", index=False, float_format="%.3f")
+        plot_visit_k_time(kt, head_k, vis_dir / f"{name}_k_time.png", k)
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
     plot_prediction(obs_t * dt, sim_t * dt, obs_n, sim_n, f"{head}: chain against real ions",
