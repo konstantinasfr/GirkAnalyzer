@@ -86,8 +86,8 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              other K+ in the cavity (visit 1: at end_1; visit k: above +
                              below when leaving visit k-1). _all only all ions, _by_k only
                              the K+ panels
-        visits/visit_<k>_lines.png   visit k: x = other K+ in the cavity, one line per
-                             residue (and out) = % of the ions
+        visits/visit_<k>_summary.csv, .png   visit k, one row per other-K+ count: ions,
+                             % of the ions, visit time, % out / to each residue group
         visits/visit_<k>_k_time.csv, .png   visit k, per other-K+ count: % of the ions
                              and how long visit k lasted (mean +- SE; ions that go out
                              have no visit and count only in the %)
@@ -800,9 +800,95 @@ def visit_table(events, visits_site, sites, max_k, visit=0):
     return pd.DataFrame(rows, columns=["start", "n_ions", "n_runs", "target", "count", "pct"])
 
 
-def plot_visit(table, sites, title, out_file, visit=0, which=None):
+def _ktime_text(ktime, start):
+    """'40% of the ions · visit 7.7 ± 1.2 ns (101)' for one K+ count ('all': every ion)."""
+    if start == "all":
+        d = ktime[ktime["n_visits"] > 0]
+        nv = int(d["n_visits"].sum())
+        mean = (d["mean_ns"] * d["n_visits"]).sum() / nv if nv else np.nan
+        pct = 100.0
+    else:
+        r = ktime[ktime["start"] == start]
+        if not len(r):
+            return ""
+        r = r.iloc[0]
+        nv, mean, pct = int(r["n_visits"]), r["mean_ns"], r["pct"]
+        if nv > 1 and np.isfinite(r["sem_ns"]):
+            return f"{pct:.0f}% of the ions · visit {mean:.1f} ± {r['sem_ns']:.1f} ns ({nv})"
+    return f"{pct:.0f}% of the ions" + (f" · visit {mean:.1f} ns ({nv})" if nv else " · no visit")
+
+
+def visit_summary_table(table, ktime):
+    """
+    One row per K+ count at the step (and all ions): n_ions, pct_ions, visit time
+    (n_visits, mean_ns, sem_ns), and the % of the ions going out / to each residue group
+    (E141, E152, D173, N184, ... by sequence number).
+    """
+    groups = list(dict.fromkeys(group_label(t) for t in table["target"] if t != EXIT))
+    rows = []
+    for start in table["start"].unique():
+        g = table[table["start"] == start]
+        n = int(g["n_ions"].iloc[0])
+        if not n:
+            continue
+        row = dict(start=start, n_ions=n)
+        if start == "all":
+            d = ktime[ktime["n_visits"] > 0]
+            nv = int(d["n_visits"].sum())
+            row.update(pct_ions=100.0, n_visits=nv,
+                       mean_ns=(d["mean_ns"] * d["n_visits"]).sum() / nv if nv else np.nan, sem_ns=np.nan)
+        else:
+            r = ktime[ktime["start"] == start].iloc[0]
+            row.update(pct_ions=r["pct"], n_visits=int(r["n_visits"]), mean_ns=r["mean_ns"], sem_ns=r["sem_ns"])
+        row["out"] = 100 * g.loc[g["target"] == EXIT, "count"].sum() / n
+        for grp in groups:
+            row[grp] = 100 * g.loc[g["target"].map(group_label) == grp, "count"].sum() / n
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def plot_visit_summary(summary, title, out_file, visit=0, min_n=15):
+    """The summary table as a figure; rows with fewer than min_n ions in grey."""
+    if not len(summary):
+        return
+    when = "when the ion leaves the SF" if visit == 0 else f"when leaving visit {visit}"
+    groups = [c for c in summary.columns if c not in ("start", "n_ions", "pct_ions", "n_visits", "mean_ns", "sem_ns")]
+    cols = ["other K+", "ions", "% of ions", f"visit {visit + 1} time (ns)"] + [g if g != "out" else "out" for g in groups]
+    cells = []
+    for r in summary.to_dict("records"):
+        t = "–" if not r["n_visits"] else (f"{r['mean_ns']:.1f} ± {r['sem_ns']:.1f}" if np.isfinite(r["sem_ns"])
+                                           else f"{r['mean_ns']:.1f}")
+        cells.append(["all ions" if r["start"] == "all" else r["start"], str(r["n_ions"]), f"{r['pct_ions']:.0f}%", t]
+                     + [f"{r[g]:.0f}%" for g in groups])
+    widths = [1.3, 1.0, 1.3, 2.3] + [1.15] * len(groups)
+    fig, ax = plt.subplots(figsize=(1.1 * sum(widths), 0.8 + 0.42 * (len(cells) + 1)))
+    ax.axis("off")
+    tb = ax.table(cellText=cells, colLabels=cols, loc="upper center", cellLoc="center",
+                  colWidths=[x / sum(widths) for x in widths])
+    tb.auto_set_font_size(False)
+    tb.set_fontsize(16)
+    tb.scale(1, 2.2)
+    for (i, j), c in tb.get_celld().items():
+        c.set_edgecolor("#C9D3D8")
+        if i == 0:
+            c.set_facecolor("#123B4A")
+            c.get_text().set_color("white")
+            c.get_text().set_fontweight("bold")
+        elif summary.iloc[i - 1]["start"] == "all":
+            c.get_text().set_fontweight("bold")
+        elif summary.iloc[i - 1]["n_ions"] < min_n:
+            c.get_text().set_color("#9a9a9a")
+    ax.set_title(f"{title}\nvisit {visit + 1}: where the ions go (% of the ions), by the other K+ in the cavity {when}"
+                 f"\n(grey: fewer than {min_n} ions)", fontsize=16)
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_visit(table, sites, title, out_file, visit=0, which=None, ktime=None):
     """One panel for all ions and one per K+ count at the step: % of the ions whose visit `visit` is each
-    residue, or out. which: the panels to draw (e.g. ["all"]); default all of them."""
+    residue, or out. which: the panels to draw (e.g. ["all"]); default all of them. ktime
+    (visit_k_time_table): adds the % of the ions at that K+ count and how long the visit lasted."""
     starts = [s for s in table["start"].unique() if table.loc[table["start"] == s, "n_ions"].iloc[0] > 0
               and (which is None or s in which)]
     if not starts:
@@ -830,7 +916,8 @@ def plot_visit(table, sites, title, out_file, visit=0, which=None):
         ax.set_ylabel("% of ions")
         ax.set_xlabel(f"visit {visit + 1}")
         name = "all ions" if start == "all" else f"{start} other K+ in the cavity {when}"
-        ax.set_title(f"{name}\n(n = {int(g['n_ions'].iloc[0])} ions, {int(g['n_runs'].iloc[0])} runs)", fontsize=14)
+        line3 = "" if ktime is None else "\n" + _ktime_text(ktime, start)
+        ax.set_title(f"{name}\n(n = {int(g['n_ions'].iloc[0])} ions, {int(g['n_runs'].iloc[0])} runs){line3}", fontsize=14)
     from matplotlib.patches import Patch
     kinds = [(k, v) for k, v in (("GLU", "E"), ("GLN", "Q"), ("ASP", "D"), ("ASN", "N"))
              if any(t[:1] == v for t in sites)]
@@ -839,48 +926,6 @@ def plot_visit(table, sites, title, out_file, visit=0, which=None):
     fig.legend(handles=handles, title=f"visit {visit + 1}", loc="center left", bbox_to_anchor=(1.0, 0.5))
     split = "" if starts == ["all"] else f", by the other K+ in the cavity {when}"
     fig.suptitle(f"{title}\nvisit {visit + 1}{split}")
-    fig.tight_layout()
-    fig.savefig(out_file, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-
-def _target_colors(targets):
-    """One colour per residue: shades of the residue type's colour (Glus reds, Asns blues, ...), Exit black."""
-    from matplotlib.colors import to_rgb
-    out, by_type = {}, {}
-    for t in targets:
-        by_type.setdefault("X" if t == EXIT else t[:1], []).append(t)
-    for typ, ts in by_type.items():
-        base = np.array(to_rgb("#222222" if typ == "X" else COLORS.get(typ, GREY)))
-        for i, t in enumerate(ts):
-            out[t] = tuple(base * (1 - 0.5 * i / max(len(ts) - 1, 1)))   # the type's colour -> darker
-    return out
-
-
-def plot_visit_lines(table, sites, title, out_file, visit=0):
-    """Visit `visit`: x = other K+ in the cavity, one line per residue (and out) = % of the ions."""
-    g = table[(table["start"] != "all") & (table["n_ions"] > 0)]
-    if not len(g):
-        return
-    starts = list(dict.fromkeys(g["start"]))
-    n = g.groupby("start", sort=False)["n_ions"].first()
-    targets = [t for t in sites + [EXIT] if g.loc[g["target"] == t, "count"].sum() > 0]
-    col = _target_colors(targets)
-    x = np.arange(len(starts))
-    fig, ax = plt.subplots(figsize=(11, 6.5))
-    for t in targets:
-        y = g[g["target"] == t].set_index("start").reindex(starts)["pct"]
-        ax.plot(x, y, marker="o", ms=8, lw=3 if t == EXIT else 2.2, ls="--" if t == EXIT else "-",
-                color=col[t], label="out" if t == EXIT else t)
-    when = "when the ion leaves the SF" if visit == 0 else f"when leaving visit {visit}"
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"{s}\n(n={n[s]})" for s in starts], fontsize=15)
-    ax.tick_params(axis="y", labelsize=16)
-    ax.set_xlabel(f"other K+ in the cavity {when}", fontsize=18)
-    ax.set_ylabel("% of ions", fontsize=19)
-    ax.set_ylim(0, 100)
-    ax.legend(title=f"visit {visit + 1}", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=15, title_fontsize=16)
-    ax.set_title(f"{title}\nvisit {visit + 1}: where the ions go, by the other K+ in the cavity", fontsize=17)
     fig.tight_layout()
     fig.savefig(out_file, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -1441,16 +1486,18 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
     plot_leaving_by_visit(leave, f"{head}", vis_dir / "leaving_by_visit.png")
     for k in PLOT_VISITS:
         tab = visit_table(events, vs, sites, max_sf, k)
+        kt = visit_k_time_table(events, vs, max_sf, dt, k)
         name = f"visit_{k + 1}"                   # files and labels count visits from 1
         tab.to_csv(vis_dir / f"{name}.csv", index=False, float_format="%.2f")
-        head_k = f"{head}: {model} model"
-        plot_visit(tab, sites, head_k, vis_dir / f"{name}.png", k)
-        plot_visit(tab, sites, head_k, vis_dir / f"{name}_all.png", k, which=["all"])
-        plot_visit(tab, sites, head_k, vis_dir / f"{name}_by_k.png", k,
-                   which=[b for b in tab["start"].unique() if b != "all"])
-        plot_visit_lines(tab, sites, head_k, vis_dir / f"{name}_lines.png", k)
-        kt = visit_k_time_table(events, vs, max_sf, dt, k)
         kt.to_csv(vis_dir / f"{name}_k_time.csv", index=False, float_format="%.3f")
+        head_k = f"{head}: {model} model"
+        plot_visit(tab, sites, head_k, vis_dir / f"{name}.png", k, ktime=kt)
+        plot_visit(tab, sites, head_k, vis_dir / f"{name}_all.png", k, which=["all"], ktime=kt)
+        plot_visit(tab, sites, head_k, vis_dir / f"{name}_by_k.png", k,
+                   which=[b for b in tab["start"].unique() if b != "all"], ktime=kt)
+        summ = visit_summary_table(tab, kt)
+        summ.to_csv(vis_dir / f"{name}_summary.csv", index=False, float_format="%.2f")
+        plot_visit_summary(summ, head_k, vis_dir / f"{name}_summary.png", k)
         plot_visit_k_time(kt, head_k, vis_dir / f"{name}_k_time.png", k)
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
