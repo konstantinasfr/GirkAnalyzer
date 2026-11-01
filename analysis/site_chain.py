@@ -328,7 +328,8 @@ def build_visits(frames, stays, events, window):
         f0 = int(g["frame"].iloc[0])
         A = {c: g[c].to_numpy() for c in a_cols + b_cols + ["n_sf"]}
         contact = g["contact"].fillna("").astype(str).to_numpy()
-        occupied = g["occupied"].fillna("").astype(str).to_numpy() if "occupied" in g else None
+        has_occ = "occupied" in g and g["occupied"].notna().all()   # runs collected before occupancy: none
+        occupied = g["occupied"].astype(str).to_numpy() if has_occ else None
 
         def at(f, col):
             return int(A[col][f - f0])
@@ -1115,10 +1116,12 @@ def occupancy_steps(events, visits_raw, visits_site, max_k, visit=0):
         tot = raw["above"] + raw["below"]
         total = [tot[(r, e, visit - 1)] for r, e in keys]
         occ = [raw["occupied_leave"][(r, e, visit - 1)] for r, e in keys]
-    return pd.DataFrame(dict(
+    st = pd.DataFrame(dict(
         start=[bin_label(k, max_k) for k in total],
-        occupied=[{group_label(x) for x in _occ_set(o)} for o in occ],
+        known=[isinstance(o, str) for o in occ],
+        occupied=[{group_label(x) for x in _occ_set(o)} if isinstance(o, str) else set() for o in occ],
         target=[group_label(here.get((r, e, visit), EXIT)) for r, e in keys]))
+    return st[st["known"]].drop(columns="known")             # ions from runs without occupancy left out
 
 
 def occupancy_tables(st, groups, max_k):
@@ -1226,7 +1229,9 @@ def arrival_sharing(visits_raw, model_names):
     """Per site: visits, % arriving while the same residue already holds another K+, and of those
     the % where it is free again when the ion leaves (the other K+ has moved: knock-on)."""
     rows = []
-    for site, g in visits_raw.groupby("site"):
+    if "occupied_arrive" not in visits_raw:
+        return pd.DataFrame(rows)
+    for site, g in visits_raw[visits_raw["occupied_arrive"].map(lambda o: isinstance(o, str))].groupby("site"):
         shared = g["occupied_arrive"].map(lambda o: site in _occ_set(o))
         still = g.loc[shared, "occupied_leave"].map(lambda o: site in _occ_set(o))
         rows.append(dict(site=site, visits=len(g), pct_shared_at_arrival=100 * shared.mean(),
@@ -1241,6 +1246,10 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
         print("site_chain: no residue occupancy in the frames (collected with an older version); "
               "run the site chain from main.py again to add it")
         return
+    missing = sorted(events.loc[events["occupied_sf"].isna(), "run"].unique())
+    if missing:
+        print(f"site_chain: runs without residue occupancy (run main.py again for them): "
+              f"{', '.join(f'RUN{r}' for r in missing)}; their ions are left out of occupancy/")
     od = Path(out_dir) / "occupancy"
     od.mkdir(exist_ok=True)
     groups = list(dict.fromkeys(group_label(s) for s in sites))
