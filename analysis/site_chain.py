@@ -1358,6 +1358,9 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
     od.mkdir(exist_ok=True)
     groups = list(dict.fromkeys(group_label(s) for s in sites))
     raw_sites = set(visits_raw["site"]) if len(visits_raw) else set()
+    for col, df in (("occupied_sf", events), ("occupied_leave", visits_raw)):   # also residues never visited
+        if col in df:
+            raw_sites |= set().union(*[_occ_set(o) for o in df[col] if isinstance(o, str)] or [set()])
     members = {g: sorted(m for m in raw_sites if group_label(m) == g) for g in groups}
     all_members = [m for g in groups for m in members[g]]
     rep = _Report()
