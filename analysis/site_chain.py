@@ -228,13 +228,14 @@ def collect_run(universe, permeation_events, asn_residues, glu_residues, channel
             real.add(f)
             wanted.update((f + s) % n_frames for s in shifts)
     occ = {}                                                   # frame -> {K+ resid: residue it occupies}
-    for f in sorted(wanted):                                   # read the trajectory once, in order
+    from tqdm import tqdm
+    for f in tqdm(sorted(wanted), desc=f"site_chain RUN{run}: reading frames", unit="frame"):  # once, in order
         _, cav, _ = pore.get(f)
         if f in real:
             occ[f] = _frame_occupancy(dur, pore.ions, cav)
 
     frames, stays = [], []
-    for e in events:
+    for e in tqdm(events, desc=f"site_chain RUN{run}: contacts per ion", unit="ion"):
         ion, end_1, end_2 = e["ion_id"], e["end_1"], e["end_2"]
         if end_2 < end_1:
             continue
