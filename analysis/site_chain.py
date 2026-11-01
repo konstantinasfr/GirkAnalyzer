@@ -90,7 +90,9 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              % of the ions, visit time, % out / to each residue group
         visits/visit_<k>_k_time.csv, .png   visit k, per other-K+ count: % of the ions
                              and how long visit k lasted (mean +- SE; ions that go out
-                             have no visit and count only in the %)
+                             have no visit and count only in the %); out time = how long the
+                             ions going out at visit k took to leave from where they were
+                             (also in the visit plot titles and the summary table)
 Over runs: aggregate_site_chain.py (repo root).
 
 USAGE - from main.py (after ch1, ch2 and analyzer exist)
@@ -806,23 +808,33 @@ def _bold(text):
     return r"$\bf{" + t + "}$"
 
 
+def _mean_sem(n, mean, sem):
+    """'9.4 ± 1.1 ns' (or '9.4 ns' for one value)."""
+    return f"{mean:.1f} ± {sem:.1f} ns" if n > 1 and np.isfinite(sem) else f"{mean:.1f} ns"
+
+
+def _pooled(ktime, n_col, mean_col):
+    d = ktime[ktime[n_col] > 0]
+    n = int(d[n_col].sum())
+    return n, ((d[mean_col] * d[n_col]).sum() / n if n else np.nan)
+
+
 def _ktime_text(ktime, start):
-    """'40% of the ions · visit 7.7 ± 1.2 ns (101)' for one K+ count ('all': every ion)."""
+    """'40% of the ions · visit 7.7 ± 1.2 ns (101)' and on a second line 'out 3.1 ± 0.4 ns (65)' ('all': every ion)."""
     if start == "all":
-        d = ktime[ktime["n_visits"] > 0]
-        nv = int(d["n_visits"].sum())
-        mean = (d["mean_ns"] * d["n_visits"]).sum() / nv if nv else np.nan
         pct = 100.0
+        nv, mean = _pooled(ktime, "n_visits", "mean_ns")
+        no, omean = _pooled(ktime, "n_out", "out_mean_ns")
+        sem = osem = np.nan
     else:
         r = ktime[ktime["start"] == start]
         if not len(r):
             return ""
         r = r.iloc[0]
-        nv, mean, pct = int(r["n_visits"]), r["mean_ns"], r["pct"]
-        if nv > 1 and np.isfinite(r["sem_ns"]):
-            sem = r["sem_ns"]
-            return f"{_bold(f'{pct:.0f}%')} of the ions · visit {_bold(f'{mean:.1f} ± {sem:.1f} ns')} ({nv})"
-    return f"{_bold(f'{pct:.0f}%')} of the ions" + (f" · visit {_bold(f'{mean:.1f} ns')} ({nv})" if nv else " · no visit")
+        pct, nv, mean, sem = r["pct"], int(r["n_visits"]), r["mean_ns"], r["sem_ns"]
+        no, omean, osem = int(r["n_out"]), r["out_mean_ns"], r["out_sem_ns"]
+    line = f"{_bold(f'{pct:.0f}%')} of the ions · " + (f"visit {_bold(_mean_sem(nv, mean, sem))} ({nv})" if nv else "no visit")
+    return line + (f"\nout {_bold(_mean_sem(no, omean, osem))} ({no})" if no else "")
 
 
 def visit_summary_table(table, ktime):
@@ -840,13 +852,14 @@ def visit_summary_table(table, ktime):
             continue
         row = dict(start=start, n_ions=n)
         if start == "all":
-            d = ktime[ktime["n_visits"] > 0]
-            nv = int(d["n_visits"].sum())
-            row.update(pct_ions=100.0, n_visits=nv,
-                       mean_ns=(d["mean_ns"] * d["n_visits"]).sum() / nv if nv else np.nan, sem_ns=np.nan)
+            nv, mean = _pooled(ktime, "n_visits", "mean_ns")
+            no, omean = _pooled(ktime, "n_out", "out_mean_ns")
+            row.update(pct_ions=100.0, n_visits=nv, mean_ns=mean, sem_ns=np.nan,
+                       n_out=no, out_mean_ns=omean, out_sem_ns=np.nan)
         else:
             r = ktime[ktime["start"] == start].iloc[0]
-            row.update(pct_ions=r["pct"], n_visits=int(r["n_visits"]), mean_ns=r["mean_ns"], sem_ns=r["sem_ns"])
+            row.update(pct_ions=r["pct"], n_visits=int(r["n_visits"]), mean_ns=r["mean_ns"], sem_ns=r["sem_ns"],
+                       n_out=int(r["n_out"]), out_mean_ns=r["out_mean_ns"], out_sem_ns=r["out_sem_ns"])
         row["out"] = 100 * g.loc[g["target"] == EXIT, "count"].sum() / n
         for grp in groups:
             row[grp] = 100 * g.loc[g["target"].map(group_label) == grp, "count"].sum() / n
@@ -859,15 +872,18 @@ def plot_visit_summary(summary, title, out_file, visit=0, min_n=15):
     if not len(summary):
         return
     when = "when the ion leaves the SF" if visit == 0 else f"when leaving visit {visit}"
-    groups = [c for c in summary.columns if c not in ("start", "n_ions", "pct_ions", "n_visits", "mean_ns", "sem_ns")]
-    cols = ["other K+", "ions", "% of ions", f"visit {visit + 1} time (ns)"] + [g if g != "out" else "out" for g in groups]
+    groups = [c for c in summary.columns if c not in ("start", "n_ions", "pct_ions", "n_visits", "mean_ns", "sem_ns",
+                                                      "n_out", "out_mean_ns", "out_sem_ns")]
+    cols = ["other K+", "ions", "% of ions", f"visit {visit + 1} time (ns)", "out time (ns)"] + groups
     cells = []
     for r in summary.to_dict("records"):
         t = "–" if not r["n_visits"] else (f"{r['mean_ns']:.1f} ± {r['sem_ns']:.1f}" if np.isfinite(r["sem_ns"])
                                            else f"{r['mean_ns']:.1f}")
-        cells.append(["all ions" if r["start"] == "all" else r["start"], str(r["n_ions"]), f"{r['pct_ions']:.0f}%", t]
+        o = "–" if not r["n_out"] else (f"{r['out_mean_ns']:.1f} ± {r['out_sem_ns']:.1f}"
+                                         if np.isfinite(r["out_sem_ns"]) else f"{r['out_mean_ns']:.1f}")
+        cells.append(["all ions" if r["start"] == "all" else r["start"], str(r["n_ions"]), f"{r['pct_ions']:.0f}%", t, o]
                      + [f"{r[g]:.0f}%" for g in groups])
-    widths = [1.3, 1.0, 1.3, 2.3] + [1.15] * len(groups)
+    widths = [1.3, 1.0, 1.3, 2.3, 2.1] + [1.15] * len(groups)
     fig, ax = plt.subplots(figsize=(1.1 * sum(widths), 0.8 + 0.42 * (len(cells) + 1)))
     ax.axis("off")
     tb = ax.table(cellText=cells, colLabels=cols, loc="upper center", cellLoc="center",
@@ -882,7 +898,7 @@ def plot_visit_summary(summary, title, out_file, visit=0, min_n=15):
             c.get_text().set_color("white")
             c.get_text().set_fontweight("bold")
         else:
-            if summary.iloc[i - 1]["start"] == "all" or j in (2, 3):   # all ions, % of ions, visit time
+            if summary.iloc[i - 1]["start"] == "all" or j in (2, 3, 4):   # all ions, % of ions, times
                 c.get_text().set_fontweight("bold")
             if summary.iloc[i - 1]["n_ions"] < min_n:
                 c.get_text().set_color("#9a9a9a")
@@ -905,7 +921,7 @@ def plot_visit(table, sites, title, out_file, visit=0, which=None, ktime=None):
     targets = sites + [EXIT]
     ncol = min(3, len(starts))
     nrow = int(np.ceil(len(starts) / ncol))
-    size = (9, 6) if len(starts) == 1 else (6 * ncol, 4.6 * nrow)
+    size = (9, 6.4) if len(starts) == 1 else (6.4 * ncol, 5.0 * nrow)
     fig, axes = plt.subplots(nrow, ncol, figsize=size, squeeze=False)
     for ax in axes.flat[len(starts):]:
         ax.axis("off")
@@ -942,8 +958,10 @@ def plot_visit(table, sites, title, out_file, visit=0, which=None, ktime=None):
 def visit_k_time_table(events, visits_site, max_k, dt, visit=0):
     """
     Visit `visit`, per other-K+ count at the step (as in visit_table): ions (n_ions, pct of
-    the ions reaching this visit) and how long the visit lasted for those that made it
-    (n_visits, mean_ns, sem_ns, median_ns of residue_frames).
+    the ions reaching this visit), how long the visit lasted for those that made it
+    (n_visits, mean_ns, sem_ns, median_ns of residue_frames), and for those that went out
+    instead how long they took to leave the cavity from where they were - the SF (visit 0)
+    or visit-1 (n_out, out_mean_ns, out_sem_ns, out_median_ns).
     """
     ev = events[events["n_visits"] >= visit]
     v = visits_site.set_index(["run", "event", "visit"]) if len(visits_site) else None
@@ -955,15 +973,26 @@ def visit_k_time_table(events, visits_site, max_k, dt, visit=0):
         total = [tot[(r, e, visit - 1)] for r, e in keys]
     res = v["residue_frames"] if v is not None else {}
     dur = np.array([res.get((r, e, visit), np.nan) for r, e in keys], dtype=float) * dt
+    if visit == 0:
+        out_f = np.where(ev["n_visits"] == 0, ev["moving_first"], np.nan)
+    else:
+        mov = v["moving_after"]
+        out_f = np.array([mov[(r, e, visit - 1)] if n == visit else np.nan
+                          for (r, e), n in zip(keys, ev["n_visits"])], dtype=float)
+    out_t = np.asarray(out_f, dtype=float) * dt
     lab = np.array([bin_label(k, max_k) for k in total])
     rows = []
     for s in [bin_label(k, max_k) for k in range(max_k + 1)]:
         m = lab == s
         d = dur[m][np.isfinite(dur[m])]
+        o = out_t[m][np.isfinite(out_t[m])]
         rows.append(dict(start=s, n_ions=int(m.sum()), pct=100 * m.sum() / max(len(lab), 1), n_visits=len(d),
                          mean_ns=d.mean() if len(d) else np.nan,
                          sem_ns=d.std(ddof=1) / np.sqrt(len(d)) if len(d) > 1 else np.nan,
-                         median_ns=np.median(d) if len(d) else np.nan))
+                         median_ns=np.median(d) if len(d) else np.nan,
+                         n_out=len(o), out_mean_ns=o.mean() if len(o) else np.nan,
+                         out_sem_ns=o.std(ddof=1) / np.sqrt(len(o)) if len(o) > 1 else np.nan,
+                         out_median_ns=np.median(o) if len(o) else np.nan))
     return pd.DataFrame(rows)
 
 
