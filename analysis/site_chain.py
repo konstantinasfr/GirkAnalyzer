@@ -107,6 +107,9 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
             occupied = another K+ has the residue as its closest one within the cutoff for at
                              least as many frames as a stay (10 for G12, 2 for G2; all frames
                              if fewer) while the ion moves to its next visit or the exit
+            visit_<k>_free_vs_occupied_residue.csv, visit_<k>_free_vs_occupied_<E152|N184>.png
+                             the same test for each residue against itself (E152.2a free vs
+                             occupied -> going to E152.2a, ...)
             arrival_sharing.csv   visits starting while the residue holds another K+, and
                              how often that K+ has gone when the ion leaves (knock-on)
             occupancy_summary.txt
@@ -1136,6 +1139,7 @@ def occupancy_steps(events, visits_raw, visits_site, max_k, visit=0):
     keys = list(zip(ev["run"], ev["event"]))
     raw = visits_raw.set_index(["run", "event", "visit"]) if len(visits_raw) else None
     here = visits_site.set_index(["run", "event", "visit"])["site"] if len(visits_site) else {}
+    here_raw = raw["site"] if raw is not None else {}
     if visit == 0:
         total, occ = ev["sf_count"].to_numpy(), ev["occupied_sf"].to_numpy()
     else:
@@ -1147,7 +1151,8 @@ def occupancy_steps(events, visits_raw, visits_site, max_k, visit=0):
         known=[isinstance(o, str) for o in occ],
         occupied=[{group_label(x) for x in _occ_set(o)} if isinstance(o, str) else set() for o in occ],
         occupied_sites=[_occ_set(o) if isinstance(o, str) else set() for o in occ],
-        target=[group_label(here.get((r, e, visit), EXIT)) for r, e in keys]))
+        target=[group_label(here.get((r, e, visit), EXIT)) for r, e in keys],
+        target_site=[here_raw.get((r, e, visit), EXIT) for r, e in keys]))
     return st[st["known"]].drop(columns="known")             # ions from runs without occupancy left out
 
 
@@ -1176,6 +1181,26 @@ def occupancy_tables(st, groups, max_k, members=None):
                 r[f"out_{name}"] = 100 * (sub["target"] == EXIT).mean() if len(sub) else np.nan
             test_rows.append(r)
     return pd.DataFrame(occ_rows), pd.DataFrame(test_rows)
+
+
+def residue_test(st, residues, max_k):
+    """Per residue and K+ bin: % going to that residue and % going out when that same residue is free
+    vs held by another K+ (same columns as occupancy_tables' test, 'group' = the residue)."""
+    rows = []
+    for b in ["all"] + [bin_label(k, max_k) for k in range(max_k + 1)]:
+        g = st if b == "all" else st[st["start"] == b]
+        if not len(g):
+            continue
+        for res in residues:
+            busy = g["occupied_sites"].map(lambda o: res in o)
+            r = dict(group=res, start=b)
+            for name, m in (("free", ~busy), ("occupied", busy)):
+                sub = g[m]
+                r[f"n_{name}"] = len(sub)
+                r[f"to_group_{name}"] = 100 * (sub["target_site"] == res).mean() if len(sub) else np.nan
+                r[f"out_{name}"] = 100 * (sub["target_site"] == EXIT).mean() if len(sub) else np.nan
+            rows.append(r)
+    return pd.DataFrame(rows)
 
 
 def plot_occupancy_by_k(occ, groups, title, out_file, visit=0):
@@ -1246,9 +1271,9 @@ def plot_free_vs_occupied(test, groups, title, out_file, visit=0, min_n=5):
     from matplotlib.patches import Patch
     fig.legend(handles=[Patch(facecolor="#bbbbbb", alpha=0.35, edgecolor="#333333", label="residue free"),
                         Patch(facecolor="#555555", hatch="//", edgecolor="#333333", label="residue holds another K+")],
-               loc="upper right", fontsize=14, ncol=2, bbox_to_anchor=(1.0, 1.0))
+               loc="upper center", fontsize=14, ncol=2, bbox_to_anchor=(0.5, 0.0))
     fig.suptitle(f"{title}\nvisit {visit + 1}: residue free vs already holding another K+, by the other K+ in "
-                 f"the cavity {when}\n(bars from < {min_n} ions left out; (n) = ions)", fontsize=16, x=0.4)
+                 f"the cavity {when}\n(bars from < {min_n} ions left out; (n) = ions)", fontsize=16)
     fig.tight_layout()
     fig.savefig(out_file, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -1270,7 +1295,7 @@ def arrival_sharing(visits_raw, model_names):
     return pd.DataFrame(rows)
 
 
-def plot_occupancy_summary(summary, occ, groups, title, out_file, visit=0, min_n=15, members=None):
+def plot_occupancy_summary(summary, occ, groups, title, out_file, visit=0, min_n=15, members=None, site_pct=None):
     """The visit summary table with, next to each residue group's % of the ions going to it, the % of
     the ions that saw it already holding another K+ (from the ions of runs with occupancy)."""
     occ = occ.set_index("start")
@@ -1279,10 +1304,14 @@ def plot_occupancy_summary(summary, occ, groups, title, out_file, visit=0, min_n
     members = members or {}
     def sub(g):
         return [m for m in members.get(g, []) if m in occ.columns]
+    def sub_to(g):                                              # residues with their own visit %
+        return [m for m in members.get(g, []) if site_pct is not None and m in site_pct.columns]
     for g in groups:
         ms = sub(g)
         tag = " / ".join(m.split(".", 1)[1] for m in ms) if len(ms) > 1 else ""
-        cols += [f"→ {g}", f"{g} occupied\n{tag}" if tag else f"{g}\noccupied"]
+        mt = sub_to(g)
+        tag_to = " / ".join(m.split(".", 1)[1] for m in mt) + " / all" if len(mt) > 1 else ""
+        cols += [f"→ {g}\n{tag_to}" if tag_to else f"→ {g}", f"{g} occupied\n{tag}" if tag else f"{g}\noccupied"]
     cols.append("ions with\noccupancy")
     rows, cells = [], []
     for r in summary.to_dict("records"):
@@ -1305,15 +1334,23 @@ def plot_occupancy_summary(summary, occ, groups, title, out_file, visit=0, min_n
                     row[f"{m}_occupied"] = o[m]
             else:
                 txt = f"{occ_v:.0f}%"
-            c += [f"{r.get(g, 0):.0f}%", txt]
+            mt = sub_to(g)
+            if len(mt) > 1 and r["start"] in site_pct.index:     # one number per residue, then the group
+                sp = site_pct.loc[r["start"]]
+                to_txt = " / ".join(f"{sp[m]:.0f}" for m in mt) + f" / {r.get(g, 0):.0f}%"
+                for m in mt:
+                    row[f"to_{m}"] = sp[m]
+            else:
+                to_txt = f"{r.get(g, 0):.0f}%"
+            c += [to_txt, txt]
             row[f"to_{g}"], row[f"{g}_occupied"] = r.get(g, np.nan), occ_v
         n_occ = int(o["n_ions"]) if o is not None else 0
         c.append(str(n_occ))
         row["n_ions_occupancy"] = n_occ
         cells.append(c)
         rows.append(row)
-    widths = [1.3, 0.9, 1.15, 1.9, 1.7, 0.95] + sum(([1.0, 2.1 if len(sub(g)) > 1 else 1.25] for g in groups), []) \
-        + [1.35]
+    widths = [1.3, 0.9, 1.15, 1.9, 1.7, 0.95] + sum(([2.6 if len(sub_to(g)) > 1 else 1.0,
+                                                      2.1 if len(sub(g)) > 1 else 1.25] for g in groups), []) + [1.35]
     fig, ax = plt.subplots(figsize=(1.0 * sum(widths), 0.9 + 0.36 * (len(cells) + 2)))
     ax.axis("off")
     tb = ax.table(cellText=cells, colLabels=cols, loc="upper center", cellLoc="center",
@@ -1380,11 +1417,17 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
         test.to_csv(od / f"{name}_free_vs_occupied.csv", index=False, float_format="%.2f")
         plot_occupancy_by_k(occ, groups, title, od / f"{name}_occupied_by_k.png", k)
         plot_free_vs_occupied(test, groups, title, od / f"{name}_free_vs_occupied.png", k)
+        rtest = residue_test(st, all_members, max_k)          # each residue against itself
+        rtest.to_csv(od / f"{name}_free_vs_occupied_residue.csv", index=False, float_format="%.2f")
+        for g in groups:
+            if len(members[g]) > 1:
+                plot_free_vs_occupied(rtest, members[g], title, od / f"{name}_free_vs_occupied_{g}.png", k)
         if dt is not None:
-            summ = visit_summary_table(visit_table(events, visits_site, sites, max_k, k),
-                                       visit_k_time_table(events, visits_site, max_k, dt, k))
+            vt = visit_table(events, visits_site, sites, max_k, k)
+            site_pct = vt.pivot_table(index="start", columns="target", values="pct", aggfunc="first")
+            summ = visit_summary_table(vt, visit_k_time_table(events, visits_site, max_k, dt, k))
             plot_occupancy_summary(summ, occ, groups, title, od / f"{name}_summary_occupancy.png", k,
-                                   members=members).to_csv(
+                                   members=members, site_pct=site_pct).to_csv(
                 od / f"{name}_summary_occupancy.csv", index=False, float_format="%.2f")
         rep(f"\nVISIT {k + 1}: % of the ions seeing each residue group occupied, by other K+")
         rep("    other K+     n  " + "".join(f"{g:>8}" for g in groups))
@@ -1392,6 +1435,11 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
             rep(f"    {r['start']:>8} {r['n_ions']:>5}  " + "".join(f"{r[g]:>7.0f}%" for g in groups))
         rep("  going to the group / going out, when it is free vs occupied (all K+ counts together):")
         for r in test[test["start"] == "all"].to_dict("records"):
+            rep(f"    {r['group']:>8}: free (n={r['n_free']:>3}) to it {r['to_group_free']:5.1f}%  out "
+                f"{r['out_free']:5.1f}%   |   occupied (n={r['n_occupied']:>3}) to it {r['to_group_occupied']:5.1f}%"
+                f"  out {r['out_occupied']:5.1f}%")
+        rep("  each residue against itself: going to it / going out when that residue is free vs occupied (all K+):")
+        for r in rtest[rtest["start"] == "all"].to_dict("records"):
             rep(f"    {r['group']:>8}: free (n={r['n_free']:>3}) to it {r['to_group_free']:5.1f}%  out "
                 f"{r['out_free']:5.1f}%   |   occupied (n={r['n_occupied']:>3}) to it {r['to_group_occupied']:5.1f}%"
                 f"  out {r['out_occupied']:5.1f}%")
