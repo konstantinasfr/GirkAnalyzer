@@ -135,8 +135,8 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              seats push ions out, 07 the bottom of the cavity; speech_numbers.txt
             presentation/tables/     the tables of the slides (PNG + CSV): first stop and occupancy by
                              K+, free -> occupied (with robustness), Glu / bottom tracking (the K+ already there,
-                             where it goes), after a stop at each residue, last stop, asparagines by K+;
-                             presentation/08_last_stop.png: last stop before leaving, per residue
+                             where it goes), after a stop at each residue, last stop, last stop by the visit it was
+                             (06b: of the ions leaving after visit 1, 2, ... % per residue), asparagines by K+
         stops/stops.csv, .png, .txt   per residue (a stop): visits, time there, next stop (out / GLU
                              ring / lower ring), time still needed to leave the cavity from the visit,
                              and the SF -> exit time of the ions stopping there vs never (is it a trap?)
@@ -2558,27 +2558,45 @@ def last_stop_counts(st, vt, sites):
     return rows, n
 
 
-def pres_last_stop_plot(st, vt, sites, out, title):
-    """Bar plot: % of ions whose last stop before leaving the cavity is each residue (or no stop)."""
-    rows, n = last_stop_counts(st, vt, sites)
+def last_stop_by_visit(visits, n_ions, n_nostop, sites, bins=((1, 1), (2, 2), (3, 3), (4, 6), (7, None))):
+    """Ions leaving the cavity, grouped by the visit their last stop was (visit 1 = they left after their
+    first stop, ...): per group the ions (% of all ions) and the % whose last stop was each residue;
+    first row the ions leaving without a stop. visits = visits.csv (counted from 0)."""
+    if not len(visits) or not n_ions:
+        return [], []
+    last = visits.sort_values("visit").groupby(["run", "event"]).tail(1)
+    last = last[last["next_site"] == EXIT]
+    k = last["visit"] + 1
+    rows = [["no stop", n_nostop, 100 * n_nostop / n_ions] + [None] * len(sites)]
+    for lo, hi in bins:
+        g = last[(k >= lo) & ((k <= hi) if hi else True)]
+        lab = f"visit {lo}" if lo == hi else (f"visit {lo}-{hi}" if hi else f"visit {lo}+")
+        c = g["site"].value_counts()
+        rows.append([lab, len(g), 100 * len(g) / n_ions] + [100 * c.get(x, 0) / len(g) if len(g) else 0 for x in sites])
+    c = last["site"].value_counts()
+    rows.append(["all", len(last), 100 * len(last) / n_ions] + [100 * c.get(x, 0) / len(last) if len(last) else 0 for x in sites])
+    return rows, ["last stop", "ions", "% of ions"] + list(sites)
+
+
+def pres_last_stop_by_visit(visits, vt, sites, tdir, title):
+    """table: of the ions leaving after visit k, which residue was the last stop (row %)."""
+    a = vt[vt["start"] == "all"]
+    if not len(a):
+        return
+    n = int(a["n_ions"].iloc[0])
+    nost = int(a.set_index("target")["count"].get(EXIT, 0))
+    rows, cols = last_stop_by_visit(visits, n, nost, sites)
     if not rows:
         return
-    fig, ax = plt.subplots(figsize=(max(9, 1.25 * len(rows) + 2), 5.8))
-    x = np.arange(len(rows))
-    cols = [PRES_COLORS.get(group_label(r[0]), PRES_COLORS[EXIT]) if r[0] != "no stop" else PRES_COLORS[EXIT] for r in rows]
-    ax.bar(x, [r[2] for r in rows], 0.7, color=cols, edgecolor="white", linewidth=2)
-    for xi, r in zip(x, rows):
-        ax.text(xi, r[2] + 0.6, f"{r[2]:.0f}%", ha="center", va="bottom", fontsize=PRES_FONT["value"], fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels([r[0] for r in rows], fontsize=PRES_FONT["tick"] - 2, fontweight="bold", rotation=30, ha="right")
-    ax.set_ylabel(f"% of ions ({n})", fontsize=PRES_FONT["label"])
-    ax.set_ylim(0, max(r[2] for r in rows) * 1.2)
-    ax.set_title("Last stop before leaving the cavity", fontsize=PRES_FONT["title"], pad=12)
-    _pres_axes(ax)
-    _pres_save(fig, out)
+    cells = [[r[0], str(r[1]), f"{r[2]:.0f}%"] + ["" if v is None else f"{v:.0f}%" for v in r[3:]] for r in rows]
+    heads = [None, None, None] + [PRES_COLORS.get(group_label(x), "123B4A").lstrip("#") for x in sites]
+    _ptable(cells, ["ions left\nafter", "ions", "% of\nall ions"] + [x.split(".G")[0].replace(".", "\n") for x in sites],
+            [1.6, 0.9, 1.0] + [1.0] * len(sites), tdir / "06b_last_stop_by_visit.png",
+            f"{title}\nions leaving the cavity: which residue was the last stop, by the visit it was (row %)",
+            head_colors=heads, bold={(len(cells) - 1, j) for j in range(len(cols))}, head_size=11)
 
 
-def pres_table_bottom(st, vt, occ, sites, tdir, title, min_visits=15):
+def pres_table_bottom(st, vt, occ, sites, tdir, title, min_visits=15, visits=None):
     """slide 'after a stop': for every residue (all visits) where the ion goes next (another GLU-ring
     residue / the lower ring / out), the last stop before leaving per residue, and the asparagines as
     first stop / occupied by K+ in the cavity."""
@@ -2595,7 +2613,8 @@ def pres_table_bottom(st, vt, occ, sites, tdir, title, min_visits=15):
         _ptable([[r[0], f"{r[1]:.0f}", f"{r[2]:.0f}%"] for r in rows], ["last stop before leaving", "ions", "% of ions"],
                 [3.0, 1.2, 1.4], tdir / "06_last_stop_before_leaving.png",
                 f"{title}\nlast stop before leaving the cavity ({n} ions; exits = stops x % out, all visits)")
-        pres_last_stop_plot(st, vt, sites, tdir.parent / "08_last_stop.png", title)
+    if visits is not None and len(visits):
+        pres_last_stop_by_visit(visits, vt, sites, tdir, title)
     asn = [x for x in sites if group_label(x) == "N184"]
     bins = [k for k, _ in _pres_bins(vt)]
     if asn and bins and len(occ):
@@ -2622,6 +2641,7 @@ def presentation_tables(out_dir, title, sites):
     rules = rd(out_dir / "occupancy" / "robustness" / "visit_1_free_vs_occupied_rules.csv")
     hs, hv = rd(out_dir / "handover" / "handover_visit_1_summary.csv"), rd(out_dir / "handover" / "handover_visits.csv")
     st = rd(out_dir / "stops" / "stops.csv")
+    visits = rd(out_dir / "visits.csv")
     for d in (vt, occ, rt, kt, rules, hs):
         if len(d) and "start" in d:
             d["start"] = d["start"].astype(str)
@@ -2633,7 +2653,7 @@ def presentation_tables(out_dir, title, sites):
     jobs = [("first stop and occupancy", lambda: pres_table_load(vt, occ, rt, kt, rules, sites, tdir, title) if len(vt) and len(occ) and len(rt) else None),
             ("glu tracking", lambda: pres_table_tracking(hs, hv, sites, tdir, title, "GLU") if len(hs) else None),
             ("bottom tracking", lambda: pres_table_tracking(hs, hv, sites, tdir, title, "LOWER") if len(hs) else None),
-            ("bottom", lambda: pres_table_bottom(st, vt, occ, sites, tdir, title))]
+            ("bottom", lambda: pres_table_bottom(st, vt, occ, sites, tdir, title, visits=visits))]
     for name, fn in jobs:
         try:
             fn()
