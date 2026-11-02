@@ -2307,13 +2307,8 @@ def pres_where_pushed(hv, hs, out, lines, min_res=15, min_push=60):
                         fontsize=PRES_FONT["value"] - 1, fontweight="bold")
             parts.append(f"{lab} {v:.0f}%")
             left += v
-        perm = r.get("pct_resident_permeates", np.nan)
-        if np.isfinite(perm):
-            ax.text(102, i, f"then permeates {perm:.0f}%\n(median {r['median_resident_exit_ns']:.0f} ns later)",
-                    va="center", fontsize=PRES_FONT["value"] - 2)
-        lines.append(f"  K+ pushed off {r['site']}: " + ", ".join(parts)
-                     + (f"; then permeates {perm:.0f}%, median {r['median_resident_exit_ns']:.0f} ns after the push"
-                        if np.isfinite(perm) else ""))
+        ax.text(102, i, f"{r['n_resident']:.0f} K+", va="center", fontsize=PRES_FONT["value"] - 2)
+        lines.append(f"  K+ pushed off {r['site']} ({r['n_resident']:.0f} K+): " + ", ".join(parts))
     ax.set_yticks(range(len(rows)))
     ax.set_yticklabels([f"pushed off\n{r['site']}" for r, _ in rows], fontsize=PRES_FONT["tick"], fontweight="bold")
     ax.invert_yaxis()
@@ -2351,43 +2346,45 @@ def pres_storage_push(rt, out, lines, min_n=30):
 
 
 def pres_lower_ring(st, out, lines, min_visits=15):
-    """07: after a stop at a lower-ring residue: back up, sideways, or out (all visits)."""
-    a = st[(st["ring"] == "LOWER") & (st["visits"] >= min_visits)]
+    """07: after a stop at each residue (all visits): next to a Glu (upper ring), the lower ring, or out."""
+    a = st[st["visits"] >= min_visits]
     if not len(a):
         return
     res = a["site"].tolist()
-    fig, ax = plt.subplots(figsize=(13, 1.6 + 1.05 * len(res)))
-    parts = (("pct_to_glu", "back up to the GLU ring", PRES_COLORS["E152"]),
-             ("pct_to_lower", "sideways (another lower-ring residue)", PRES_COLORS["N184"]),
-             ("pct_out", "out of the cavity", PRES_COLORS[EXIT]))
+    fig, ax = plt.subplots(figsize=(13, 1.6 + 0.85 * len(res)))
+    parts = (("pct_to_glu", "next: a Glu (upper ring)", PRES_COLORS["E152"]),
+             ("pct_to_lower", "next: D173 / Asn (lower ring)", PRES_COLORS["N184"]),
+             ("pct_out", "next: out of the cavity", PRES_COLORS[EXIT]))
     for i, r in enumerate(a.to_dict("records")):
         left = 0
         for col, lab, c in parts:
             v = r[col]
-            ax.barh(i, v, left=left, color=c, edgecolor="white", linewidth=2, height=0.6, label=lab if i == 0 else None)
+            ax.barh(i, v, left=left, color=c, edgecolor="white", linewidth=2, height=0.62, label=lab if i == 0 else None)
             if v >= 7:
                 ax.text(left + v / 2, i, f"{v:.0f}%", ha="center", va="center", color="white",
                         fontsize=PRES_FONT["value"], fontweight="bold")
             left += v
-        lines.append(f"  after a stop at {r['site']} ({r['visits']} stops): back up {r['pct_to_glu']:.0f}%, sideways "
+        ax.text(102, i, f"{r['visits']} stops", va="center", fontsize=PRES_FONT["value"] - 3)
+        lines.append(f"  after a stop at {r['site']} ({r['visits']} stops): a Glu {r['pct_to_glu']:.0f}%, lower ring "
                      f"{r['pct_to_lower']:.0f}%, out {r['pct_out']:.0f}%")
     ax.set_yticks(range(len(res)))
-    ax.set_yticklabels([f"after\n{r_}" for r_ in res], fontsize=PRES_FONT["tick"], fontweight="bold")
+    ax.set_yticklabels(res, fontsize=PRES_FONT["tick"], fontweight="bold")
+    for t, r in zip(ax.get_yticklabels(), res):
+        t.set_color(_pres_color(r))
     ax.invert_yaxis()
     ax.set_xlim(0, 100)
     ax.set_xlabel("% of the stops, by where the ion goes next", fontsize=PRES_FONT["label"])
-    ax.legend(ncol=3, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=PRES_FONT["legend"] - 1, frameon=False)
-    ax.set_title("The bottom of the cavity: back up, sideways, or out", fontsize=PRES_FONT["title"], pad=44)
+    ax.legend(ncol=3, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=PRES_FONT["legend"] - 2, frameon=False)
+    ax.set_title("After a stop at each residue: where the ion goes next", fontsize=PRES_FONT["title"], pad=44)
     _pres_axes(ax)
     _pres_save(fig, out)
-
 
 
 # ── slide tables (presentation/tables/): the tables used on the slides, as PNG + CSV ──
 PRES_TINT = {"E141": "F6DEDB", "E152": "F9E8D2", "D173": "D6EFE7", "N184": "DCE8F8", EXIT: "E6E6E6"}
 
 
-def _ptable(cells, cols, widths, out, title, head_colors=None, fills=None, bold=None, grey=None, note=None):
+def _ptable(cells, cols, widths, out, title, head_colors=None, fills=None, bold=None, grey=None, note=None, head_size=12):
     """A slide-style table: navy (or per-column coloured) header, tinted key cells, bold cells, a note."""
     fills, bold, grey = fills or {}, bold or set(), grey or set()
     fig, ax = plt.subplots(figsize=(max(8.0, 0.95 * sum(widths)), 0.9 + 0.36 * (len(cells) + 2) + (0.25 if note else 0)))
@@ -2403,6 +2400,7 @@ def _ptable(cells, cols, widths, out, title, head_colors=None, fills=None, bold=
             c.set_facecolor("#" + (head_colors[j] if head_colors and head_colors[j] else "123B4A"))
             c.get_text().set_color("white")
             c.get_text().set_fontweight("bold")
+            c.get_text().set_fontsize(head_size)
             c.set_height(c.get_height() * 1.7)
             continue
         if (i - 1, j) in fills:
@@ -2440,11 +2438,11 @@ def pres_table_load(vt, occ, rt, kt, rules, sites, tdir, title):
     cols, widths, heads = ["other K+", "ions"], [1.1, 0.8], [None, None]
     for s_ in sites:
         cols += [f"{s_}\n→", f"{s_}\nocc."]
-        widths += [0.95, 0.95]
+        widths += [1.05, 1.05]
         c = PRES_COLORS.get(group_label(s_), "#8C8C8C").lstrip("#")
         heads += [c, "5B6770"]
-    cols += ["out of the\ncavity", "time to\nleave (ns)"]
-    widths += [1.1, 1.1]
+    cols += ["out of\nthe cavity", "time to\nleave (ns)"]
+    widths += [1.15, 1.15]
     heads += [PRES_COLORS[EXIT].lstrip("#"), None]
     cells, fills, bold = [], {}, set()
     for i, k in enumerate(bins):
@@ -2466,7 +2464,7 @@ def pres_table_load(vt, occ, rt, kt, rules, sites, tdir, title):
         cells.append(row)
     _ptable(cells, cols, widths, tdir / "01_first_stop_and_occupancy.png",
             f"{title}\nvisit 1: where new ions go first (→) and which residues already hold another K+ (occ.), by the other K+ in the cavity",
-            head_colors=heads, fills=fills, bold=bold,
+            head_colors=heads, fills=fills, bold=bold, head_size=11,
             note="→ = % of new ions stopping there first; occ. = % of new ions finding it already holding another K+")
     a = rt[rt["start"] == "all"].set_index("group")
     rows, f2 = [], {}
@@ -2514,14 +2512,10 @@ def _dest_table(hv, hs, residues, sites):
             split = " / ".join(f"{100 * (m == x).sum() / n:.0f}" for x in members) if len(members) > 1 and len(m) else ""
             row.append(f"{v:.0f}%" + (f" ({split})" if split and v > 0 else ""))
         row.append(f"{100 * (dest == EXIT).sum() / n:.0f}%")
-        perm = g["resident_permeates"].astype(float)
-        row.append(f"{100 * perm.mean():.0f}%")
-        ex = g.loc[g["resident_permeates"] == True, "resident_exit_ns"]
-        row.append(f"{ex.median():.0f} ns" if sub is None and len(ex) else "–")
         rows.append(row)
-    cols = ["K+ from", "pushed\nK+"] + [f"→ {gr}" + ("\n(" + " / ".join(x.split(".", 1)[1] for x in sorted(y for y in sites if group_label(y) == gr)) + ")"
+    cols = ["K+ from", "K+"] + [f"→ {gr}" + ("\n(" + " / ".join(x.split(".", 1)[1] for x in sorted(y for y in sites if group_label(y) == gr)) + ")"
                                        if len([y for y in sites if group_label(y) == gr]) > 1 else "") for gr in groups] \
-           + ["straight\nout", "then\npermeates", "median time\nto its exit"]
+           + ["straight\nout"]
     return rows, cols
 
 
@@ -2540,19 +2534,13 @@ def pres_table_tracking(hs, hv, sites, tdir, title, which, min_res=5):
     name = "02_glu_tracking" if which == "GLU" else "04_bottom_tracking"
     _ptable(cells, ["residue", "K+ sitting there\nwhen the new ion lands", "that K+ is pushed off\nas the new ion lands",
                     "that K+ had already\nleft (> 1 ns before)", "median: when it left,\nrelative to arrival"],
-            [1.6, 2.6, 2.6, 2.6, 2.4], tdir / f"{name}_the_K_already_there.png",
+            [1.6, 3.0, 3.0, 3.0, 2.8], tdir / f"{name}_the_K_already_there.png",
             f"{title}\nvisit 1, ion tracking: the K+ already sitting at the residue when the new ion lands", fills=fills)
-    res = []
-    for r in a.to_dict("records"):                             # bottom hand-over residues also split by load
-        if which == "LOWER" and r["pct_leave_near_arrival"] >= 60 and r["n_resident"] >= 15:
-            ks = sorted(hs[(hs["site"] == r["site"]) & (hs["start"] != "all") & (hs["n_resident"] > 0)]["start"].unique())
-            res += [(r["site"], f"{r['site']} · all", None)] + [(r["site"], f"   {k} other K+", k) for k in ks]
-        else:
-            res.append((r["site"], r["site"], None))
+    res = [(r["site"], r["site"], None) for r in a.to_dict("records")]
     rows, cols = _dest_table(hv, hs, res, sites)
     if rows:
-        _ptable(rows, cols, [1.9, 0.9] + [2.3 if "(" in c else 1.2 for c in cols[2:-3]] + [1.1, 1.2, 1.4], tdir / f"{name}_where_it_goes.png",
-                f"{title}\nvisit 1, ion tracking: where the K+ pushed off (or gone from) the residue goes next, and whether it then permeates",
+        _ptable(rows, cols, [1.9, 1.0] + [2.4 if "(" in c else 1.3 for c in cols[2:-1]] + [1.3], tdir / f"{name}_where_it_goes.png",
+                f"{title}\nvisit 1, ion tracking: where the K+ pushed off (or gone from) the residue goes next",
                 note="a residue group with several members gives the total and, in brackets, the split per member (%)")
 
 
@@ -2683,12 +2671,12 @@ def presentation_figures(out_dir, title, sites):
          lambda L: pres_free_vs_occupied(rt, pdir / "03_free_vs_occupied.png", L) if len(rt) else None),
         ("04_K_already_there.png", "When the new ion lands: the K+ already there pushed off at that moment, or gone before",
          lambda L: pres_resident_at_arrival(hs, pdir / "04_K_already_there.png", L) if len(hs) else None),
-        ("05_where_pushed_K_goes.png", "Where the pushed K+ goes next, and whether it then permeates",
+        ("05_where_pushed_K_goes.png", "Where the pushed K+ goes next",
          lambda L: pres_where_pushed(hv, hs, pdir / "05_where_pushed_K_goes.png", L) if len(hs) else None),
         ("06_storage_push.png", "Storage seats: new ions avoid them when full, and more leave the cavity",
          lambda L: pres_storage_push(rt, pdir / "06_storage_push.png", L) if len(rt) else None),
-        ("07_bottom_of_cavity.png", "After a stop in the lower ring: back up, sideways or out (all visits)",
-         lambda L: pres_lower_ring(st, pdir / "07_bottom_of_cavity.png", L) if len(st) else None),
+        ("07_after_a_stop.png", "After a stop at each residue: to a Glu, the lower ring, or out (all visits)",
+         lambda L: pres_lower_ring(st, pdir / "07_after_a_stop.png", L) if len(st) else None),
     ]
     for fname, what, fn in steps:
         lines = []
