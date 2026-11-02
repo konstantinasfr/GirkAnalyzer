@@ -1843,7 +1843,7 @@ def handover_table(events, frames, visits_raw, max_k, dt):
     vis_by = {k: g.sort_values("visit") for k, g in visits_raw.groupby(["run", "event"])}
     for key, vv in vis_by.items():
         g = fr_by.get(key)
-        if g is None or key not in end1:
+        if g is None or key not in end1 or g["occupants"].isna().all():   # run collected without identities
             continue
         f0 = int(g["frame"].iloc[0])
         occ = [_parse_occupants(x) for x in g["occupants"]]
@@ -1999,6 +1999,12 @@ def handover_analysis(events, frames, visits_raw, sites, max_k, title, out_dir, 
         rep("\nION TRACKING: not available - the frames have no occupant identities (run main.py again)")
         print("site_chain: no occupant identities in the frames: run main.py again for the ion tracking")
     else:
+        no_id = sorted(set(events["run"]) - set(ho["run"]))
+        if no_id:
+            rep("\nruns without occupant identities, left out of the ion tracking (run main.py again for them): "
+                + ", ".join(f"RUN{r}" for r in no_id))
+            print("site_chain: ion tracking without " + ", ".join(f"RUN{r}" for r in no_id)
+                  + " (no occupant identities: run main.py again for them)")
         ho.to_csv(od / "handover_visits.csv", index=False, float_format="%.2f")
         summ = handover_summary(ho, sites)
         summ.to_csv(od / "handover_summary.csv", index=False, float_format="%.2f")
