@@ -129,6 +129,10 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              residue while the new ion travels there: when it leaves (relative to the
                              arrival) and where it goes (handover_visits.csv, handover_summary.csv,
                              handover.png, handover.txt)
+        presentation/                (residue model) the visit-1 story for slides, one message per figure:
+                             01 first stop by K+, 02 who holds a K+, 03 free vs occupied, 04 the K+
+                             already there (pushed or gone), 05 where the pushed K+ goes, 06 storage
+                             seats push ions out, 07 the bottom of the cavity; speech_numbers.txt
         stops/stops.csv, .png, .txt   per residue (a stop): visits, time there, next stop (out / GLU
                              ring / lower ring), time still needed to leave the cavity from the visit,
                              and the SF -> exit time of the ions stopping there vs never (is it a trap?)
@@ -2093,6 +2097,336 @@ def handover_analysis(events, frames, visits_raw, sites, max_k, title, out_dir, 
     rep.write(od / "handover.txt")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Presentation figures: the story of visit 1, one message per figure
+# ─────────────────────────────────────────────────────────────────────────────
+
+PRES_COLORS = {"E141": "#C0392B", "E152": "#D98A1C", "D173": "#13896B", "N184": "#3B7DD8", EXIT: "#6B6B6B"}
+PRES_FONT = dict(title=22, label=19, tick=18, value=17, legend=17)
+
+
+def _pres_color(site):
+    return PRES_COLORS.get(group_label(site), "#8C8C8C")
+
+
+def _pres_save(fig, path):
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _pres_axes(ax):
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(labelsize=PRES_FONT["tick"])
+
+
+def _pres_bins(vt, min_n=15):
+    """K+ bins of visit_1.csv with at least min_n ions, in order: [(bin, n_ions)]."""
+    b = vt[vt["start"] != "all"].groupby("start", sort=False)["n_ions"].first()
+    return [(k, int(n)) for k, n in b.items() if n >= min_n]
+
+
+def _k_label(k, n):
+    return f"{k} other K+\n({n} ions)"
+
+
+def pres_first_stop(vt, out, lines):
+    """01: where a new ion goes first, by K+ in the cavity: 100% bars of E141 / E152 / D173 / N184 / out."""
+    bins = _pres_bins(vt)
+    if not bins:
+        return
+    groups = [g for g in ("E141", "E152", "D173", "N184") if (vt["target"].map(group_label) == g).any()] + [EXIT]
+    fig, ax = plt.subplots(figsize=(13, 1.6 + 1.25 * len(bins)))
+    for i, (k, n) in enumerate(bins):
+        g = vt[vt["start"] == k]
+        left = 0
+        vals = {gr: g.loc[g["target"].map(group_label) == gr, "pct"].sum() for gr in groups}
+        for gr in groups:
+            v = vals[gr]
+            ax.barh(i, v, left=left, color=PRES_COLORS[gr], edgecolor="white", linewidth=2, height=0.62,
+                    label=("out of the cavity" if gr == EXIT else gr) if i == 0 else None)
+            if v >= 5:
+                ax.text(left + v / 2, i, f"{v:.0f}%", ha="center", va="center", color="white",
+                        fontsize=PRES_FONT["value"], fontweight="bold")
+            left += v
+        lines.append(f"  {k} other K+ ({n} ions): " + ", ".join(f"{'out' if gr == EXIT else gr} {vals[gr]:.0f}%"
+                                                              for gr in groups))
+    ax.set_yticks(range(len(bins)))
+    ax.set_yticklabels([_k_label(k, n) for k, n in bins], fontsize=PRES_FONT["tick"])
+    ax.invert_yaxis()
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("% of new ions", fontsize=PRES_FONT["label"])
+    ax.legend(ncol=len(groups), loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=PRES_FONT["legend"],
+              frameon=False)
+    ax.set_title("Where a new ion goes first after the SF", fontsize=PRES_FONT["title"], pad=48)
+    _pres_axes(ax)
+    _pres_save(fig, out)
+
+
+def pres_occupancy(occ, vt, sites, out, lines, min_mean=30):
+    """02: % of new ions finding each residue already holding a K+, by K+ in the cavity."""
+    bins = [k for k, _ in _pres_bins(vt)]
+    occ = occ.set_index("start")
+    res = [s_ for s_ in sites if s_ in occ.columns and (group_label(s_) != "N184" or occ.loc["all", s_] >= min_mean)]
+    bins = [k for k in bins if k in occ.index]
+    if not res or not bins:
+        return
+    ramp = {1: ["#2F5E9E"], 2: ["#8DB4E6", "#1E4E8C"], 3: ["#A9C6EC", "#4F84C9", "#1E4E8C"],
+            4: ["#C4D8F2", "#7FA7DD", "#3D6FB8", "#173A66"]}
+    shades = ramp.get(len(bins), ["#D6E4F5", "#A9C6EC", "#6F9FD8", "#2F5E9E", "#173A66"][:len(bins)])
+    fig, ax = plt.subplots(figsize=(max(12, 2.1 * len(res) + 2), 6.8))
+    w = 0.8 / len(bins)
+    x = np.arange(len(res))
+    for j, k in enumerate(bins):
+        v = [occ.loc[k, r] for r in res]
+        ax.bar(x - 0.4 + w * (j + 0.5), v, w * 0.92, color=shades[j], label=f"{k} other K+")
+        for xi, vi in zip(x - 0.4 + w * (j + 0.5), v):
+            ax.text(xi, vi + 1.5, f"{vi:.0f}", ha="center", va="bottom", fontsize=PRES_FONT["value"] - 2)
+    for r in res:
+        lines.append(f"  {r}: " + " / ".join(f"{occ.loc[k, r]:.0f}%" for k in bins) + f"  ({' / '.join(bins)} other K+)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(res, fontsize=PRES_FONT["tick"], fontweight="bold")
+    for t, r in zip(ax.get_xticklabels(), res):
+        t.set_color(_pres_color(r))
+    ax.set_ylim(0, 100)
+    ax.set_ylabel("% of new ions finding it\nholding another K+", fontsize=PRES_FONT["label"])
+    ax.legend(ncol=len(bins), loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=PRES_FONT["legend"], frameon=False)
+    ax.set_title("Which residues already hold a K+ as the cavity fills", fontsize=PRES_FONT["title"], pad=44)
+    _pres_axes(ax)
+    _pres_save(fig, out)
+
+
+def _pres_pair(ax, res, a, b, la, lb, ylab):
+    x = np.arange(len(res))
+    for off, vals, lab, light in ((-0.2, a, la, True), (0.2, b, lb, False)):
+        cols = [_pres_color(r) for r in res]
+        ax.bar(x + off, vals, 0.38, color=cols, alpha=0.38 if light else 1.0, edgecolor=cols, linewidth=2,
+               label=lab)
+        for xi, vi in zip(x + off, vals):
+            ax.text(xi, vi + 1, f"{vi:.0f}%", ha="center", va="bottom", fontsize=PRES_FONT["value"],
+                    fontweight="bold" if not light else "normal")
+    ax.set_xticks(x)
+    ax.set_xticklabels(res, fontsize=PRES_FONT["tick"], fontweight="bold")
+    ax.set_ylabel(ylab, fontsize=PRES_FONT["label"])
+    from matplotlib.patches import Patch
+    ax.legend(handles=[Patch(facecolor="#9A9A9A", alpha=0.38, edgecolor="#9A9A9A", label=la),
+                       Patch(facecolor="#4A4A4A", label=lb)], ncol=2, loc="lower center",
+              bbox_to_anchor=(0.5, 1.0), fontsize=PRES_FONT["legend"], frameon=False)
+    _pres_axes(ax)
+
+
+def pres_free_vs_occupied(rt, out, lines, min_visits=15):
+    """03: % of new ions going to a residue when it is free vs already holding a K+ (all ions)."""
+    a = rt[rt["start"] == "all"].copy()
+    a["visits"] = a["n_free"] * a["to_group_free"] / 100 + a["n_occupied"] * a["to_group_occupied"] / 100
+    a = a[(a["visits"] >= min_visits) & (a["n_free"] > 0) & (a["n_occupied"] > 0)]
+    if not len(a):
+        return
+    res = a["group"].tolist()
+    fig, ax = plt.subplots(figsize=(max(11, 2.2 * len(res) + 2), 6.5))
+    _pres_pair(ax, res, a["to_group_free"].tolist(), a["to_group_occupied"].tolist(), "residue free",
+               "residue already holds a K+", "% of new ions\ngoing to the residue")
+    ax.set_ylim(0, max(a[["to_group_free", "to_group_occupied"]].to_numpy().max() * 1.25, 10))
+    ax.set_title("Does a K+ already sitting there change where the new ion goes?", fontsize=PRES_FONT["title"], pad=44)
+    for r in a.to_dict("records"):
+        lines.append(f"  {r['group']}: free {r['to_group_free']:.0f}% -> holds a K+ {r['to_group_occupied']:.0f}%"
+                     f"  ({int(r['n_free'])} / {int(r['n_occupied'])} ions)")
+    _pres_save(fig, out)
+
+
+def pres_resident_at_arrival(hs, out, lines, min_res=5):
+    """04: when a new ion lands, was a K+ there, and was it pushed off at that moment or had it left before?"""
+    a = hs[(hs["start"] == "all") & (hs["n_resident"] >= min_res)]
+    if not len(a):
+        return
+    res = a["site"].tolist()
+    fig, ax = plt.subplots(figsize=(13.5, 1.6 + 1.05 * len(res)))
+    for i, r in enumerate(a.to_dict("records")):
+        c = _pres_color(r["site"])
+        near, before = r["pct_leave_near_arrival"], r["pct_leave_before"] + r["pct_leave_after"]
+        ax.barh(i, near, color=c, edgecolor="white", linewidth=2, height=0.6)
+        ax.barh(i, before, left=near, color=c, alpha=0.3, edgecolor="white", linewidth=2, height=0.6)
+        if near >= 8:
+            ax.text(near / 2, i, f"{near:.0f}%", ha="center", va="center", color="white",
+                    fontsize=PRES_FONT["value"], fontweight="bold")
+        if before >= 8:
+            ax.text(near + before / 2, i, f"{before:.0f}%", ha="center", va="center", color="#222222",
+                    fontsize=PRES_FONT["value"])
+        ax.text(102, i, f"K+ there in {r['pct_resident']:.0f}%\nof arrivals", va="center", fontsize=PRES_FONT["value"] - 2)
+        lines.append(f"  {r['site']}: K+ there in {r['pct_resident']:.0f}% of arrivals; pushed off as the new ion lands "
+                     f"{near:.0f}%, had left before {before:.0f}% (median {r['median_lag_ns']:+.1f} ns)")
+    ax.set_yticks(range(len(res)))
+    ax.set_yticklabels(res, fontsize=PRES_FONT["tick"], fontweight="bold")
+    ax.invert_yaxis()
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("% of the K+ sitting there when the new ion lands", fontsize=PRES_FONT["label"])
+    from matplotlib.patches import Patch
+    ax.legend(handles=[Patch(facecolor="#4A4A4A", label="pushed off as the new ion lands (±1 ns)"),
+                       Patch(facecolor="#4A4A4A", alpha=0.3, label="had already left (seat refilled)")],
+              ncol=2, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=PRES_FONT["legend"], frameon=False)
+    ax.set_title("What happens to the K+ already sitting there?", fontsize=PRES_FONT["title"], pad=44)
+    _pres_axes(ax)
+    _pres_save(fig, out)
+
+
+def pres_where_pushed(hv, hs, out, lines, min_res=15, min_push=60):
+    """05: for the hand-over residues, where the pushed K+ goes next, and whether it then permeates."""
+    a = hs[(hs["start"] == "all") & (hs["n_resident"] >= min_res) & (hs["pct_leave_near_arrival"] >= min_push)]
+    if not len(a) or not len(hv):
+        return
+    rows = []
+    for r in a.to_dict("records"):
+        g = hv[(hv["site"] == r["site"]) & hv["resident"].notna()].copy()
+        dest = g["resident_went_to"].fillna("").astype(str)
+        dest = dest.where(dest != "", g["resident_went"].map(lambda x: EXIT if x == "out of the cavity" else ""))
+        dest = dest[dest != ""]
+        if len(dest):
+            rows.append((r, dest.value_counts(normalize=True) * 100))
+    if not rows:
+        return
+    fig, ax = plt.subplots(figsize=(14, 1.8 + 1.25 * len(rows)))
+    for i, (r, vc) in enumerate(rows):
+        groups = {}                                            # residues of the same group together
+        for d, v in vc.items():
+            groups.setdefault(group_label(d) if d != EXIT else EXIT, []).append((d, v))
+        left = 0
+        order = [g_ for g_ in ("E141", "E152", "D173", "N184") if g_ in groups] + ([EXIT] if EXIT in groups else [])
+        parts = []
+        for g_ in order:
+            v = sum(x for _, x in groups[g_])
+            name = groups[g_][0][0] if len(groups[g_]) == 1 else g_
+            ax.barh(i, v, left=left, color=PRES_COLORS.get(g_, "#8C8C8C"), edgecolor="white", linewidth=2, height=0.6)
+            lab = "out" if g_ == EXIT else name
+            if v >= 9:
+                ax.text(left + v / 2, i, f"{lab}\n{v:.0f}%", ha="center", va="center", color="white",
+                        fontsize=PRES_FONT["value"] - 1, fontweight="bold")
+            parts.append(f"{lab} {v:.0f}%")
+            left += v
+        perm = r.get("pct_resident_permeates", np.nan)
+        if np.isfinite(perm):
+            ax.text(102, i, f"then permeates {perm:.0f}%\n(median {r['median_resident_exit_ns']:.0f} ns later)",
+                    va="center", fontsize=PRES_FONT["value"] - 2)
+        lines.append(f"  K+ pushed off {r['site']}: " + ", ".join(parts)
+                     + (f"; then permeates {perm:.0f}%, median {r['median_resident_exit_ns']:.0f} ns after the push"
+                        if np.isfinite(perm) else ""))
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([f"pushed off\n{r['site']}" for r, _ in rows], fontsize=PRES_FONT["tick"], fontweight="bold")
+    ax.invert_yaxis()
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("% of the pushed K+, by the next residue it sits at", fontsize=PRES_FONT["label"])
+    from matplotlib.patches import Patch
+    used = [g_ for g_ in ("E141", "E152", "D173", "N184") if any(group_label(d) == g_ for _, vc in rows for d in vc.index)]
+    ax.legend(handles=[Patch(facecolor=PRES_COLORS[g_], label=g_) for g_ in used]
+              + [Patch(facecolor=PRES_COLORS[EXIT], label="out of the cavity")], ncol=len(used) + 1,
+              loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=PRES_FONT["legend"], frameon=False)
+    ax.set_title("Where the pushed K+ goes next", fontsize=PRES_FONT["title"], pad=44)
+    _pres_axes(ax)
+    _pres_save(fig, out)
+
+
+def pres_storage_push(rt, out, lines, min_n=30):
+    """06: storage residues (fewer new ions go there when occupied): % of new ions leaving the cavity
+    directly, residue free vs holding a K+."""
+    a = rt[rt["start"] == "all"]
+    a = a[(a["n_free"] >= min_n) & (a["n_occupied"] >= min_n) & (a["to_group_free"] >= 5)
+          & (a["to_group_occupied"] <= a["to_group_free"] / 1.5)]
+    if not len(a):
+        return
+    res = a["group"].tolist()
+    fig, ax = plt.subplots(figsize=(max(9, 2.4 * len(res) + 3), 6.5))
+    _pres_pair(ax, res, a["out_free"].tolist(), a["out_occupied"].tolist(), "storage seat free",
+               "storage seat holds a K+", "% of new ions leaving\nthe cavity directly")
+    ax.set_ylim(0, max(a[["out_free", "out_occupied"]].to_numpy().max() * 1.25, 10))
+    ax.set_title("Does a full storage seat push the new ion out?", fontsize=PRES_FONT["title"], pad=44)
+    for r in a.to_dict("records"):
+        lines.append(f"  {r['group']}: new ions going there free {r['to_group_free']:.0f}% -> holds a K+ "
+                     f"{r['to_group_occupied']:.0f}%; leaving the cavity free {r['out_free']:.0f}% -> holds a K+ "
+                     f"{r['out_occupied']:.0f}%")
+    _pres_save(fig, out)
+
+
+def pres_lower_ring(st, out, lines, min_visits=15):
+    """07: after a stop at a lower-ring residue: back up, sideways, or out (all visits)."""
+    a = st[(st["ring"] == "LOWER") & (st["visits"] >= min_visits)]
+    if not len(a):
+        return
+    res = a["site"].tolist()
+    fig, ax = plt.subplots(figsize=(13, 1.6 + 1.05 * len(res)))
+    parts = (("pct_to_glu", "back up to the GLU ring", PRES_COLORS["E152"]),
+             ("pct_to_lower", "sideways (another lower-ring residue)", PRES_COLORS["N184"]),
+             ("pct_out", "out of the cavity", PRES_COLORS[EXIT]))
+    for i, r in enumerate(a.to_dict("records")):
+        left = 0
+        for col, lab, c in parts:
+            v = r[col]
+            ax.barh(i, v, left=left, color=c, edgecolor="white", linewidth=2, height=0.6, label=lab if i == 0 else None)
+            if v >= 7:
+                ax.text(left + v / 2, i, f"{v:.0f}%", ha="center", va="center", color="white",
+                        fontsize=PRES_FONT["value"], fontweight="bold")
+            left += v
+        lines.append(f"  after a stop at {r['site']} ({r['visits']} stops): back up {r['pct_to_glu']:.0f}%, sideways "
+                     f"{r['pct_to_lower']:.0f}%, out {r['pct_out']:.0f}%")
+    ax.set_yticks(range(len(res)))
+    ax.set_yticklabels([f"after\n{r_}" for r_ in res], fontsize=PRES_FONT["tick"], fontweight="bold")
+    ax.invert_yaxis()
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("% of the stops, by where the ion goes next", fontsize=PRES_FONT["label"])
+    ax.legend(ncol=3, loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=PRES_FONT["legend"] - 1, frameon=False)
+    ax.set_title("The bottom of the cavity: back up, sideways, or out", fontsize=PRES_FONT["title"], pad=44)
+    _pres_axes(ax)
+    _pres_save(fig, out)
+
+
+def presentation_figures(out_dir, title, sites):
+    """out_dir/presentation/: the visit-1 story, one message per figure, from the tables written by
+    the analysis (visits/, occupancy/, handover/, stops/), plus speech_numbers.txt with the numbers
+    to say for each figure."""
+    out_dir = Path(out_dir)
+    pdir = out_dir / "presentation"
+    pdir.mkdir(exist_ok=True)
+    rd = lambda p_: read_csv_or_empty(p_) if Path(p_).exists() else pd.DataFrame()
+    vt = rd(out_dir / "visits" / "visit_1.csv")
+    occ = rd(out_dir / "occupancy" / "visit_1_occupied_by_k.csv")
+    rt = rd(out_dir / "occupancy" / "visit_1_free_vs_occupied_residue.csv")
+    hs = rd(out_dir / "handover" / "handover_visit_1_summary.csv")
+    hv = rd(out_dir / "handover" / "handover_visits.csv")
+    st = rd(out_dir / "stops" / "stops.csv")
+    for d in (vt, occ, rt, hs):
+        if len(d) and "start" in d:
+            d["start"] = d["start"].astype(str)
+    if len(hv):
+        hv = hv[hv["visit"] == 0]
+    rep = _Report()
+    rep(f"PRESENTATION NUMBERS  {title}  (visit 1 = the new ion's first stop after the SF)")
+    steps = [
+        ("01_first_stop.png", "Where a new ion goes first, by the other K+ in the cavity",
+         lambda L: pres_first_stop(vt, pdir / "01_first_stop.png", L) if len(vt) else None),
+        ("02_who_holds_a_K.png", "% of new ions finding each residue already holding a K+",
+         lambda L: pres_occupancy(occ, vt, sites, pdir / "02_who_holds_a_K.png", L) if len(occ) and len(vt) else None),
+        ("03_free_vs_occupied.png", "% of new ions going to the residue: free vs already holding a K+",
+         lambda L: pres_free_vs_occupied(rt, pdir / "03_free_vs_occupied.png", L) if len(rt) else None),
+        ("04_K_already_there.png", "When the new ion lands: the K+ already there pushed off at that moment, or gone before",
+         lambda L: pres_resident_at_arrival(hs, pdir / "04_K_already_there.png", L) if len(hs) else None),
+        ("05_where_pushed_K_goes.png", "Where the pushed K+ goes next, and whether it then permeates",
+         lambda L: pres_where_pushed(hv, hs, pdir / "05_where_pushed_K_goes.png", L) if len(hs) else None),
+        ("06_storage_push.png", "Storage seats: new ions avoid them when full, and more leave the cavity",
+         lambda L: pres_storage_push(rt, pdir / "06_storage_push.png", L) if len(rt) else None),
+        ("07_bottom_of_cavity.png", "After a stop in the lower ring: back up, sideways or out (all visits)",
+         lambda L: pres_lower_ring(st, pdir / "07_bottom_of_cavity.png", L) if len(st) else None),
+    ]
+    for fname, what, fn in steps:
+        lines = []
+        try:
+            fn(lines)
+        except Exception as e:                                 # one figure failing must not stop the others
+            lines.append(f"  (not drawn: {e})")
+        rep(f"\n{fname}: {what}")
+        for l_ in lines or ["  (not drawn: the data it needs are missing)"]:
+            rep(l_)
+    rep.write(pdir / "speech_numbers.txt")
+
+
 def leaving_by_visit_table(events, dt, max_visit=LEAVE_VISITS):
     """
     The ions grouped by the visit at which they leave the cavity: visit k = left
@@ -2601,6 +2935,8 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
         handover_analysis(events, frames, visits, sorted(set(visits["site"]), key=lambda x: (ring.get(x) != "GLU", x))
                           if model != "residue" else sites, max_sf, f"{head}: {model} model", out_dir, dt,
                           events_all, visits_all)
+    if model == "residue":
+        presentation_figures(out_dir, head, sites)
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
     plot_prediction(obs_t * dt, sim_t * dt, obs_n, sim_n, f"{head}: chain against real ions",
