@@ -2418,6 +2418,22 @@ def _ptable(cells, cols, widths, out, title, head_colors=None, fills=None, bold=
     pd.DataFrame(cells, columns=[c.replace("\n", " ") for c in cols]).to_csv(Path(out).with_suffix(".csv"), index=False)
 
 
+def _out_cell(free, occ, rules, res):
+    """'new ions leaving the cavity: free -> occupied' cell: the main-rule numbers when every occupancy rule
+    moves it the same way (or none by >= 5 points), else 'a-b% both' = the range of all rules' free and
+    occupied values (robustness/visit_1_free_vs_occupied_rules.csv). Under the trip rule short, direct-exit
+    trips are labelled free more often, so a drop that only this rule shows is not a result."""
+    main = f"{free:.0f}% → {occ:.0f}%"
+    if rules is None or not len(rules):
+        return main
+    g = rules[(rules["group"] == res) & (rules["start"] == "all")]
+    d = (g["out_occupied"] - g["out_free"]).dropna()
+    if not len(d) or (d >= 5).all() or (d <= -5).all() or d.abs().max() < 5:
+        return main
+    v = pd.concat([g["out_free"], g["out_occupied"]]).dropna()
+    return f"{v.min():.0f}–{v.max():.0f}% both"
+
+
 def pres_table_load(vt, occ, rt, kt, rules, sites, tdir, title):
     """slide 'as the cavity fills': per K+ bin, for every residue → (first stop) and occ. (already holds
     a K+), out and time to leave; 01b: new ions going to it when the residue is free → occupied."""
@@ -2459,17 +2475,20 @@ def pres_table_load(vt, occ, rt, kt, rules, sites, tdir, title):
     for s_ in sites:
         if s_ not in a.index:
             continue
-        rows.append([s_, f"{int(a.loc[s_, 'n_free'])} / {int(a.loc[s_, 'n_occupied'])}",
-                     f"{a.loc[s_, 'to_group_free']:.0f}% → {a.loc[s_, 'to_group_occupied']:.0f}%"])
         tf, to = a.loc[s_, "to_group_free"], a.loc[s_, "to_group_occupied"]
+        rows.append([s_, f"{int(a.loc[s_, 'n_free'])} / {int(a.loc[s_, 'n_occupied'])}", f"{tf:.0f}% → {to:.0f}%",
+                     "" if group_label(s_) == "N184" else _out_cell(a.loc[s_, "out_free"], a.loc[s_, "out_occupied"], rules, s_)])
         if max(tf, to) >= 5 and (to >= 1.5 * tf or to <= tf / 1.5):
             f2[(len(rows) - 1, 2)] = PRES_TINT.get(group_label(s_), "E6E6E6")
+        if "both" not in rows[-1][3] and rows[-1][3] and abs(a.loc[s_, "out_occupied"] - a.loc[s_, "out_free"]) >= 8:
+            f2[(len(rows) - 1, 3)] = PRES_TINT.get(group_label(s_), "E6E6E6")
     if rows:
-        # 'leaving the cavity: free -> occupied' is left out: under the trip rule short (direct-exit) trips
-        # are labelled free more often, and the other occupancy rules flip its direction
-        _ptable(rows, ["residue", "ions\nfree / occupied", "new ions going there:\nfree → occupied"], [1.8, 1.9, 2.8],
+        _ptable(rows, ["residue", "ions\nfree / occupied", "new ions going there:\nfree → occupied",
+                       "new ions leaving the cavity:\nfree → occupied"], [1.8, 1.9, 2.8, 3.0],
                 tdir / "01b_free_vs_occupied.png",
-                f"{title}\nvisit 1: does a K+ already sitting at the residue change where the new ion goes? (all ions)", fills=f2)
+                f"{title}\nvisit 1: does a K+ already sitting at the residue change where the new ion goes? (all ions)",
+                fills=f2, note="leaving: 'a–b% both' = the four occupancy rules disagree on the direction, range of all their values; "
+                               "not shown for the asparagines")
 
 
 def _dest_table(hv, hs, residues, sites):
