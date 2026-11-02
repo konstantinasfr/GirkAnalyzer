@@ -1857,7 +1857,7 @@ def handover_table(events, frames, visits_raw, max_k, dt):
             prev_end = int(v["end"])
             row = dict(run=key[0], event=key[1], visit=v["visit"], site=site, ring=v["ring"],
                        start=kmap.get((key[0], key[1], v["visit"])), resident=np.nan, leave_lag_ns=np.nan,
-                       resident_went="")
+                       resident_went="", resident_went_to="")
             res, last = None, None
             for f in range(min(hi, f0 + n - 1), max(lo, f0) - 1, -1):   # last K+ seen at the residue
                 who = [r for r, s_ in occ[f - f0].items() if s_ == site]
@@ -1884,6 +1884,7 @@ def handover_table(events, frames, visits_raw, max_k, dt):
                 s_ = occ[i].get(res)
                 if s_ and s_ != site:
                     went = "GLU ring" if ring.get(s_, "LOWER") == "GLU" else "lower ring"
+                    row["resident_went_to"] = s_
                     break
                 if res in sf[i]:
                     went = "SF"
@@ -2012,7 +2013,19 @@ def handover_analysis(events, frames, visits_raw, sites, max_k, title, out_dir, 
                 f"leaves before {r['pct_leave_before']:3.0f}% / near arrival {r['pct_leave_near_arrival']:3.0f}% / "
                 f"after {r['pct_leave_after']:3.0f}% (median {r['median_lag_ns']:+.1f} ns); goes to GLU "
                 f"{r['pct_GLU_ring']:3.0f}%, lower {r['pct_lower_ring']:3.0f}%, out {r['pct_out_of_the_cavity']:3.0f}%,"
-                f" SF {r['pct_SF']:3.0f}%, still/free {r["pct_still_there"] + r["pct_free_in_cavity"]:3.0f}%")
+                f" SF {r['pct_SF']:3.0f}%, still/free {r['pct_still_there'] + r['pct_free_in_cavity']:3.0f}%")
+        rep("\nWHERE THE RESIDENT GOES, by residue (all visits; the next residue it sits at, % of the residents "
+            "that move to another residue)")
+        for site in sites:
+            g = ho[(ho["site"] == site) & (ho["resident_went_to"] != "")]
+            if len(g):
+                vc = g["resident_went_to"].value_counts()
+                rep(f"  {site:<9} -> " + ", ".join(f"{k} {100 * n / len(g):.0f}%" for k, n in vc.items())
+                    + f"   (n={len(g)})")
+        res_n = ho[ho["resident"].notna()].groupby("site")["resident"].nunique()
+        if len(res_n):
+            rep("\nDIFFERENT RESIDENT K+ per residue (a few K+ coming back again and again = long-lived residents): "
+                + ", ".join(f"{k} {int(v)}" for k, v in res_n.items()))
     rep.write(od / "handover.txt")
 
 
