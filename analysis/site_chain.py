@@ -112,6 +112,9 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              occupied -> going to E152.2a, ...)
             visit_<k>_free_vs_occupied_table.png  the same per-residue test as one table:
                              to it / out, free -> occupied, for all ions and per K+ count
+            visit_<k>_free_vs_occupied_visits.png  the same table, the "-> it" cells as: of the ions
+                             that went to the residue, % that went while it held another K+
+                             (in brackets: % of all ions seeing it occupied)
             robustness/visit_<k>_free_vs_occupied_rules.csv, .png  the same table with two other
                              occupancy rules, to check the result does not come from the trip length:
                              half of trip (another K+ there in >= half of the trip's frames, whatever
@@ -1315,12 +1318,16 @@ def plot_free_vs_occupied(test, groups, title, out_file, visit=0, min_n=5):
     plt.close(fig)
 
 
-def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_bin=15, min_n=5, note=None):
+def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_bin=15, min_n=5, note=None,
+                                visits=False):
     """Table, one row per residue: % of the ions going to it and % going out when that residue is free
     -> holds another K+, for all ions and per other-K+ count (counts with >= min_bin ions); cells from
     fewer than min_n ions on a side in grey; effects from all ions (going to it: occupied / free >= 1.5
     attracts, <= 0.67 blocks; going out: a change of 8 points or more). rtest can also be a dict
-    {occupancy rule: table}: one row per residue and rule (the robustness comparison)."""
+    {occupancy rule: table}: one row per residue and rule (the robustness comparison).
+    visits=True: the "-> it" cells instead give, of the ions that went to the residue, the % that went
+    while it held another K+ (in brackets: the % of all ions seeing it occupied, the value expected
+    if occupancy made no difference); grey when fewer than min_n ions went there."""
     tests = rtest if isinstance(rtest, dict) else {None: rtest}
     tests = {k: v[v["group"].isin(residues)] for k, v in tests.items()}
     t = next(iter(tests.values()))
@@ -1332,7 +1339,8 @@ def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_b
     lab = lambda b: "all ions" if b == "all" else f"{b} other K+"
     multi = len(tests) > 1
     cols = ["residue"] + (["occupancy\nrule"] if multi else []) + ["ions\nfree / occ."] + \
-           [f"→ it\n{lab(b)}" for b in bins] + \
+           (["went there\nfree / occ."] if visits else []) + \
+           [(f"went there: occ.\n{lab(b)}" if visits else f"→ it\n{lab(b)}") for b in bins] + \
            [f"out\n{lab(b)}" for b in bins] + ["K+ there:\ngoing to it", "K+ there:\ngoing out"]
     cells, grey, shade = [], [], []
     for ri, (res, rule) in enumerate((r, k) for r in residues for k in tests):
@@ -1343,10 +1351,23 @@ def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_b
         a = g.loc["all"]
         first = rule == next(iter(tests))
         c = [res if first else ""] + ([rule] if multi else []) + [f"{int(a['n_free'])} / {int(a['n_occupied'])}"]
+        if visits:
+            c.append(f"{a['n_free'] * a['to_group_free'] / 100 if a['n_free'] else 0:.0f} / "
+                     f"{a['n_occupied'] * a['to_group_occupied'] / 100 if a['n_occupied'] else 0:.0f}")
         gr = [False] * len(c)
         shade.append(residues.index(res) % 2 == 1)
         for what in ("to_group", "out"):
             for b in bins:
+                if visits and what == "to_group":
+                    r = g.loc[b] if b in g.index else None
+                    nf, no = (r["n_free"], r["n_occupied"]) if r is not None else (0, 0)
+                    vf = nf * r["to_group_free"] / 100 if nf else 0
+                    vo = no * r["to_group_occupied"] / 100 if no else 0
+                    if vf + vo < 0.5:
+                        c.append("–"); gr.append(False); continue
+                    c.append(f"{100 * vo / (vf + vo):.0f}% ({100 * no / (nf + no):.0f}%)")
+                    gr.append(vf + vo < min_n)
+                    continue
                 if b not in g.index or not g.loc[b, "n_free"] or not g.loc[b, "n_occupied"]:
                     c.append("–"); gr.append(False); continue
                 r = g.loc[b]
@@ -1374,8 +1395,9 @@ def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_b
         cells.append(c); grey.append(gr)
     if not cells:
         return
-    off = 1 if multi else 0                                     # the extra "occupancy rule" column
-    widths = [1.6] + ([2.3] if multi else []) + [1.6] + [2.0] * (2 * len(bins)) + [2.2, 2.2]
+    off = (1 if multi else 0) + (1 if visits else 0)            # extra "occupancy rule" / "went there" columns
+    widths = [1.6] + ([2.3] if multi else []) + [1.6] + ([1.6] if visits else []) + \
+             [2.1 if visits else 2.0] * len(bins) + [2.0] * len(bins) + [2.2, 2.2]
     fig, ax = plt.subplots(figsize=(1.0 * sum(widths), 1.0 + 0.42 * (len(cells) + 2)))
     ax.axis("off")
     tb = ax.table(cellText=cells, colLabels=cols, loc="upper center", cellLoc="center",
@@ -1404,8 +1426,12 @@ def plot_free_vs_occupied_table(rtest, residues, title, out_file, visit=0, min_b
                                        "fewer leave": "#c0392b"}.get(cells[i - 1][j], "#333333"))
         if grey[i - 1][j]:
             cell.get_text().set_color("#9a9a9a")
-    ax.set_title(f"{title}\nvisit {visit + 1}: % of the ions going to each residue (→ it) and going out, when that "
-                 f"residue is free → already holds another K+, by the other K+ in the cavity {when}\n"
+    head = (f"visit {visit + 1}: of the ions that went to each residue, % that went while it already held another "
+            f"K+ (in brackets: % of all ions seeing it occupied, expected if it made no difference),\nand % going out "
+            f"when the residue is free → holds another K+, by the other K+ in the cavity {when}\n") if visits else (
+            f"visit {visit + 1}: % of the ions going to each residue (→ it) and going out, when that "
+            f"residue is free → already holds another K+, by the other K+ in the cavity {when}\n")
+    ax.set_title(f"{title}\n" + head +
                  f"(K+ there, from all ions: going to it occupied ≥ 1.5× free attracts, ≤ free / 1.5 blocks (– below 5%); "
                  f"going out ± 8 points; grey: fewer than "
                  f"{min_n} ions on a side)" + (f"\n{note}" if note else ""), fontsize=16)
@@ -1556,6 +1582,8 @@ def occupancy_analysis(events, visits_raw, visits_site, sites, max_k, title, out
         rtest = residue_test(st, all_members, max_k)          # each residue against itself
         rtest.to_csv(od / f"{name}_free_vs_occupied_residue.csv", index=False, float_format="%.2f")
         plot_free_vs_occupied_table(rtest, all_members, title, od / f"{name}_free_vs_occupied_table.png", k)
+        plot_free_vs_occupied_table(rtest, all_members, title, od / f"{name}_free_vs_occupied_visits.png", k,
+                                    visits=True)
         rob = {"trip (main)": rtest}                           # robustness: other occupancy rules
         for rule, lab in (("_half", "half of trip"), ("_fixed", "fixed frames"), ("_frame", "leave frame")):
             st_r = occupancy_steps(events, visits_raw, visits_site, max_k, k, rule)
