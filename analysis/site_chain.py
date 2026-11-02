@@ -135,7 +135,8 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              seats push ions out, 07 the bottom of the cavity; speech_numbers.txt
             presentation/tables/     the tables of the slides (PNG + CSV): first stop and occupancy by
                              K+, free -> occupied (with robustness), Glu / bottom tracking (the K+ already there,
-                             where it goes), after a lower-ring stop, last stop, asparagines by K+
+                             where it goes), after a stop at each residue, last stop, asparagines by K+;
+                             presentation/08_last_stop.png: last stop before leaving, per residue
         stops/stops.csv, .png, .txt   per residue (a stop): visits, time there, next stop (out / GLU
                              ring / lower ring), time still needed to leave the cavity from the visit,
                              and the SF -> exit time of the ions stopping there vs never (is it a trap?)
@@ -2555,31 +2556,58 @@ def pres_table_tracking(hs, hv, sites, tdir, title, which, min_res=5):
                 note="a residue group with several members gives the total and, in brackets, the split per member (%)")
 
 
-def pres_table_bottom(st, vt, occ, sites, tdir, title):
-    """slide 'the bottom': after a lower-ring stop (back up / sideways / out), the last stop before leaving,
-    and the Asns as first stop / occupied by K+ in the cavity."""
-    lo = st[(st["ring"] == "LOWER") & (st["visits"] >= 15)]
-    if len(lo):
-        _ptable([[r["site"], str(r["visits"]), f"{r['pct_to_glu']:.0f}%", f"{r['pct_to_lower']:.0f}%", f"{r['pct_out']:.0f}%"]
-                 for r in lo.to_dict("records")],
-                ["after a stop at", "stops", "back up to\nthe GLU ring", "sideways", "out"], [2.0, 1.1, 1.7, 1.4, 1.2],
-                tdir / "05_after_a_lower_ring_stop.png", f"{title}\nall visits: where the ion goes after a stop in the lower ring",
-                fills={(i, 2): PRES_TINT["E152"] for i in range(len(lo))})
+def last_stop_counts(st, vt, sites):
+    """Per residue: ions whose last stop before leaving the cavity is that residue (stops x % out), and
+    the ions leaving without any stop; [(label, ions, % of ions)] in site order, then 'no stop'."""
     a = vt[vt["start"] == "all"]
-    if len(a) and len(st):
-        n = int(a["n_ions"].iloc[0])
-        exits = {r["site"]: r["visits"] * r["pct_out"] / 100 for r in st.to_dict("records")}
-        rows = []
-        for gr in ("E141", "E152", "D173", "N184"):
-            members = [x for x in sites if group_label(x) == gr]
-            if members:
-                v = sum(exits.get(x, 0) for x in members)
-                rows.append([gr + (" (" + " / ".join(x.split(".", 1)[1] for x in members) + ")" if len(members) > 1 else ""),
-                             f"{v:.0f}", f"{100 * v / n:.0f}%"])
-        nost = float(a.set_index("target")["count"].get(EXIT, 0))
-        rows.append(["no stop (left directly)", f"{nost:.0f}", f"{100 * nost / n:.0f}%"])
-        _ptable(rows, ["last stop before leaving", "ions", "% of ions"], [3.2, 1.2, 1.4], tdir / "06_last_stop_before_leaving.png",
-                f"{title}\nlast stop before leaving the cavity ({n} ions; exits = stops × % out)")
+    if not len(a) or not len(st):
+        return [], 0
+    n = int(a["n_ions"].iloc[0])
+    exits = {r["site"]: r["visits"] * r["pct_out"] / 100 for r in st.to_dict("records")}
+    rows = [(x, exits.get(x, 0.0), 100 * exits.get(x, 0.0) / n) for x in sites]
+    nost = float(a.set_index("target")["count"].get(EXIT, 0))
+    rows.append(("no stop", nost, 100 * nost / n))
+    return rows, n
+
+
+def pres_last_stop_plot(st, vt, sites, out, title):
+    """Bar plot: % of ions whose last stop before leaving the cavity is each residue (or no stop)."""
+    rows, n = last_stop_counts(st, vt, sites)
+    if not rows:
+        return
+    fig, ax = plt.subplots(figsize=(max(9, 1.25 * len(rows) + 2), 5.8))
+    x = np.arange(len(rows))
+    cols = [PRES_COLORS.get(group_label(r[0]), PRES_COLORS[EXIT]) if r[0] != "no stop" else PRES_COLORS[EXIT] for r in rows]
+    ax.bar(x, [r[2] for r in rows], 0.7, color=cols, edgecolor="white", linewidth=2)
+    for xi, r in zip(x, rows):
+        ax.text(xi, r[2] + 0.6, f"{r[2]:.0f}%", ha="center", va="bottom", fontsize=PRES_FONT["value"], fontweight="bold")
+    ax.set_xticks(x)
+    ax.set_xticklabels([r[0] for r in rows], fontsize=PRES_FONT["tick"] - 2, fontweight="bold", rotation=30, ha="right")
+    ax.set_ylabel(f"% of ions ({n})", fontsize=PRES_FONT["label"])
+    ax.set_ylim(0, max(r[2] for r in rows) * 1.2)
+    ax.set_title("Last stop before leaving the cavity", fontsize=PRES_FONT["title"], pad=12)
+    _pres_axes(ax)
+    _pres_save(fig, out)
+
+
+def pres_table_bottom(st, vt, occ, sites, tdir, title, min_visits=15):
+    """slide 'after a stop': for every residue (all visits) where the ion goes next (another GLU-ring
+    residue / the lower ring / out), the last stop before leaving per residue, and the asparagines as
+    first stop / occupied by K+ in the cavity."""
+    if len(st):
+        a = st[st["visits"] >= min_visits]
+        _ptable([[r["site"], str(r["visits"]), f"{r['pct_to_glu']:.0f}%", f"{r['pct_to_lower']:.0f}%", f"{r['pct_out']:.0f}%"]
+                 for r in a.to_dict("records")],
+                ["after a stop at", "stops", "next: a Glu\n(upper ring)", "next: D173 / Asn\n(lower ring)", "next: out of\nthe cavity"],
+                [2.0, 1.1, 1.9, 2.1, 1.8], tdir / "05_after_a_stop.png",
+                f"{title}\nall visits: where the ion goes after a stop at each residue",
+                fills={(i, 4): PRES_TINT[EXIT] for i in range(len(a))})
+    rows, n = last_stop_counts(st, vt, sites)
+    if rows:
+        _ptable([[r[0], f"{r[1]:.0f}", f"{r[2]:.0f}%"] for r in rows], ["last stop before leaving", "ions", "% of ions"],
+                [3.0, 1.2, 1.4], tdir / "06_last_stop_before_leaving.png",
+                f"{title}\nlast stop before leaving the cavity ({n} ions; exits = stops x % out, all visits)")
+        pres_last_stop_plot(st, vt, sites, tdir.parent / "08_last_stop.png", title)
     asn = [x for x in sites if group_label(x) == "N184"]
     bins = [k for k, _ in _pres_bins(vt)]
     if asn and bins and len(occ):
