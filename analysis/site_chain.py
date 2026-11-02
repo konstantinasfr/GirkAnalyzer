@@ -2427,16 +2427,16 @@ def _ptable(cells, cols, widths, out, title, head_colors=None, fills=None, bold=
 
 
 def _out_cell(free, occ, rules, res):
-    """'new ions leaving the cavity: free -> occupied' cell: the main-rule numbers when every occupancy rule
-    moves it the same way (or none by >= 5 points), else 'a-b% both' = the range of all rules' free and
-    occupied values (robustness/visit_1_free_vs_occupied_rules.csv). Under the trip rule short, direct-exit
+    """'new ions leaving the cavity: free -> occupied' cell: the main-rule numbers unless the occupancy rules
+    disagree on the direction (one rule >= 3 points up and another >= 3 points down), then 'a-b% both' = the
+    range of all rules' free and occupied values (robustness/visit_1_free_vs_occupied_rules.csv). Under the trip rule short, direct-exit
     trips are labelled free more often, so a drop that only this rule shows is not a result."""
     main = f"{free:.0f}% → {occ:.0f}%"
     if rules is None or not len(rules):
         return main
     g = rules[(rules["group"] == res) & (rules["start"] == "all")]
     d = (g["out_occupied"] - g["out_free"]).dropna()
-    if not len(d) or (d >= 5).all() or (d <= -5).all() or d.abs().max() < 5:
+    if not len(d) or not ((d >= 3).any() and (d <= -3).any()):      # the rules agree on the direction
         return main
     v = pd.concat([g["out_free"], g["out_occupied"]]).dropna()
     return f"{v.min():.0f}–{v.max():.0f}% both"
@@ -2495,7 +2495,7 @@ def pres_table_load(vt, occ, rt, kt, rules, sites, tdir, title):
                        "new ions leaving the cavity:\nfree → occupied"], [1.8, 1.9, 2.8, 3.0],
                 tdir / "01b_free_vs_occupied.png",
                 f"{title}\nvisit 1: does a K+ already sitting at the residue change where the new ion goes? (all ions)",
-                fills=f2, note="leaving: 'a–b% both' = the four occupancy rules disagree on the direction, range of all their values; "
+                fills=f2, note="leaving: 'a–b% both' = the occupancy rules disagree on the direction (range of all their values); "
                                "not shown for the asparagines")
 
 
