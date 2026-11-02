@@ -123,6 +123,12 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
             arrival_sharing.csv   visits starting while the residue holds another K+, and
                              how often that K+ has gone when the ion leaves (knock-on)
             occupancy_summary.txt
+        handover/                    hand-over at the residues: arrival_sharing_by_k.csv (shared arrivals
+                             by the other K+ in the cavity) and, with occupant identities in the frames
+                             (main.py run with this version), the ion tracking of the K+ sitting at a
+                             residue while the new ion travels there: when it leaves (relative to the
+                             arrival) and where it goes (handover_visits.csv, handover_summary.csv,
+                             handover.png, handover.txt)
         stops/stops.csv, .png, .txt   per residue (a stop): visits, time there, next stop (out / GLU
                              ring / lower ring), time still needed to leave the cavity from the visit,
                              and the SF -> exit time of the ions stopping there vs never (is it a trap?)
@@ -250,11 +256,14 @@ def collect_run(universe, permeation_events, asn_residues, glu_residues, channel
             real.add(f)
             wanted.update((f + s) % n_frames for s in shifts)
     occ = {}                                                   # frame -> {K+ resid: residue it occupies}
+    cav_ions, sf_ions = {}, {}                                 # frame -> {resid: position along the pore}, [resid]
     from tqdm import tqdm
     for f in tqdm(sorted(wanted), desc=f"site_chain RUN{run}: reading frames", unit="frame"):  # once, in order
-        _, cav, _ = pore.get(f)
+        t_ax, cav, in_sf = pore.get(f)
         if f in real:
             occ[f] = _frame_occupancy(dur, pore.ions, cav)
+            cav_ions[f] = {int(r): float(z) for r, z in zip(pore.ions.resids[cav], t_ax[cav])}
+            sf_ions[f] = [int(r) for r in pore.ions.resids[in_sf]]
 
     frames, stays = [], []
     for e in tqdm(events, desc=f"site_chain RUN{run}: contacts per ion", unit="ion"):
@@ -273,13 +282,18 @@ def collect_run(universe, permeation_events, asn_residues, glu_residues, channel
             info = dur._closest_from_row(D[i])[0] if D is not None else None
             row = dict(run=run, event=e["event"], frame=f,
                        contact=site_label(info["residue_pdb"], info["residue_type"]) if info else "",
-                       occupied=";".join(sorted(lab for r, lab in occ.get(f, {}).items() if r != ion)))
+                       occupied=";".join(sorted(lab for r, lab in occ.get(f, {}).items() if r != ion)),
+                       occupants=";".join(f"{lab}:{r}" for r, lab in sorted(occ.get(f, {}).items()) if r != ion),
+                       cavity_ions=";".join(f"{r}:{z:.1f}" for r, z in sorted(cav_ions.get(f, {}).items())
+                                            if r != ion),
+                       sf_ions=";".join(str(r) for r in sf_ions.get(f, []) if r != ion))
             row["n_above"], row["n_below"], row["n_sf"] = pore.neighbours(ion, f)
             for j, s in enumerate(shifts, start=1):
                 row[f"n_above_c{j}"], row[f"n_below_c{j}"], _ = pore.neighbours(ion, f, (f + s) % n_frames)
             frames.append(row)
     stay_cols = ["run", "event", "residue_id", "residue_pdb", "resname", "ring", "start_frame", "end_frame"]
-    frame_cols = ["run", "event", "frame", "contact", "occupied", "n_above", "n_below", "n_sf"] + \
+    frame_cols = ["run", "event", "frame", "contact", "occupied", "occupants", "cavity_ions", "sf_ions",
+                  "n_above", "n_below", "n_sf"] + \
                  [f"n_{k}_c{j}" for j in range(1, N_C + 1) for k in ("above", "below")]
     event_cols = ["run", "event", "ion_id", "end_1", "end_2", "starts_at_frame0"]
     return (pd.DataFrame(frames, columns=frame_cols), pd.DataFrame(stays, columns=stay_cols),
@@ -1761,6 +1775,247 @@ def stop_analysis(events, visits, sites, ring, title, out_dir, dt):
     rep.write(od / "stops.txt")
 
 
+def _step_k(events, visits_raw, max_k):
+    """{(run, event, visit): other-K+ bin at the step that leads to that visit} (visit 0: SF count at
+    end_1; visit k: K+ above + below when leaving visit k-1)."""
+    out = {}
+    sf = dict(zip(zip(events["run"], events["event"]), events["sf_count"]))
+    prev = {(r, e, v): a + b for r, e, v, a, b in
+            zip(visits_raw["run"], visits_raw["event"], visits_raw["visit"], visits_raw["above"], visits_raw["below"])}
+    for r, e, v in zip(visits_raw["run"], visits_raw["event"], visits_raw["visit"]):
+        k = sf.get((r, e)) if v == 0 else prev.get((r, e, v - 1))
+        if k is not None and np.isfinite(k):
+            out[(r, e, v)] = bin_label(int(k), max_k)
+    return out
+
+
+def arrival_sharing_by_k(events, visits_raw, max_k):
+    """arrival_sharing split by the other K+ in the cavity at the step leading to the visit."""
+    if "occupied_arrive" not in visits_raw:
+        return pd.DataFrame()
+    kmap = _step_k(events, visits_raw, max_k)
+    v = visits_raw[visits_raw["occupied_arrive"].map(lambda o: isinstance(o, str))].copy()
+    v["k"] = [kmap.get(key) for key in zip(v["run"], v["event"], v["visit"])]
+    v = v[v["k"].notna()]
+    leave = "occupied_leave_frame" if "occupied_leave_frame" in v else "occupied_leave"
+    rows = []
+    for (site, k), g in v.groupby(["site", "k"]):
+        shared = g["occupied_arrive"].map(lambda o: site in _occ_set(o))
+        still = g.loc[shared, leave].map(lambda o: site in _occ_set(o))
+        rows.append(dict(site=site, start=k, visits=len(g), n_shared=int(shared.sum()),
+                         pct_shared_at_arrival=100 * shared.mean(),
+                         pct_other_gone_at_leave=100 * (~still).mean() if len(still) else np.nan))
+    return pd.DataFrame(rows)
+
+
+def _parse_occupants(x):
+    """'E141.G1:1234;D173.G1:1250' -> {resid: site}."""
+    out = {}
+    if isinstance(x, str) and x:
+        for item in x.split(";"):
+            site, _, r = item.rpartition(":")
+            if site and r.lstrip("-").isdigit():
+                out[int(r)] = site
+    return out
+
+
+def _parse_ids(x):
+    """'1234:3.2;1250:-5.1' or '1300;1301' -> set of resids."""
+    if not isinstance(x, str) or not x:
+        return set()
+    return {int(i.split(":")[0]) for i in x.split(";") if i.split(":")[0].lstrip("-").isdigit()}
+
+
+def handover_table(events, frames, visits_raw, max_k, dt):
+    """Ion tracking at each visit: the K+ that sat at the residue during the ion's trip there (the
+    resident: the one seen there last before the arrival), when it left the residue relative to the
+    arrival (ns, < 0 before), and where it went next within the ion's own transit (another residue of
+    the GLU ring / the lower ring, the SF, out of the cavity, still there, or free in the cavity until the ion leaves). One row per
+    visit; visits whose residue had no other K+ during the trip have resident = NaN."""
+    need = {"occupants", "cavity_ions", "sf_ions"}
+    if not need <= set(frames.columns) or not len(visits_raw):
+        return pd.DataFrame()
+    ring = dict(zip(visits_raw["site"], visits_raw["ring"]))
+    kmap = _step_k(events, visits_raw, max_k)
+    end1 = dict(zip(zip(events["run"], events["event"]), events["end_1"]))
+    rows = []
+    fr_by = {k: g.sort_values("frame") for k, g in frames.groupby(["run", "event"])}
+    vis_by = {k: g.sort_values("visit") for k, g in visits_raw.groupby(["run", "event"])}
+    for key, vv in vis_by.items():
+        g = fr_by.get(key)
+        if g is None or key not in end1:
+            continue
+        f0 = int(g["frame"].iloc[0])
+        occ = [_parse_occupants(x) for x in g["occupants"]]
+        cav = [_parse_ids(x) for x in g["cavity_ions"]]
+        sf = [_parse_ids(x) for x in g["sf_ions"]]
+        n = len(occ)
+        prev_end = end1[key]
+        for v in vv.to_dict("records"):
+            site, a = v["site"], int(v["start"])
+            lo, hi = prev_end + 1, a                              # the trip there, and the arrival frame
+            prev_end = int(v["end"])
+            row = dict(run=key[0], event=key[1], visit=v["visit"], site=site, ring=v["ring"],
+                       start=kmap.get((key[0], key[1], v["visit"])), resident=np.nan, leave_lag_ns=np.nan,
+                       resident_went="")
+            res, last = None, None
+            for f in range(min(hi, f0 + n - 1), max(lo, f0) - 1, -1):   # last K+ seen at the residue
+                who = [r for r, s_ in occ[f - f0].items() if s_ == site]
+                if who:
+                    res, last = who[0], f
+                    break
+            if res is None:
+                rows.append(row)
+                continue
+            row["resident"] = res
+            f = last
+            while f + 1 < f0 + n and occ[f + 1 - f0].get(res) == site:     # until it leaves the residue
+                f += 1
+            if f + 1 >= f0 + n:
+                row["leave_lag_ns"] = np.nan
+                row["resident_went"] = "still there"
+                rows.append(row)
+                continue
+            leave = f + 1
+            row["leave_lag_ns"] = (leave - a) * dt
+            went = "free in cavity"
+            for h in range(leave, f0 + n):                       # where it goes next
+                i = h - f0
+                s_ = occ[i].get(res)
+                if s_ and s_ != site:
+                    went = "GLU ring" if ring.get(s_, "LOWER") == "GLU" else "lower ring"
+                    break
+                if res in sf[i]:
+                    went = "SF"
+                    break
+                if res not in cav[i]:
+                    went = "out of the cavity"
+                    break
+            row["resident_went"] = went
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+DEST = ["GLU ring", "lower ring", "out of the cavity", "SF", "still there", "free in cavity"]
+
+
+def handover_summary(ho, sites, push_ns=1.0):
+    """Per site and K+ bin (+ all): visits, % with a resident during the trip, of those % leaving the
+    residue within push_ns of the arrival, median lag (ns) and where the resident went (%)."""
+    rows = []
+    if not len(ho):
+        return pd.DataFrame()
+    for site in sites:
+        g0 = ho[ho["site"] == site]
+        if not len(g0):
+            continue
+        for b in ["all"] + sorted(x for x in g0["start"].dropna().unique()):
+            g = g0 if b == "all" else g0[g0["start"] == b]
+            r_ = g[g["resident"].notna()]
+            row = dict(site=site, start=b, visits=len(g), n_resident=len(r_),
+                       pct_resident=100 * len(r_) / len(g) if len(g) else np.nan,
+                       median_lag_ns=r_["leave_lag_ns"].median() if len(r_) else np.nan,
+                       pct_leave_near_arrival=100 * (r_["leave_lag_ns"].abs() <= push_ns).mean() if len(r_) else np.nan,
+                       pct_leave_before=100 * (r_["leave_lag_ns"] < -push_ns).mean() if len(r_) else np.nan,
+                       pct_leave_after=100 * (r_["leave_lag_ns"] > push_ns).mean() if len(r_) else np.nan)
+            for d in DEST:
+                row[f"pct_{d.replace(' ', '_')}"] = 100 * (r_["resident_went"] == d).mean() if len(r_) else np.nan
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def plot_handover_table(summ, title, out_file, push_ns=1.0, min_n=5):
+    """Table per residue (all ions): visits, % with a resident K+, when it left, where it went."""
+    t = summ[summ["start"] == "all"]
+    if not len(t):
+        return
+    cols = ["residue", "visits", "with a K+ there\nduring the trip", f"it leaves\n> {push_ns:g} ns before",
+            f"it leaves within\n± {push_ns:g} ns of arrival", f"it leaves\n> {push_ns:g} ns after",
+            "median\n(ns)", "it goes to:\nGLU ring", "it goes to:\nlower ring", "it goes:\nout of cavity",
+            "it goes:\nup to the SF", "still there /\nfree in cavity"]
+    cells, grey = [], []
+    for r in t.to_dict("records"):
+        ok = r["n_resident"] > 0
+        f = (lambda x: f"{x:.0f}%") if ok else (lambda x: "–")
+        cells.append([r["site"], str(r["visits"]), f"{r['n_resident']} ({r['pct_resident']:.0f}%)",
+                      f(r["pct_leave_before"]), f(r["pct_leave_near_arrival"]), f(r["pct_leave_after"]),
+                      f"{r['median_lag_ns']:+.1f}" if ok else "–", f(r["pct_GLU_ring"]), f(r["pct_lower_ring"]),
+                      f(r["pct_out_of_the_cavity"]), f(r["pct_SF"]),
+                      f(r["pct_still_there"] + r["pct_free_in_cavity"]) if ok else "–"])
+        grey.append(r["n_resident"] < min_n)
+    widths = [1.5, 1.0, 1.9, 1.6, 1.9, 1.6, 1.1, 1.4, 1.4, 1.5, 1.4, 1.5]
+    fig, ax = plt.subplots(figsize=(1.0 * sum(widths), 1.0 + 0.42 * (len(cells) + 2)))
+    ax.axis("off")
+    tb = ax.table(cellText=cells, colLabels=cols, loc="upper center", cellLoc="center",
+                  colWidths=[x / sum(widths) for x in widths])
+    tb.auto_set_font_size(False)
+    tb.set_fontsize(16)
+    tb.scale(1, 2.3)
+    for (i, j), cell in tb.get_celld().items():
+        cell.set_edgecolor("#C9D3D8")
+        if i == 0:
+            cell.set_facecolor("#5B6770" if j >= 7 else "#123B4A")
+            cell.get_text().set_color("white")
+            cell.get_text().set_fontweight("bold")
+            cell.set_height(cell.get_height() * 1.9)
+            continue
+        if j >= 7:
+            cell.set_facecolor("#EEF3F5")
+        if j in (0, 4):
+            cell.get_text().set_fontweight("bold")
+        if grey[i - 1]:
+            cell.get_text().set_color("#9a9a9a")
+    ax.set_title(f"{title}\nion tracking: the K+ sitting at the residue while the new ion travels there (resident), "
+                 f"when it leaves the residue relative to the new ion's arrival, and where it goes next\n"
+                 f"(all visits; tracked within the new ion's own transit; grey: fewer than {min_n} residents)",
+                 fontsize=16)
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def handover_analysis(events, frames, visits_raw, sites, max_k, title, out_dir, dt):
+    """Writes out_dir/handover/: shared arrivals by K+ (from the occupancy columns) and, when the
+    frames carry occupant identities, the ion tracking of the residents."""
+    od = Path(out_dir) / "handover"
+    od.mkdir(exist_ok=True)
+    rep = _Report()
+    rep(f"HAND-OVER  {title}")
+    sh = arrival_sharing_by_k(events, visits_raw, max_k)
+    if len(sh):
+        sh.to_csv(od / "arrival_sharing_by_k.csv", index=False, float_format="%.2f")
+        rep("\nSHARED ARRIVALS BY THE OTHER K+ IN THE CAVITY: visits starting while the residue already holds another\n"
+            "K+ (single frame at arrival), and of those the % where it is free again when the ion leaves")
+        for site in sites:
+            g = sh[sh["site"] == site]
+            if len(g):
+                rep(f"  {site:<9} " + "   ".join(f"{r['start']} other K+: {r['pct_shared_at_arrival']:4.1f}% of "
+                                                f"{r['visits']} (gone {r['pct_other_gone_at_leave']:.0f}%)"
+                                                if r["n_shared"] else f"{r['start']} other K+: 0% of {r['visits']}"
+                                                for r in g.to_dict("records")))
+    ho = handover_table(events, frames, visits_raw, max_k, dt)
+    if not len(ho):
+        rep("\nION TRACKING: not available - the frames have no occupant identities (run main.py again)")
+        print("site_chain: no occupant identities in the frames: run main.py again for the ion tracking")
+    else:
+        ho.to_csv(od / "handover_visits.csv", index=False, float_format="%.2f")
+        summ = handover_summary(ho, sites)
+        summ.to_csv(od / "handover_summary.csv", index=False, float_format="%.2f")
+        plot_handover_table(summ, title, od / "handover.png")
+        rep("\nION TRACKING: the resident = the K+ seen last at the residue during the new ion's trip there;\n"
+            "lag = when it leaves the residue minus the new ion's arrival (ns); destination = where it goes next")
+        for r in summ.to_dict("records"):
+            if not r["n_resident"]:
+                rep(f"  {r['site']:<9} {str(r['start']):>4}: {r['visits']:>4} visits, no resident")
+                continue
+            rep(f"  {r['site']:<9} {str(r['start']):>4}: {r['visits']:>4} visits, resident {r['pct_resident']:4.0f}%; "
+                f"leaves before {r['pct_leave_before']:3.0f}% / near arrival {r['pct_leave_near_arrival']:3.0f}% / "
+                f"after {r['pct_leave_after']:3.0f}% (median {r['median_lag_ns']:+.1f} ns); goes to GLU "
+                f"{r['pct_GLU_ring']:3.0f}%, lower {r['pct_lower_ring']:3.0f}%, out {r['pct_out_of_the_cavity']:3.0f}%,"
+                f" SF {r['pct_SF']:3.0f}%, still/free {r["pct_still_there"] + r["pct_free_in_cavity"]:3.0f}%")
+    rep.write(od / "handover.txt")
+
+
 def leaving_by_visit_table(events, dt, max_visit=LEAVE_VISITS):
     """
     The ions grouped by the visit at which they leave the cavity: visit k = left
@@ -1940,7 +2195,7 @@ def plot_prediction(obs_t, sim_t, obs_n, sim_n, title, out_file):
 
 def analyze_model(visits, events, out_dir, head, frame_duration, model="residue", max_above=5,
                   max_below=3, max_sf=5, include_frame0=False, include_preequil=False, crowded=4,
-                  n_sim=N_SIM, seed=0, occ_frames=10):
+                  n_sim=N_SIM, seed=0, occ_frames=10, frames=None):
     """Tables, tests and plots of one model; see the module docstring. events may carry
     eq_start_frame (per run): ions leaving the SF before it are left out unless include_preequil."""
     out_dir = Path(out_dir)
@@ -2264,6 +2519,9 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
         plot_visit_k_time(kt, head_k, vis_dir / f"{name}_k_time.png", k)
     occupancy_analysis(events, visits, vs, sites, max_sf, f"{head}: {model} model", out_dir, dt, occ_frames)
     stop_analysis(events, visits, sites, ring, f"{head}: {model} model", out_dir, dt)
+    if frames is not None and len(visits):
+        handover_analysis(events, frames, visits, sorted(set(visits["site"]), key=lambda x: (ring.get(x) != "GLU", x))
+                          if model != "residue" else sites, max_sf, f"{head}: {model} model", out_dir, dt)
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
     plot_time_to_exit(st, f"{head}: mean time to Exit per state", out_dir / "time_to_exit.png")
     plot_prediction(obs_t * dt, sim_t * dt, obs_n, sim_n, f"{head}: chain against real ions",
@@ -2359,7 +2617,7 @@ def analyze_all(frames, stays, events, out_base, head, frame_duration, window, m
                                                                      include_preequil),
                       head, frame_duration, model=model, max_above=max_above, max_below=max_below,
                       max_sf=max_sf, include_frame0=include_frame0, include_preequil=include_preequil,
-                      crowded=crowded, occ_frames=occ_frames)
+                      crowded=crowded, occ_frames=occ_frames, frames=frames)
     return visits, ev
 
 
@@ -2394,8 +2652,8 @@ def run_site_chain(universe, permeation_events, asn_residues, glu_residues, chan
         frames = read_csv_or_empty(paths["frames"], keep_default_na=False)
         stays, events = read_csv_or_empty(paths["stays"]), read_csv_or_empty(paths["events"])
     recollect = force_rerun or not all(p.exists() for p in paths.values())
-    if not recollect and len(frames) and "occupied" not in frames.columns:
-        print("site_chain: frames without residue occupancy (older version): collecting again")
+    if not recollect and len(frames) and ("occupied" not in frames.columns or "occupants" not in frames.columns):
+        print("site_chain: frames without residue occupancy / occupant identities (older version): collecting again")
         recollect = True
     if recollect:
         frames, stays, events = collect_run(universe, permeation_events, asn_residues, glu_residues,
