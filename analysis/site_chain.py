@@ -133,6 +133,9 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              01 first stop by K+, 02 who holds a K+, 03 free vs occupied, 04 the K+
                              already there (pushed or gone), 05 where the pushed K+ goes, 06 storage
                              seats push ions out, 07 the bottom of the cavity; speech_numbers.txt
+            presentation/tables/     the tables of the slides (PNG + CSV): first stop and occupancy by
+                             K+, free -> occupied (with robustness), Glu / bottom tracking (the K+ already there,
+                             where it goes), after a lower-ring stop, last stop, asparagines by K+
         stops/stops.csv, .png, .txt   per residue (a stop): visits, time there, next stop (out / GLU
                              ring / lower ring), time still needed to leave the cavity from the visit,
                              and the SF -> exit time of the ions stopping there vs never (is it a trap?)
@@ -2378,6 +2381,250 @@ def pres_lower_ring(st, out, lines, min_visits=15):
     _pres_save(fig, out)
 
 
+
+# ── slide tables (presentation/tables/): the tables used on the slides, as PNG + CSV ──
+PRES_TINT = {"E141": "F6DEDB", "E152": "F9E8D2", "D173": "D6EFE7", "N184": "DCE8F8", EXIT: "E6E6E6"}
+
+
+def _ptable(cells, cols, widths, out, title, head_colors=None, fills=None, bold=None, grey=None, note=None):
+    """A slide-style table: navy (or per-column coloured) header, tinted key cells, bold cells, a note."""
+    fills, bold, grey = fills or {}, bold or set(), grey or set()
+    fig, ax = plt.subplots(figsize=(max(8.0, 0.95 * sum(widths)), 0.9 + 0.36 * (len(cells) + 2) + (0.25 if note else 0)))
+    ax.axis("off")
+    tb = ax.table(cellText=cells, colLabels=cols, loc="upper center", cellLoc="center",
+                  colWidths=[w / sum(widths) for w in widths])
+    tb.auto_set_font_size(False)
+    tb.set_fontsize(14)
+    tb.scale(1, 2.1)
+    for (i, j), c in tb.get_celld().items():
+        c.set_edgecolor("#C9D3D8")
+        if i == 0:
+            c.set_facecolor("#" + (head_colors[j] if head_colors and head_colors[j] else "123B4A"))
+            c.get_text().set_color("white")
+            c.get_text().set_fontweight("bold")
+            c.set_height(c.get_height() * 1.7)
+            continue
+        if (i - 1, j) in fills:
+            c.set_facecolor("#" + fills[(i - 1, j)])
+        if (i - 1, j) in bold or j == 0:
+            c.get_text().set_fontweight("bold")
+        if (i - 1, j) in grey:
+            c.get_text().set_color("#9a9a9a")
+    ax.set_title(title, fontsize=15)
+    if note:
+        fig.text(0.01, 0.01, note, fontsize=11, color="#5A6570", ha="left", va="bottom")
+    fig.tight_layout()
+    fig.savefig(out, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    pd.DataFrame(cells, columns=[c.replace("\n", " ") for c in cols]).to_csv(Path(out).with_suffix(".csv"), index=False)
+
+
+def _robust_out(rules, res):
+    """'out: free -> occupied' is shown as robust only when every occupancy rule moves it the same way by
+    >= 5 points (robustness/visit_1_free_vs_occupied_rules.csv); None when the file is missing."""
+    if rules is None or not len(rules):
+        return None
+    g = rules[(rules["group"] == res) & (rules["start"] == "all")]
+    if not len(g):
+        return None
+    d = (g["out_occupied"] - g["out_free"]).dropna()
+    return bool(len(d)) and bool((d >= 5).all() or (d <= -5).all() or d.abs().max() < 5)
+
+
+def pres_table_load(vt, occ, rt, kt, rules, sites, tdir, title):
+    """slide 'as the cavity fills': per K+ bin, for every residue → (first stop) and occ. (already holds
+    a K+), out and time to leave; below: going to it and going out when the residue is free → occupied."""
+    bins = [k for k, _ in _pres_bins(vt)] + ["all"]
+    occ_i, kt_i = occ.set_index("start"), kt.set_index("start") if len(kt) else pd.DataFrame()
+    cols, widths, heads = ["other K+", "ions"], [1.1, 0.8], [None, None]
+    for s_ in sites:
+        cols += [f"{s_}\n→", f"{s_}\nocc."]
+        widths += [0.95, 0.95]
+        c = PRES_COLORS.get(group_label(s_), "#8C8C8C").lstrip("#")
+        heads += [c, "5B6770"]
+    cols += ["out of the\ncavity", "time to\nleave (ns)"]
+    widths += [1.1, 1.1]
+    heads += [PRES_COLORS[EXIT].lstrip("#"), None]
+    cells, fills, bold = [], {}, set()
+    for i, k in enumerate(bins):
+        g = vt[vt["start"] == k].set_index("target")
+        if not len(g):
+            continue
+        row = [k, str(int(g["n_ions"].iloc[0]))]
+        for j, s_ in enumerate(sites):
+            row += [f"{g['pct'].get(s_, 0):.0f}%", f"{occ_i.loc[k, s_]:.0f}%" if k in occ_i.index and s_ in occ_i else "–"]
+            fills[(len(cells), 3 + 2 * j)] = "E3EAEE"
+        row += [f"{g['pct'].get(EXIT, 0):.0f}%"]
+        t = kt_i.loc[k, "out_mean_ns"] if k in kt_i.index and "out_mean_ns" in kt_i else np.nan
+        if k == "all" and len(kt):
+            w = kt[kt["start"] != "all"]
+            t = (w["out_mean_ns"] * w["n_out"]).sum() / max(w["n_out"].sum(), 1)
+        row += [f"{t:.1f}" if np.isfinite(t) else "–"]
+        if k == "all":
+            bold |= {(len(cells), j) for j in range(len(row))}
+        cells.append(row)
+    _ptable(cells, cols, widths, tdir / "01_first_stop_and_occupancy.png",
+            f"{title}\nvisit 1: where new ions go first (→) and which residues already hold another K+ (occ.), by the other K+ in the cavity",
+            head_colors=heads, fills=fills, bold=bold,
+            note="→ = % of new ions stopping there first; occ. = % of new ions finding it already holding another K+")
+    a = rt[rt["start"] == "all"].set_index("group")
+    rows, f2 = [], {}
+    for s_ in sites:
+        if s_ not in a.index:
+            continue
+        rob = _robust_out(rules, s_)
+        rows.append([s_, f"{int(a.loc[s_, 'n_free'])} / {int(a.loc[s_, 'n_occupied'])}",
+                     f"{a.loc[s_, 'to_group_free']:.0f}% → {a.loc[s_, 'to_group_occupied']:.0f}%",
+                     f"{a.loc[s_, 'out_free']:.0f}% → {a.loc[s_, 'out_occupied']:.0f}%" + ("" if rob in (None, True) else "  (not robust)")])
+        tf, to = a.loc[s_, "to_group_free"], a.loc[s_, "to_group_occupied"]
+        if max(tf, to) >= 5 and (to >= 1.5 * tf or to <= tf / 1.5):
+            f2[(len(rows) - 1, 2)] = PRES_TINT.get(group_label(s_), "E6E6E6")
+        if rob and abs(a.loc[s_, "out_occupied"] - a.loc[s_, "out_free"]) >= 8:
+            f2[(len(rows) - 1, 3)] = PRES_TINT.get(group_label(s_), "E6E6E6")
+    if rows:
+        _ptable(rows, ["residue", "ions\nfree / occupied", "new ions going there:\nfree → occupied",
+                       "new ions leaving the cavity:\nfree → occupied"], [1.8, 1.9, 2.8, 3.4],
+                tdir / "01b_free_vs_occupied.png",
+                f"{title}\nvisit 1: does a K+ already sitting at the residue change where the new ion goes? (all ions)",
+                fills=f2, note="'not robust': the four occupancy rules disagree on the direction (robustness/visit_1_free_vs_occupied_rules.csv)")
+
+
+def _dest_table(hv, hs, residues, sites):
+    """Where the K+ pushed off each residue goes next: per group, '%' (with the per-residue split)."""
+    groups = [g_ for g_ in ("E141", "E152", "D173", "N184") if any(group_label(x) == g_ for x in sites)]
+    rows = []
+    for res, label, sub in residues:
+        g = hv[(hv["site"] == res) & hv["resident"].notna()]
+        if sub is not None:
+            g = g[g["start"].astype(str) == sub]
+        n = len(g)
+        if not n:
+            continue
+        dest = g["resident_went_to"].fillna("").astype(str)
+        dest = dest.where(dest != "", g["resident_went"].map(lambda x: EXIT if x == "out of the cavity" else "other"))
+        row = [label, str(n)]
+        for gr in groups:
+            m = dest[dest.map(lambda d: group_label(d) == gr)]
+            if group_label(res) == gr and len(set(x for x in sites if group_label(x) == gr)) == 1:
+                row.append("–")
+                continue
+            v = 100 * len(m) / n
+            members = sorted(x for x in sites if group_label(x) == gr)
+            split = " / ".join(f"{100 * (m == x).sum() / n:.0f}" for x in members) if len(members) > 1 and len(m) else ""
+            row.append(f"{v:.0f}%" + (f" ({split})" if split and v > 0 else ""))
+        row.append(f"{100 * (dest == EXIT).sum() / n:.0f}%")
+        perm = g["resident_permeates"].astype(float)
+        row.append(f"{100 * perm.mean():.0f}%")
+        ex = g.loc[g["resident_permeates"] == True, "resident_exit_ns"]
+        row.append(f"{ex.median():.0f} ns" if sub is None and len(ex) else "–")
+        rows.append(row)
+    cols = ["K+ from", "pushed\nK+"] + [f"→ {gr}" + ("\n(" + " / ".join(x.split(".", 1)[1] for x in sorted(y for y in sites if group_label(y) == gr)) + ")"
+                                       if len([y for y in sites if group_label(y) == gr]) > 1 else "") for gr in groups] \
+           + ["straight\nout", "then\npermeates", "median time\nto its exit"]
+    return rows, cols
+
+
+def pres_table_tracking(hs, hv, sites, tdir, title, which, min_res=5):
+    """slides 'ion tracking': the K+ already sitting there (pushed off at arrival or gone before) and where
+    it goes next; which = 'GLU' (upper ring) or 'LOWER'."""
+    ring_of = lambda x: "GLU" if group_label(x) in ("E141", "E152") or x.startswith("E") else "LOWER"
+    a = hs[(hs["start"] == "all") & (hs["n_resident"] >= min_res) & hs["site"].map(lambda x: ring_of(x) == which)]
+    if not len(a):
+        return
+    cells = [[r["site"], f"{r['pct_resident']:.0f}%", f"{r['pct_leave_near_arrival']:.0f}%",
+              f"{r['pct_leave_before'] + r['pct_leave_after']:.0f}%", f"{r['median_lag_ns']:+.1f} ns"] for r in a.to_dict("records")]
+    fills = {}
+    for i, r in enumerate(a.to_dict("records")):
+        fills[(i, 2 if r["pct_leave_near_arrival"] >= 60 else 3)] = PRES_TINT.get(group_label(r["site"]), "E6E6E6")
+    name = "02_glu_tracking" if which == "GLU" else "04_bottom_tracking"
+    _ptable(cells, ["residue", "K+ sitting there\nwhen the new ion lands", "that K+ is pushed off\nas the new ion lands",
+                    "that K+ had already\nleft (> 1 ns before)", "median: when it left,\nrelative to arrival"],
+            [1.6, 2.6, 2.6, 2.6, 2.4], tdir / f"{name}_the_K_already_there.png",
+            f"{title}\nvisit 1, ion tracking: the K+ already sitting at the residue when the new ion lands", fills=fills)
+    res = []
+    for r in a.to_dict("records"):                             # bottom hand-over residues also split by load
+        if which == "LOWER" and r["pct_leave_near_arrival"] >= 60 and r["n_resident"] >= 15:
+            ks = sorted(hs[(hs["site"] == r["site"]) & (hs["start"] != "all") & (hs["n_resident"] > 0)]["start"].unique())
+            res += [(r["site"], f"{r['site']} · all", None)] + [(r["site"], f"   {k} other K+", k) for k in ks]
+        else:
+            res.append((r["site"], r["site"], None))
+    rows, cols = _dest_table(hv, hs, res, sites)
+    if rows:
+        _ptable(rows, cols, [1.9, 0.9] + [2.3 if "(" in c else 1.2 for c in cols[2:-3]] + [1.1, 1.2, 1.4], tdir / f"{name}_where_it_goes.png",
+                f"{title}\nvisit 1, ion tracking: where the K+ pushed off (or gone from) the residue goes next, and whether it then permeates",
+                note="a residue group with several members gives the total and, in brackets, the split per member (%)")
+
+
+def pres_table_bottom(st, vt, occ, sites, tdir, title):
+    """slide 'the bottom': after a lower-ring stop (back up / sideways / out), the last stop before leaving,
+    and the Asns as first stop / occupied by K+ in the cavity."""
+    lo = st[(st["ring"] == "LOWER") & (st["visits"] >= 15)]
+    if len(lo):
+        _ptable([[r["site"], str(r["visits"]), f"{r['pct_to_glu']:.0f}%", f"{r['pct_to_lower']:.0f}%", f"{r['pct_out']:.0f}%"]
+                 for r in lo.to_dict("records")],
+                ["after a stop at", "stops", "back up to\nthe GLU ring", "sideways", "out"], [2.0, 1.1, 1.7, 1.4, 1.2],
+                tdir / "05_after_a_lower_ring_stop.png", f"{title}\nall visits: where the ion goes after a stop in the lower ring",
+                fills={(i, 2): PRES_TINT["E152"] for i in range(len(lo))})
+    a = vt[vt["start"] == "all"]
+    if len(a) and len(st):
+        n = int(a["n_ions"].iloc[0])
+        exits = {r["site"]: r["visits"] * r["pct_out"] / 100 for r in st.to_dict("records")}
+        rows = []
+        for gr in ("E141", "E152", "D173", "N184"):
+            members = [x for x in sites if group_label(x) == gr]
+            if members:
+                v = sum(exits.get(x, 0) for x in members)
+                rows.append([gr + (" (" + " / ".join(x.split(".", 1)[1] for x in members) + ")" if len(members) > 1 else ""),
+                             f"{v:.0f}", f"{100 * v / n:.0f}%"])
+        nost = float(a.set_index("target")["count"].get(EXIT, 0))
+        rows.append(["no stop (left directly)", f"{nost:.0f}", f"{100 * nost / n:.0f}%"])
+        _ptable(rows, ["last stop before leaving", "ions", "% of ions"], [3.2, 1.2, 1.4], tdir / "06_last_stop_before_leaving.png",
+                f"{title}\nlast stop before leaving the cavity ({n} ions; exits = stops × % out)")
+    asn = [x for x in sites if group_label(x) == "N184"]
+    bins = [k for k, _ in _pres_bins(vt)]
+    if asn and bins and len(occ):
+        o = occ.set_index("start")
+        rows = []
+        for k in bins:
+            g = vt[vt["start"] == k].set_index("target")["pct"]
+            rows.append([k, " / ".join(f"{g.get(x, 0):.0f}" for x in asn) + "%",
+                         " / ".join(f"{o.loc[k, x]:.0f}" for x in asn if k in o.index) + "%"])
+        sub = " / ".join(x.split(".", 1)[1] for x in asn)
+        _ptable(rows, ["other K+", f"new ions → N184\n({sub})", f"N184 occupied\n({sub})"], [1.4, 2.8, 2.8],
+                tdir / "07_asparagines_by_load.png", f"{title}\nvisit 1: the asparagines as first stop and occupied, by the other K+ in the cavity")
+
+
+def presentation_tables(out_dir, title, sites):
+    """out_dir/presentation/tables/: the tables of the slides (PNG + CSV), from visits/, occupancy/,
+    handover/ and stops/."""
+    out_dir = Path(out_dir)
+    tdir = out_dir / "presentation" / "tables"
+    tdir.mkdir(parents=True, exist_ok=True)
+    rd = lambda p_: read_csv_or_empty(p_) if Path(p_).exists() else pd.DataFrame()
+    vt, occ = rd(out_dir / "visits" / "visit_1.csv"), rd(out_dir / "occupancy" / "visit_1_occupied_by_k.csv")
+    rt, kt = rd(out_dir / "occupancy" / "visit_1_free_vs_occupied_residue.csv"), rd(out_dir / "visits" / "visit_1_k_time.csv")
+    rules = rd(out_dir / "occupancy" / "robustness" / "visit_1_free_vs_occupied_rules.csv")
+    hs, hv = rd(out_dir / "handover" / "handover_visit_1_summary.csv"), rd(out_dir / "handover" / "handover_visits.csv")
+    st = rd(out_dir / "stops" / "stops.csv")
+    for d in (vt, occ, rt, kt, rules, hs):
+        if len(d) and "start" in d:
+            d["start"] = d["start"].astype(str)
+    if len(rules) and "rule" in rules:
+        rules = rules[rules["rule"] != "trip (main)"].pipe(lambda x: pd.concat([rules[rules["rule"] == "trip (main)"], x]))
+    if len(hv):
+        hv = hv[hv["visit"] == 0].copy()
+        hv["start"] = hv["start"].astype(str)
+    jobs = [("first stop and occupancy", lambda: pres_table_load(vt, occ, rt, kt, rules, sites, tdir, title) if len(vt) and len(occ) and len(rt) else None),
+            ("glu tracking", lambda: pres_table_tracking(hs, hv, sites, tdir, title, "GLU") if len(hs) else None),
+            ("bottom tracking", lambda: pres_table_tracking(hs, hv, sites, tdir, title, "LOWER") if len(hs) else None),
+            ("bottom", lambda: pres_table_bottom(st, vt, occ, sites, tdir, title))]
+    for name, fn in jobs:
+        try:
+            fn()
+        except Exception as e:                                 # one table failing must not stop the others
+            print(f"site_chain: presentation table '{name}' not drawn: {e}")
+
+
 def presentation_figures(out_dir, title, sites):
     """out_dir/presentation/: the visit-1 story, one message per figure, from the tables written by
     the analysis (visits/, occupancy/, handover/, stops/), plus speech_numbers.txt with the numbers
@@ -2425,6 +2672,7 @@ def presentation_figures(out_dir, title, sites):
         for l_ in lines or ["  (not drawn: the data it needs are missing)"]:
             rep(l_)
     rep.write(pdir / "speech_numbers.txt")
+    presentation_tables(out_dir, title, sites)
 
 
 def leaving_by_visit_table(events, dt, max_visit=LEAVE_VISITS):
