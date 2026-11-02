@@ -2324,13 +2324,21 @@ def pres_where_pushed(hv, hs, out, lines, min_res=15, min_push=60):
     _pres_save(fig, out)
 
 
-def pres_storage_push(rt, out, lines, min_n=30):
-    """06: storage residues (fewer new ions go there when occupied): % of new ions leaving the cavity
-    directly, residue free vs holding a K+."""
+def pres_storage_push(rt, out, lines, min_n=30, rules=None):
+    """06: residues whose 'new ions leaving the cavity directly: free -> occupied' rises by >= 5 points
+    under every occupancy rule (robustness/
+    visit_1_free_vs_occupied_rules.csv; without that file, by >= 8 points under the main rule)."""
     a = rt[rt["start"] == "all"]
-    a = a[(a["n_free"] >= min_n) & (a["n_occupied"] >= min_n) & (a["to_group_free"] >= 5)
-          & (a["to_group_occupied"] <= a["to_group_free"] / 1.5)]
+    a = a[(a["n_free"] >= min_n) & (a["n_occupied"] >= min_n)]
+    if rules is not None and len(rules) and "rule" in rules:
+        g = rules[rules["start"].astype(str) == "all"]
+        ok = [r for r in a["group"] if len(d := (g[g["group"] == r]["out_occupied"] - g[g["group"] == r]["out_free"]).dropna())
+              and (d >= 5).all()]
+        a = a[a["group"].isin(ok)]
+    else:
+        a = a[a["out_occupied"] - a["out_free"] >= 8]
     if not len(a):
+        lines.append("  no residue where more new ions leave under every occupancy rule")
         return
     res = a["group"].tolist()
     fig, ax = plt.subplots(figsize=(max(9, 2.4 * len(res) + 3), 6.5))
@@ -2678,6 +2686,7 @@ def presentation_figures(out_dir, title, sites):
     hs = rd(out_dir / "handover" / "handover_visit_1_summary.csv")
     hv = rd(out_dir / "handover" / "handover_visits.csv")
     st = rd(out_dir / "stops" / "stops.csv")
+    rules = rd(out_dir / "occupancy" / "robustness" / "visit_1_free_vs_occupied_rules.csv")
     for d in (vt, occ, rt, hs):
         if len(d) and "start" in d:
             d["start"] = d["start"].astype(str)
@@ -2696,8 +2705,8 @@ def presentation_figures(out_dir, title, sites):
          lambda L: pres_resident_at_arrival(hs, pdir / "04_K_already_there.png", L) if len(hs) else None),
         ("05_where_pushed_K_goes.png", "Where the pushed K+ goes next",
          lambda L: pres_where_pushed(hv, hs, pdir / "05_where_pushed_K_goes.png", L) if len(hs) else None),
-        ("06_storage_push.png", "Storage seats: new ions avoid them when full, and more leave the cavity",
-         lambda L: pres_storage_push(rt, pdir / "06_storage_push.png", L) if len(rt) else None),
+        ("06_storage_push.png", "A full seat: more new ions leave the cavity directly (every occupancy rule)",
+         lambda L: pres_storage_push(rt, pdir / "06_storage_push.png", L, rules=rules) if len(rt) else None),
         ("07_after_a_stop.png", "After a stop at each residue: to a Glu, the lower ring, or out (all visits)",
          lambda L: pres_lower_ring(st, pdir / "07_after_a_stop.png", L) if len(st) else None),
     ]
