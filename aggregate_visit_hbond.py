@@ -1,0 +1,43 @@
+"""
+aggregate_visit_hbond.py
+========================
+Splits the visit-1 results of the site chain by the H-bond state of each glutamate to the residue
+above it (see analysis/visit_hbond.py).
+
+Needs, for the system:
+  <base>/RUN*/hbond_analysis/<pair>/hbond_per_frame.csv   (analysis/hbond_pair_analysis.py, one per pair)
+  <site_chain folder>/visits.csv, events.csv, handover_stays/handover_visits.csv
+      (aggregate_site_chain.py, residue model, e.g. <base>/aggregated_site_chain/t3.5_d10/residue_a5b3)
+
+USAGE
+    python3 aggregate_visit_hbond.py /path/girk_analyser_results/G12 \\
+        --site_chain /path/girk_analyser_results/G12/aggregated_site_chain/t3.5_d10/residue_a5b3 \\
+        --pairs pairs.csv [--max_k 5]
+pairs.csv: columns site,hbond_dir, e.g.
+    site,hbond_dir
+    E152.2a,148_152.2a
+    E152.2b,148_152.2b
+    E152.2c,148_152.2c
+(site = the glutamate label used by the site chain; hbond_dir = the folder name under RUN*/hbond_analysis/)
+"""
+
+import argparse
+
+import pandas as pd
+
+from analysis.visit_hbond import analyze
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("base", help="system folder holding RUN*/")
+    p.add_argument("--site_chain", required=True, help="site-chain residue-model folder (visits.csv, events.csv)")
+    p.add_argument("--pairs", required=True, help="CSV with columns site,hbond_dir")
+    p.add_argument("--max_k", type=int, default=5, help="top bin of the other K+ in the cavity (default 5 -> 5+)")
+    a = p.parse_args()
+    t = pd.read_csv(a.pairs)
+    analyze(a.base, a.site_chain, dict(zip(t["site"], t["hbond_dir"])), a.max_k)
+
+
+if __name__ == "__main__":
+    main()
