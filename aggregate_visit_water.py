@@ -36,3 +36,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+'''
+python3 aggregate_visit_water.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 --site_chain /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/aggregated_site_chain/t3.5_d10/residue_a5b3 --pairs pairs.csv
+'''
