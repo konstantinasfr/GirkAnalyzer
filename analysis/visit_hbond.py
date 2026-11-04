@@ -63,6 +63,34 @@ def carboxylate_bond(detail):
     return any(d in CARBOXYLATE_O or a in CARBOXYLATE_O for d, a in _ATOMS.findall(detail))
 
 
+_PAIR_DIR = re.compile(r"^[A-Z]+\d+_[A-Za-z0-9]+_([A-Z]+)(\d+)_([A-Za-z0-9]+)$")
+
+
+def auto_pairs(base):
+    """{site: hbond_dir} from the folder names under RUN*/hbond_analysis/, e.g.
+    SER148_2a_GLU152_2a -> E152.2a (the site is the second residue, the glutamate)."""
+    from analysis.site_chain import site_label
+    out = {}
+    for d in sorted(Path(base).glob("RUN*/hbond_analysis/*")):
+        m = _PAIR_DIR.match(d.name)
+        if d.is_dir() and m:
+            out.setdefault(site_label(f"{m.group(2)}.{m.group(3)}", m.group(1)), d.name)
+    return out
+
+
+def read_pairs(base, arg):
+    """--pairs: 'auto' (from the folder names) or a CSV with columns site,hbond_dir."""
+    if arg is None:
+        return None
+    pairs = auto_pairs(base) if str(arg).lower() == "auto" else dict(pd.read_csv(arg)[["site", "hbond_dir"]].values)
+    print("H-bond pairs (site <- hbond_analysis folder):")
+    for k, v in pairs.items():
+        print(f"  {k:<9} <- {v}")
+    if not pairs:
+        print("  none found")
+    return pairs
+
+
 def load_bonds(base, pairs, carboxylate_only=True):
     """{(run, site): {frame: 0/1}} from RUN<run>/hbond_analysis/<hbond_dir>/hbond_per_frame.csv.
     carboxylate_only (default): a frame counts as bonded only if a bond uses the Glu carboxylate

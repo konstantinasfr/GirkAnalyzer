@@ -11,13 +11,14 @@ Needs:
 
 USAGE
     python3 aggregate_visit_water.py /path/girk_analyser_results/G12 \\
-        --site_chain /path/girk_analyser_results/G12/aggregated_site_chain/t3.5_d10/residue_a5b3 [--pairs pairs.csv]
+        --site_chain /path/girk_analyser_results/G12/aggregated_site_chain/t3.5_d10/residue_a5b3 [--pairs auto]
 """
 
 import argparse
 
 import pandas as pd
 
+from analysis.visit_hbond import read_pairs
 from analysis.visit_water import analyze
 
 
@@ -25,13 +26,9 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("base", help="system folder holding RUN*/")
     p.add_argument("--site_chain", required=True, help="site-chain residue-model folder (visits.csv, events.csv)")
-    p.add_argument("--pairs", help="optional CSV with columns site,hbond_dir")
+    p.add_argument("--pairs", help="optional: auto (from the RUN*/hbond_analysis folder names) or a CSV with columns site,hbond_dir")
     a = p.parse_args()
-    pairs = None
-    if a.pairs:
-        t = pd.read_csv(a.pairs)
-        pairs = dict(zip(t["site"], t["hbond_dir"]))
-    analyze(a.base, a.site_chain, pairs)
+    analyze(a.base, a.site_chain, read_pairs(a.base, a.pairs))
 
 
 if __name__ == "__main__":

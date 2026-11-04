@@ -12,7 +12,7 @@ Needs, for the system:
 USAGE
     python3 aggregate_visit_hbond.py /path/girk_analyser_results/G12 \\
         --site_chain /path/girk_analyser_results/G12/aggregated_site_chain/t3.5_d10/residue_a5b3 \\
-        --pairs pairs.csv [--max_k 5]
+        [--pairs auto | pairs.csv] [--max_k 5]
 pairs.csv: columns site,hbond_dir, e.g.
     site,hbond_dir
     E152.2a,SER148_2a_GLU152_2a
@@ -25,18 +25,17 @@ import argparse
 
 import pandas as pd
 
-from analysis.visit_hbond import analyze
+from analysis.visit_hbond import analyze, read_pairs
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("base", help="system folder holding RUN*/")
     p.add_argument("--site_chain", required=True, help="site-chain residue-model folder (visits.csv, events.csv)")
-    p.add_argument("--pairs", required=True, help="CSV with columns site,hbond_dir")
+    p.add_argument("--pairs", default="auto", help="auto (default: from the RUN*/hbond_analysis folder names) or a CSV with columns site,hbond_dir")
     p.add_argument("--max_k", type=int, default=5, help="top bin of the other K+ in the cavity (default 5 -> 5+)")
     a = p.parse_args()
-    t = pd.read_csv(a.pairs)
-    analyze(a.base, a.site_chain, dict(zip(t["site"], t["hbond_dir"])), a.max_k)
+    analyze(a.base, a.site_chain, read_pairs(a.base, a.pairs), a.max_k)
 
 
 if __name__ == "__main__":
