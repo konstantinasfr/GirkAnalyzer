@@ -1935,6 +1935,17 @@ def main():
         force_rerun=args.force_pkl_generation   # recollect the frames (reads the trajectory again)
     )
 
+    # WATER AT THE SITE-CHAIN STOPS: per frame of every permeation, the waters in the first shell of
+    # the permeating K+ (3.4 A) and the waters within 3.5 A of each Glu/Asp/Asn side-chain oxygen.
+    # One trajectory pass -> visit_water/; pool with aggregate_visit_water.py (joins to the site-chain
+    # visits, ion tracking and, with --pairs, the H-bond state). Uncomment to run.
+    # from analysis.visit_water import run_visit_water
+    # run_visit_water(
+    #     u, analyzer.permeation_events, asn_residues, glu_residues,
+    #     results_dir=results_dir, run=run_number, channel_type=channel_type,
+    #     force_rerun=args.force_pkl_generation
+    # )
+
 #     #  NEW: Add proximity analysis
 #     print("\n" + "="*70)
 #     print("RUNNING RESIDUE PROXIMITY ANALYSIS")
