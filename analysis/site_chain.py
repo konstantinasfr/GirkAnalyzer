@@ -129,13 +129,18 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              residue while the new ion travels there: when it leaves (relative to the
                              arrival) and where it goes (handover_visits.csv, handover_summary.csv,
                              handover.png, handover.txt)
-        presentation/                (residue model) the visit-1 story for slides, one message per figure:
+        handover_stays/              the same ion tracking with the stay rule (handover_table_stays): the resident
+                             holds the residue >= 10 / 2 frames of the trip, leaves only after >= 10 / 2 frames away,
+                             and goes to the next place it stays >= 10 / 2 frames (single-frame flickers and passers-by
+                             do not count); same files as handover/; handover/ itself is unchanged
+        presentation/               (residue model) the visit-1 story for slides, one message per figure:
                              01 first stop by K+, 02 who holds a K+, 03 free vs occupied, 04 the K+
                              already there (pushed or gone), 05 where the pushed K+ goes, 06 storage
                              seats push ions out, 07 the bottom of the cavity; speech_numbers.txt
             presentation/tables/     the tables of the slides (PNG + CSV): first stop and occupancy by
                              K+, free -> occupied (with robustness), Glu / bottom tracking (the K+ already there,
-                             where it goes), after a stop at each residue, last stop, last stop by the visit it was
+                             where it goes; *_stays = the same from handover_stays/), after a stop at each residue,
+                             last stop, last stop by the visit it was
                              (06b: of the ions leaving after visit 1, 2, ... % per residue), asparagines by K+
         stops/stops.csv, .png, .txt   per residue (a stop): visits, time there, next stop (out / GLU
                              ring / lower ring), time still needed to leave the cavity from the visit,
@@ -2102,6 +2107,153 @@ def handover_analysis(events, frames, visits_raw, sites, max_k, title, out_dir, 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Ion tracking with the stay rule (second analysis, next to handover/)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _first_run(flags, start, hold):
+    """First index i >= start where flags[i:i+hold] are all True (a run of `hold` frames), or None.
+    A run cut by the end of the data counts only if it is complete."""
+    n, run = len(flags), 0
+    for i in range(start, n):
+        run = run + 1 if flags[i] else 0
+        if run >= hold:
+            return i - hold + 1
+    return None
+
+
+def handover_table_stays(events, frames, visits_raw, max_k, dt, hold=10, ring_of=None):
+    """Ion tracking of the K+ sitting at the residue (the resident), with the same stay rule as the
+    permeating ion instead of single frames (handover_table):
+    - resident: the other K+ at the residue in >= hold frames of the new ion's trip there (all of the
+      trip's frames when it is shorter: the 'occupied' rule); several -> the one seen there last;
+    - it leaves at the first frame of a run of >= hold frames away from the residue (shorter excursions,
+      e.g. a 1-frame flicker toward the next residue, are not a departure);
+    - where it goes: the first of a run of >= hold frames at another residue, in the SF, or out of the
+      cavity, after it leaves ('free in cavity' if none before the new ion's frames end, 'still there'
+      if it never leaves within them).
+    Only the frames of the new ion's own transit are recorded (frames_run<run>.csv), so a resident
+    still there at the new ion's exit is 'still there' (censored), as in handover_table.
+    ring_of: {site: 'GLU' | 'LOWER'}; by default from visits_raw (sites never visited fall back to
+    their one-letter code: E/Q -> GLU)."""
+    need = {"occupants", "cavity_ions", "sf_ions"}
+    if not need <= set(frames.columns) or not len(visits_raw):
+        return pd.DataFrame()
+    ring = dict(zip(visits_raw["site"], visits_raw["ring"]))
+    if ring_of:
+        ring.update(ring_of)
+    ring_get = lambda s_: ring.get(s_, "GLU" if s_[:1] in ("E", "Q") else "LOWER")
+    kmap = _step_k(events, visits_raw, max_k)
+    end1 = dict(zip(zip(events["run"], events["event"]), events["end_1"]))
+    fr_by = {k: g.sort_values("frame") for k, g in frames.groupby(["run", "event"])}
+    vis_by = {k: g.sort_values("visit") for k, g in visits_raw.groupby(["run", "event"])}
+    rows = []
+    for key, vv in vis_by.items():
+        g = fr_by.get(key)
+        if g is None or key not in end1 or g["occupants"].isna().all():   # run collected without identities
+            continue
+        f0 = int(g["frame"].iloc[0])
+        occ = [_parse_occupants(x) for x in g["occupants"]]
+        cav = [_parse_ids(x) for x in g["cavity_ions"]]
+        sf = [_parse_ids(x) for x in g["sf_ions"]]
+        n = len(occ)
+        prev_end = end1[key]
+        for v in vv.to_dict("records"):
+            site, a = v["site"], int(v["start"])
+            lo, hi = max(prev_end + 1, f0), min(a, f0 + n - 1)            # the trip there, and the arrival frame
+            prev_end = int(v["end"])
+            row = dict(run=key[0], event=key[1], visit=v["visit"], site=site, ring=v["ring"],
+                       start=kmap.get((key[0], key[1], v["visit"])), resident=np.nan, resident_frames=np.nan,
+                       leave_lag_ns=np.nan, resident_went="", resident_went_to="",
+                       resident_permeates=np.nan, resident_exit_ns=np.nan, resident_exits_first=np.nan,
+                       resident_next="")
+            trip = range(lo, hi + 1)
+            cnt, last = Counter(), {}
+            for f in trip:
+                for r, s_ in occ[f - f0].items():
+                    if s_ == site:
+                        cnt[r] += 1
+                        last[r] = f
+            need_n = min(hold, len(trip)) if len(trip) else 1
+            cand = [r for r, c in cnt.items() if c >= need_n]
+            if not cand:
+                rows.append(row)
+                continue
+            res = max(cand, key=lambda r: last[r])
+            row["resident"], row["resident_frames"] = res, cnt[res]
+            away = [occ[i].get(res) != site for i in range(n)]
+            i_leave = _first_run(away, last[res] - f0 + 1, hold)
+            if i_leave is None:
+                row["resident_went"] = "still there"
+                rows.append(row)
+                continue
+            row["leave_lag_ns"] = (f0 + i_leave - a) * dt
+            went, best = "free in cavity", None
+            others = {s_ for i in range(i_leave, n) for s_ in [occ[i].get(res)] if s_ and s_ != site}
+            for s_ in others:
+                j = _first_run([occ[i].get(res) == s_ for i in range(n)], i_leave, hold)
+                if j is not None and (best is None or j < best[0]):
+                    best = (j, "GLU ring" if ring_get(s_) == "GLU" else "lower ring", s_)
+            j = _first_run([res in sf[i] for i in range(n)], i_leave, hold)
+            if j is not None and (best is None or j < best[0]):
+                best = (j, "SF", "")
+            j = _first_run([res not in cav[i] and res not in sf[i] for i in range(n)], i_leave, hold)
+            if j is not None and (best is None or j < best[0]):
+                best = (j, "out of the cavity", "")
+            if best is not None:
+                went, row["resident_went_to"] = best[1], best[2]
+            row["resident_went"] = went
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def handover_stays_analysis(events, frames, visits_raw, sites, max_k, title, out_dir, dt, hold=10):
+    """Writes out_dir/handover_stays/: the ion tracking of handover/ redone with the stay rule
+    (handover_table_stays): handover_visits.csv, handover_summary.csv, handover_visit_1_summary.csv,
+    handover.png, handover_visit_1.png, handover.txt. handover/ is left as it is."""
+    ho = handover_table_stays(events, frames, visits_raw, max_k, dt, hold)
+    if not len(ho):
+        return
+    od = Path(out_dir) / "handover_stays"
+    od.mkdir(exist_ok=True)
+    ho.to_csv(od / "handover_visits.csv", index=False, float_format="%.2f")
+    summ = handover_summary(ho, sites)
+    summ.to_csv(od / "handover_summary.csv", index=False, float_format="%.2f")
+    plot_handover_table(summ, title + " (stay rule)", od / "handover.png")
+    ho1 = ho[ho["visit"] == 0]
+    summ1 = handover_summary(ho1, sites)
+    if len(summ1):
+        summ1.to_csv(od / "handover_visit_1_summary.csv", index=False, float_format="%.2f")
+        plot_handover_table(summ1, title + " (stay rule)", od / "handover_visit_1.png",
+                            scope="visit 1: the new ion's first stop")
+    rep = _Report()
+    rep(f"ION TRACKING WITH THE STAY RULE  {title}\n"
+        f"resident = the other K+ at the residue in >= {hold} frames of the new ion's trip there (all frames if the trip\n"
+        f"is shorter); it leaves at the first of >= {hold} frames away; it goes to the first residue / SF / outside where\n"
+        f"it then spends >= {hold} frames in a row. Lag = leave - arrival (ns): before < -1 ns, at arrival |lag| <= 1 ns,\n"
+        "after > 1 ns; 'still there' = it never leaves before the new ion's frames end (not in the lag %).")
+    for scope, s_ in (("ALL VISITS", summ), ("VISIT 1", summ1)):
+        rep(f"\n{scope}")
+        for r in s_.to_dict("records"):
+            if not r["n_resident"]:
+                rep(f"  {r['site']:<9} {str(r['start']):>4}: {r['visits']:>4} visits, no resident")
+                continue
+            rep(f"  {r['site']:<9} {str(r['start']):>4}: {r['visits']:>4} visits, resident {r['pct_resident']:4.0f}%; "
+                f"leaves before {r['pct_leave_before']:3.0f}% / at arrival {r['pct_leave_near_arrival']:3.0f}% / "
+                f"after {r['pct_leave_after']:3.0f}% / still there {r['pct_still_there']:3.0f}% (median "
+                f"{r['median_lag_ns']:+.1f} ns); goes to GLU {r['pct_GLU_ring']:3.0f}%, lower {r['pct_lower_ring']:3.0f}%, "
+                f"out {r['pct_out_of_the_cavity']:3.0f}%, SF {r['pct_SF']:3.0f}%, free {r['pct_free_in_cavity']:3.0f}%")
+    rep("\nWHERE THE RESIDENT GOES, by residue (the next residue it stays at, % of the residents that move to one)")
+    for scope, hh in (("all visits", ho), ("visit 1", ho1)):
+        for site in sites:
+            g = hh[(hh["site"] == site) & (hh["resident_went_to"] != "")]
+            if len(g):
+                vc = g["resident_went_to"].value_counts()
+                rep(f"  {scope:<10} {site:<9} -> " + ", ".join(f"{k} {100 * c / len(g):.0f}%" for k, c in vc.items())
+                    + f"   (n={len(g)})")
+    rep.write(od / "handover.txt")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Presentation figures: the story of visit 1, one message per figure
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2530,7 +2682,7 @@ def _dest_table(hv, hs, residues, sites):
     return rows, cols
 
 
-def pres_table_tracking(hs, hv, sites, tdir, title, which, min_res=5):
+def pres_table_tracking(hs, hv, sites, tdir, title, which, min_res=5, before_only=False, suffix=""):
     """slides 'ion tracking': the K+ already sitting there (pushed off at arrival or gone before) and where
     it goes next; which = 'GLU' (upper ring) or 'LOWER'."""
     ring_of = lambda x: "GLU" if group_label(x) in ("E141", "E152") or x.startswith("E") else "LOWER"
@@ -2538,20 +2690,22 @@ def pres_table_tracking(hs, hv, sites, tdir, title, which, min_res=5):
     if not len(a):
         return
     cells = [[r["site"], f"{r['pct_resident']:.0f}%", f"{r['pct_leave_near_arrival']:.0f}%",
-              f"{r['pct_leave_before'] + r['pct_leave_after']:.0f}%", f"{r['median_lag_ns']:+.1f} ns"] for r in a.to_dict("records")]
+              f"{r['pct_leave_before'] + (0 if before_only else r['pct_leave_after']):.0f}%", f"{r['median_lag_ns']:+.1f} ns"]
+             for r in a.to_dict("records")]
     fills = {}
     for i, r in enumerate(a.to_dict("records")):
         fills[(i, 2 if r["pct_leave_near_arrival"] >= 60 else 3)] = PRES_TINT.get(group_label(r["site"]), "E6E6E6")
-    name = "02_glu_tracking" if which == "GLU" else "04_bottom_tracking"
+    name = ("02_glu_tracking" if which == "GLU" else "04_bottom_tracking") + suffix
     _ptable(cells, ["residue", "K+ sitting there\nwhen the new ion lands", "that K+ is pushed off\nas the new ion lands",
                     "that K+ had already\nleft (> 1 ns before)", "median: when it left,\nrelative to arrival"],
             [1.6, 3.0, 3.0, 3.0, 2.8], tdir / f"{name}_the_K_already_there.png",
-            f"{title}\nvisit 1, ion tracking: the K+ already sitting at the residue when the new ion lands", fills=fills)
+            f"{title}\nvisit 1, ion tracking{' (stay rule)' if suffix else ''}: the K+ already sitting at the residue when the new ion lands",
+            fills=fills)
     res = [(r["site"], r["site"], None) for r in a.to_dict("records")]
     rows, cols = _dest_table(hv, hs, res, sites)
     if rows:
         _ptable(rows, cols, [1.9, 1.0] + [2.4 if "(" in c else 1.3 for c in cols[2:-1]] + [1.3], tdir / f"{name}_where_it_goes.png",
-                f"{title}\nvisit 1, ion tracking: where the K+ pushed off (or gone from) the residue goes next",
+                f"{title}\nvisit 1, ion tracking{' (stay rule)' if suffix else ''}: where the K+ pushed off (or gone from) the residue goes next",
                 note="a residue group with several members gives the total and, in brackets, the split per member (%)")
 
 
@@ -2665,6 +2819,16 @@ def presentation_tables(out_dir, title, sites):
             ("glu tracking", lambda: pres_table_tracking(hs, hv, sites, tdir, title, "GLU") if len(hs) else None),
             ("bottom tracking", lambda: pres_table_tracking(hs, hv, sites, tdir, title, "LOWER") if len(hs) else None),
             ("bottom", lambda: pres_table_bottom(st, vt, occ, sites, tdir, title, visits=visits))]
+    hs2, hv2 = rd(out_dir / "handover_stays" / "handover_visit_1_summary.csv"), rd(out_dir / "handover_stays" / "handover_visits.csv")
+    if len(hs2):                                               # the same tracking tables with the stay rule (_stays)
+        hs2["start"] = hs2["start"].astype(str)
+        if len(hv2):
+            hv2 = hv2[hv2["visit"] == 0].copy()
+            hv2["start"] = hv2["start"].astype(str)
+        jobs += [("glu tracking (stay rule)", lambda: pres_table_tracking(hs2, hv2, sites, tdir, title, "GLU", before_only=True,
+                                                                         suffix="_stays")),
+                 ("bottom tracking (stay rule)", lambda: pres_table_tracking(hs2, hv2, sites, tdir, title, "LOWER",
+                                                                            before_only=True, suffix="_stays"))]
     for name, fn in jobs:
         try:
             fn()
@@ -3231,6 +3395,9 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
         handover_analysis(events, frames, visits, sorted(set(visits["site"]), key=lambda x: (ring.get(x) != "GLU", x))
                           if model != "residue" else sites, max_sf, f"{head}: {model} model", out_dir, dt,
                           events_all, visits_all)
+        handover_stays_analysis(events, frames, visits, sorted(set(visits["site"]), key=lambda x: (ring.get(x) != "GLU", x))
+                                if model != "residue" else sites, max_sf, f"{head}: {model} model", out_dir, dt,
+                                hold=occ_frames)
     if model == "residue":
         presentation_figures(out_dir, head, sites)
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
