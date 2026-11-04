@@ -1937,14 +1937,43 @@ def main():
 
     # WATER AT THE SITE-CHAIN STOPS: per frame of every permeation, the waters in the first shell of
     # the permeating K+ (3.4 A) and the waters within 3.5 A of each Glu/Asp/Asn side-chain oxygen.
-    # One trajectory pass -> visit_water/; pool with aggregate_visit_water.py (joins to the site-chain
-    # visits, ion tracking and, with --pairs, the H-bond state). Uncomment to run.
-    # from analysis.visit_water import run_visit_water
-    # run_visit_water(
-    #     u, analyzer.permeation_events, asn_residues, glu_residues,
-    #     results_dir=results_dir, run=run_number, channel_type=channel_type,
-    #     force_rerun=args.force_pkl_generation
-    # )
+    # One trajectory pass -> visit_water/ (cached); pool with aggregate_visit_water.py (joins to the
+    # site-chain visits, ion tracking and, with --pairs, the H-bond state).
+    from analysis.visit_water import run_visit_water
+    run_visit_water(
+        u, analyzer.permeation_events, asn_residues, glu_residues,
+        results_dir=results_dir, run=run_number, channel_type=channel_type,
+        force_rerun=args.force_pkl_generation
+    )
+
+    # H-BOND OF EACH GLU TO THE RESIDUE 4 BEFORE IT (GIRK2 S148 above E152, GIRK1 F137 above E141),
+    # for the visit-1 / ion-tracking split by bond state (aggregate_visit_hbond.py) and the water split.
+    # -> hbond_analysis/<RES><pdb>_<GLU><pdb>/hbond_per_frame.csv; the folder name carries the residue
+    # names from the topology, so check it reads SER148..._GLU152... (PHE137..._GLU141... for GIRK1).
+    # Pairs already done (hbond_per_frame.csv present) are skipped.
+    from analysis.hbond_pair_analysis import run_hbond_pair_analysis
+    from analysis.converter import to_pdb
+    def _hb_done(a, b):
+        name = lambda r: f"{u.select_atoms(f'resid {r}').residues[0].resname}{to_pdb(r, args.channel_type)}"
+        d = results_dir / "hbond_analysis" / f"{name(a)}_{name(b)}".replace(".", "_")
+        return (d / "hbond_per_frame.csv").exists()
+    hb_pairs = [(int(g) - 4, int(g)) for g in glu_residues]
+    for a, b in hb_pairs:
+        print(f"H-bond pair: {u.select_atoms(f'resid {a}').residues[0].resname}{a} - "
+              f"{u.select_atoms(f'resid {b}').residues[0].resname}{b}")
+    hb_pairs = [p for p in hb_pairs if args.force_pkl_generation or not _hb_done(*p)]
+    if hb_pairs:
+        run_hbond_pair_analysis(
+            u                = u,
+            results_dir      = results_dir,
+            channel_type     = args.channel_type,
+            residue_pairs    = hb_pairs,
+            start_frame      = start_frame,
+            end_frame        = end_frame,
+            smoothing_window = 100,
+            hbond_dist       = 3.5,
+            hbond_angle      = 120.0,
+        )
 
 #     #  NEW: Add proximity analysis
 #     print("\n" + "="*70)
