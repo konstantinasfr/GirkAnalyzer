@@ -51,5 +51,29 @@ chk("into the SF at 125: goes to SF", new.resident_went == "SF")
 # B7 two candidates: 900 sits 101-115 (15 frames) then leaves; 901 sits 116-131 (16) -> resident 901 (seen last)
 old, new = run(lambda f: "E152.2a:900" if f <= 115 else ("E152.2a:901" if f <= 131 else ""))
 chk("two candidates: the one seen last (901)", new.resident == 901)
+
+# C. push path (handover_push_analysis columns): positions along the pore are needed
+def run_path(occ, pos, cav=lambda f: [900], sf=lambda f: ""):
+    fr = frames(occ, 100, 200, cav, sf)
+    fr["cavity_ions"] = [";".join(f"{i}:{pos(f):.1f}" for i in cav(f)) for f in fr["frame"]]
+    v, e = sc.build_visits(fr, ST, EV, window=4, occ_frames=10)
+    return sc.handover_table_stays(e, fr, v, 5, 0.075, hold=10, path=True).iloc[0]
+# C1 pushed at 132, brushes D173 132-134 (3 frames), floats 135-139, settles at E141 140-200; moves down 4 A in 0.5 ns
+def occ_c1(f):
+    if f <= 131: return "E152.2a:900"
+    if f <= 134: return "D173.G1:900"
+    return "" if f < 140 else "E141.G1:900"
+r = run_path(occ_c1, lambda f: 0.0 if f <= 131 else -4.0)
+chk("push path: first touch D173 at once, settles at E141 after 0.6 ns, moves down",
+    r.first_touch == "D173.G1" and abs(r.first_touch_ns) < 1e-9 and abs(r.travel_ns - 0.6) < 1e-9 and r.resident_went_to == "E141.G1"
+    and r.direction == "down" and abs(r.dz_A + 4.0) < 1e-9)
+# C2 leaves at 132 and floats up 3 A, never settles -> first touch none, travel NaN, up
+r = run_path(lambda f: "E152.2a:900" if f <= 131 else "", lambda f: 0.0 if f <= 131 else 3.0)
+chk("push path: floats up and never settles: first touch none, no travel time, up",
+    r.first_touch == "none" and r.travel_ns != r.travel_ns and r.direction == "up")
+# C3 leaves at 132 into the SF directly -> first touch SF, direction up
+r = run_path(lambda f: "E152.2a:900" if f <= 131 else "", lambda f: 0.0, cav=lambda f: [900] if f <= 131 else [],
+             sf=lambda f: "900" if f > 131 else "")
+chk("push path: straight into the SF: first touch SF, up", r.first_touch == "SF" and r.direction == "up" and r.resident_went == "SF")
 print("\nALL OK" if ok else "\nSOME FAILED")
 sys.exit(0 if ok else 1)

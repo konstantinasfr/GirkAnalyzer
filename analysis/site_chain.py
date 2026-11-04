@@ -133,6 +133,12 @@ OUTPUTS   <results_dir>/site_chain/<settings>/           (settings e.g. t3.5_d10
                              holds the residue >= 10 / 2 frames of the trip, leaves only after >= 10 / 2 frames away,
                              and goes to the next place it stays >= 10 / 2 frames (single-frame flickers and passers-by
                              do not count); same files as handover/; handover/ itself is unchanged
+        handover_push/               the resident K+ that leave (stay rule): where the push sends them first (first
+                             residue / SF / outside after a real departure, single frame), which way they move
+                             along the pore in the first 0.5 ns (up = toward the SF), and how long they travel
+                             before they settle (>= 10 / 2 frames at one place): handover_push_visits.csv,
+                             handover_push_summary.csv (pushed = leaves within 1 ns of the arrival / every leaver),
+                             handover_push.txt, handover_push[_visit_1].png
         presentation/               (residue model) the visit-1 story for slides, one message per figure:
                              01 first stop by K+, 02 who holds a K+, 03 free vs occupied, 04 the K+
                              already there (pushed or gone), 05 where the pushed K+ goes, 06 storage
@@ -1839,6 +1845,17 @@ def _parse_ids(x):
     return {int(i.split(":")[0]) for i in x.split(";") if i.split(":")[0].lstrip("-").isdigit()}
 
 
+def _parse_pos(x):
+    """'1234:3.2;1250:-5.1' -> {1234: 3.2, 1250: -5.1} (position along the pore, + = toward the SF)."""
+    out = {}
+    if isinstance(x, str):
+        for t in x.split(";"):
+            r, _, z = t.partition(":")
+            if r.lstrip("-").isdigit():
+                out[int(r)] = float(z) if z else np.nan
+    return out
+
+
 def handover_table(events, frames, visits_raw, max_k, dt, events_all=None, visits_all=None):
     """Ion tracking at each visit: the K+ that sat at the residue during the ion's trip there (the
     resident: the one seen there last before the arrival), when it left the residue relative to the
@@ -2121,7 +2138,8 @@ def _first_run(flags, start, hold):
     return None
 
 
-def handover_table_stays(events, frames, visits_raw, max_k, dt, hold=10, ring_of=None):
+def handover_table_stays(events, frames, visits_raw, max_k, dt, hold=10, ring_of=None, path=False, dir_ns=0.5,
+                         dir_min_a=1.0):
     """Ion tracking of the K+ sitting at the residue (the resident), with the same stay rule as the
     permeating ion instead of single frames (handover_table):
     - resident: the other K+ at the residue in >= hold frames of the new ion's trip there (all of the
@@ -2134,7 +2152,18 @@ def handover_table_stays(events, frames, visits_raw, max_k, dt, hold=10, ring_of
     Only the frames of the new ion's own transit are recorded (frames_run<run>.csv), so a resident
     still there at the new ion's exit is 'still there' (censored), as in handover_table.
     ring_of: {site: 'GLU' | 'LOWER'}; by default from visits_raw (sites never visited fall back to
-    their one-letter code: E/Q -> GLU)."""
+    their one-letter code: E/Q -> GLU).
+    path=True adds, for a resident that leaves (handover_push_analysis):
+    - first_touch: the first place it is at (single frame) after it leaves - another residue, the SF,
+      or 'out of the cavity' - before or when it settles (the direction of the push, without the
+      wobbles: the departure itself passed the stay rule); 'none' if it only floats free until it settles
+    - first_touch_ns: from the leave frame to that frame
+    - travel_ns: from the leave frame to the first frame of where it settles (resident_went_to /
+      SF / out of the cavity); NaN when it never settles within the frames ('free in cavity')
+    - dz_A: its move along the pore axis (+ = toward the SF, A) from the last frame at the residue to
+      dir_ns later (or its last frame in the cavity if it leaves the cavity sooner: then +/- 99 for SF /
+      out of the cavity); direction: 'up' (dz >= dir_min_a or SF), 'down' (dz <= -dir_min_a or out of
+      the cavity), 'level' otherwise"""
     need = {"occupants", "cavity_ions", "sf_ions"}
     if not need <= set(frames.columns) or not len(visits_raw):
         return pd.DataFrame()
@@ -2153,7 +2182,7 @@ def handover_table_stays(events, frames, visits_raw, max_k, dt, hold=10, ring_of
             continue
         f0 = int(g["frame"].iloc[0])
         occ = [_parse_occupants(x) for x in g["occupants"]]
-        cav = [_parse_ids(x) for x in g["cavity_ions"]]
+        cav = [_parse_pos(x) for x in g["cavity_ions"]]               # {resid: position}; "in" works as for a set
         sf = [_parse_ids(x) for x in g["sf_ions"]]
         n = len(occ)
         prev_end = end1[key]
@@ -2202,6 +2231,36 @@ def handover_table_stays(events, frames, visits_raw, max_k, dt, hold=10, ring_of
             if best is not None:
                 went, row["resident_went_to"] = best[1], best[2]
             row["resident_went"] = went
+            if path:
+                stop = best[0] if best is not None else n - 1
+                ft, ft_i = "none", np.nan
+                for i in range(i_leave, stop + 1):
+                    s_ = occ[i].get(res)
+                    if res in sf[i]:
+                        ft, ft_i = "SF", i
+                    elif res not in cav[i]:
+                        ft, ft_i = "out of the cavity", i
+                    elif s_ and s_ != site:
+                        ft, ft_i = s_, i
+                    else:
+                        continue
+                    break
+                row["first_touch"] = ft
+                row["first_touch_ns"] = (ft_i - i_leave) * dt if ft_i == ft_i else np.nan
+                row["travel_ns"] = (best[0] - i_leave) * dt if best is not None else np.nan
+                z0, z1, edge = cav[i_leave - 1].get(res), None, None
+                w = max(1, int(round(dir_ns / dt)))
+                for i in range(i_leave, min(i_leave + w, n - 1) + 1):
+                    if res in sf[i]:
+                        edge = 99.0
+                        break
+                    if res not in cav[i]:
+                        edge = -99.0
+                        break
+                    z1 = cav[i].get(res, z1)
+                dz = edge if edge is not None else (z1 - z0 if z0 is not None and z1 is not None else np.nan)
+                row["dz_A"] = dz
+                row["direction"] = ("" if dz != dz else "up" if dz >= dir_min_a else "down" if dz <= -dir_min_a else "level")
             rows.append(row)
     return pd.DataFrame(rows)
 
@@ -2251,6 +2310,90 @@ def handover_stays_analysis(events, frames, visits_raw, sites, max_k, title, out
                 rep(f"  {scope:<10} {site:<9} -> " + ", ".join(f"{k} {100 * c / len(g):.0f}%" for k, c in vc.items())
                     + f"   (n={len(g)})")
     rep.write(od / "handover.txt")
+
+
+def handover_push_summary(ho, sites, ring_get, push_ns=1.0):
+    """Per residue, scope (all visits / visit 1) and group (pushed = leaves within push_ns of the arrival;
+    left = every resident that leaves): where it goes first (first_touch), how long until it settles
+    (travel_ns) and which way it moves along the pore just after leaving (direction)."""
+    rows = []
+    for scope, hh in (("all visits", ho), ("visit 1", ho[ho["visit"] == 0])):
+        for site in sites:
+            g0 = hh[(hh["site"] == site) & hh["leave_lag_ns"].notna()]
+            for grp, g in (("pushed", g0[g0["leave_lag_ns"].abs() <= push_ns]), ("left", g0)):
+                n = len(g)
+                row = dict(site=site, scope=scope, group=grp, n=n)
+                if n:
+                    ft = g["first_touch"].map(lambda x: x if x in ("SF", "out of the cavity", "none")
+                                              else ("GLU ring" if ring_get(x) == "GLU" else "lower ring"))
+                    for k in ("GLU ring", "lower ring", "SF", "out of the cavity", "none"):
+                        row[f"first_{k.replace(' ', '_')}"] = 100 * (ft == k).mean()
+                    res = g["first_touch"][~g["first_touch"].isin(["SF", "out of the cavity", "none"])]
+                    row["first_residues"] = ", ".join(f"{k} {100 * c / n:.0f}%" for k, c in res.value_counts().head(4).items())
+                    row["median_first_touch_ns"] = g["first_touch_ns"].median()
+                    t = g["travel_ns"]
+                    row["pct_settled"] = 100 * t.notna().mean()
+                    row["pct_settled_within_1ns"] = 100 * (t <= 1.0).mean()
+                    row["median_travel_ns"] = t.median()
+                    d = g["direction"].replace("", np.nan).dropna()
+                    for k in ("up", "down", "level"):
+                        row[f"pct_{k}"] = 100 * (d == k).mean() if len(d) else np.nan
+                    dz = g["dz_A"][g["dz_A"].abs() < 90]
+                    row["median_dz_A"] = dz.median() if len(dz) else np.nan
+                rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def handover_push_analysis(events, frames, visits_raw, sites, max_k, title, out_dir, dt, hold=10, dir_ns=0.5):
+    """Writes out_dir/handover_push/: for the resident K+ that leave (stay rule, as handover_stays/),
+    where the push sends them first and how far they travel before they settle:
+    handover_push_visits.csv (one row per visit: the handover_stays columns + first_touch,
+    first_touch_ns, travel_ns, dz_A, direction), handover_push_summary.csv, handover_push.txt and
+    handover_push_visit_1.png / handover_push.png (the pushed K+). handover/ and handover_stays/ are
+    left as they are."""
+    ho = handover_table_stays(events, frames, visits_raw, max_k, dt, hold, path=True, dir_ns=dir_ns)
+    if not len(ho):
+        return
+    od = Path(out_dir) / "handover_push"
+    od.mkdir(exist_ok=True)
+    ho.to_csv(od / "handover_push_visits.csv", index=False, float_format="%.2f")
+    ring = dict(zip(visits_raw["site"], visits_raw["ring"]))
+    ring_get = lambda s_: ring.get(s_, "GLU" if str(s_)[:1] in ("E", "Q") else "LOWER")
+    summ = handover_push_summary(ho, sites, ring_get)
+    summ.to_csv(od / "handover_push_summary.csv", index=False, float_format="%.2f")
+    for scope, fn in (("visit 1", "handover_push_visit_1.png"), ("all visits", "handover_push.png")):
+        a = summ[(summ["scope"] == scope) & (summ["group"] == "pushed") & (summ["n"] >= 5)]
+        if not len(a):
+            continue
+        cells = [[r["site"], str(int(r["n"])), f"{r['first_GLU_ring']:.0f}%", f"{r['first_lower_ring']:.0f}%",
+                  f"{r['first_out_of_the_cavity']:.0f}%", f"{r['first_SF'] + r['first_none']:.0f}%",
+                  f"{r['pct_up']:.0f} / {r['pct_down']:.0f} / {r['pct_level']:.0f}%",
+                  f"{r['pct_settled_within_1ns']:.0f}%", "–" if r["median_travel_ns"] != r["median_travel_ns"] else f"{r['median_travel_ns']:.1f}"]
+                 for r in a.to_dict("records")]
+        _ptable(cells, ["pushed K+ from", "K+", "first goes to:\na Glu", "first goes to:\nD173 / Asn", "first goes:\nout of cavity",
+                        "first: SF /\nnone", f"moves up / down /\nlevel (first {dir_ns:g} ns)", "settles\nwithin 1 ns",
+                        "median time\nto settle (ns)"],
+                [1.8, 0.8, 1.5, 1.6, 1.6, 1.3, 2.3, 1.3, 1.6], od / fn,
+                f"{title} (stay rule)\n{scope}: where the pushed K+ goes first, which way it moves, and how long until it settles",
+                note=f"pushed = leaves the residue (>= {hold} frames away) within 1 ns of the new ion's arrival; first = first "
+                     "frame at another residue / SF / outside after leaving; settles = >= "
+                     f"{hold} frames at one place")
+    rep = _Report()
+    rep(f"WHERE THE PUSH SENDS THE RESIDENT  {title}\n"
+        f"departure with the stay rule (>= {hold} frames away); first_touch = the first frame it is at another residue,\n"
+        f"in the SF or outside the cavity after leaving; direction = its move along the pore in the first {dir_ns:g} ns\n"
+        f"(up = toward the SF); settles = the first place it then spends >= {hold} frames; travel = leave -> settle.\n"
+        "pushed = leaves within 1 ns of the new ion's arrival; left = every resident that leaves.")
+    for r in summ.to_dict("records"):
+        if not r["n"]:
+            continue
+        rep(f"  {r['scope']:<10} {r['site']:<9} {r['group']:<6} n={int(r['n']):>3}: first Glu {r['first_GLU_ring']:3.0f}% / "
+            f"lower {r['first_lower_ring']:3.0f}% / out {r['first_out_of_the_cavity']:3.0f}% / SF {r['first_SF']:3.0f}% / "
+            f"none {r['first_none']:3.0f}%  ({r['first_residues']}); after {r['median_first_touch_ns']:.2f} ns (median); "
+            f"up {r['pct_up']:3.0f}% / down {r['pct_down']:3.0f}% / level {r['pct_level']:3.0f}% "
+            f"(median dz {r['median_dz_A']:+.1f} A); settles {r['pct_settled']:3.0f}%, within 1 ns "
+            f"{r['pct_settled_within_1ns']:3.0f}%, median travel {r['median_travel_ns']:.1f} ns")
+    rep.write(od / "handover_push.txt")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3398,6 +3541,9 @@ def analyze_model(visits, events, out_dir, head, frame_duration, model="residue"
         handover_stays_analysis(events, frames, visits, sorted(set(visits["site"]), key=lambda x: (ring.get(x) != "GLU", x))
                                 if model != "residue" else sites, max_sf, f"{head}: {model} model", out_dir, dt,
                                 hold=occ_frames)
+        handover_push_analysis(events, frames, visits, sorted(set(visits["site"]), key=lambda x: (ring.get(x) != "GLU", x))
+                               if model != "residue" else sites, max_sf, f"{head}: {model} model", out_dir, dt,
+                               hold=occ_frames)
     if model == "residue":
         presentation_figures(out_dir, head, sites)
     plot_time_budget(events, vs, sites, dt, f"{head}: time budget", out_dir / "time_budget.png")
