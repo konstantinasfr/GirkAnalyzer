@@ -66,6 +66,9 @@ def carboxylate_bond(detail):
 _PAIR_DIR = re.compile(r"^[A-Z]+\d+_[A-Za-z0-9]+_([A-Z]+)(\d+)_([A-Za-z0-9]+)$")
 
 
+ACIDIC = {"GLU", "GLH", "GLUP", "ASP", "ASH", "ASPP"}   # the second residue must be a carboxylate site
+
+
 def auto_pairs(base):
     """{site: hbond_dir} from the folder names under RUN*/hbond_analysis/, e.g.
     SER148_2a_GLU152_2a -> E152.2a (the site is the second residue, the glutamate)."""
@@ -73,7 +76,7 @@ def auto_pairs(base):
     out = {}
     for d in sorted(Path(base).glob("RUN*/hbond_analysis/*")):
         m = _PAIR_DIR.match(d.name)
-        if d.is_dir() and m:
+        if d.is_dir() and m and m.group(1) in ACIDIC:
             out.setdefault(site_label(f"{m.group(2)}.{m.group(3)}", m.group(1)), d.name)
     return out
 
