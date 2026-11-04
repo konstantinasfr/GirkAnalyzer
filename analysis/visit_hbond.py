@@ -16,6 +16,8 @@ BOND STATE of a glutamate for a new ion:
                                   end_1 when the trip is empty)
   ion tracking (the K+ sitting there when a new ion lands, handover_stays/)
                                   the same over the trip to that visit
+BOND = an H-bond that uses the glutamate's carboxylate oxygens (OE1/OE2), read from bonds_detail;
+backbone-only bonds (the helix C=O(i)...H-N(i+4) to the residue 4 before) are not counted.
 Frames without H-bond data (runs missing, frames outside the H-bond analysis range) are left out
 (state unknown).
 
@@ -33,9 +35,10 @@ OUTPUTS  <site_chain residue-model folder>/hbond_visits/
 USAGE  python3 aggregate_visit_hbond.py <system folder with RUN*/> --site_chain <residue-model folder>
            --pairs pairs.csv
        pairs.csv: columns site,hbond_dir  (site = the glutamate label of the site chain, e.g. E152.2a;
-       hbond_dir = the folder of that pair under RUN*/hbond_analysis/, e.g. 148_152.2a)
+       hbond_dir = the folder of that pair under RUN*/hbond_analysis/, e.g. SER148_2a_GLU152_2a)
 """
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -47,8 +50,23 @@ import matplotlib.pyplot as plt
 PUSH_NS = 1.0
 
 
-def load_bonds(base, pairs):
-    """{(run, site): {frame: 0/1}} from RUN<run>/hbond_analysis/<hbond_dir>/hbond_per_frame.csv."""
+CARBOXYLATE_O = {"OE1", "OE2", "OD1", "OD2"}
+_ATOMS = re.compile(r"'donor_atom':\s*'([^']*)'.*?'acceptor_atom':\s*'([^']*)'", re.S)
+
+
+def carboxylate_bond(detail):
+    """True when at least one H-bond in the frame's bonds_detail uses a carboxylate oxygen
+    (OE1/OE2/OD1/OD2: the Glu side chain; Ser and Phe have none). Backbone-only bonds, like the
+    helix C=O(i)...H-N(i+4) between residue i and the Glu at i+4, do not count."""
+    if not isinstance(detail, str) or not detail:
+        return False
+    return any(d in CARBOXYLATE_O or a in CARBOXYLATE_O for d, a in _ATOMS.findall(detail))
+
+
+def load_bonds(base, pairs, carboxylate_only=True):
+    """{(run, site): {frame: 0/1}} from RUN<run>/hbond_analysis/<hbond_dir>/hbond_per_frame.csv.
+    carboxylate_only (default): a frame counts as bonded only if a bond uses the Glu carboxylate
+    oxygens (from bonds_detail); otherwise any H-bond between the two residues counts."""
     out = {}
     for run_dir in Path(base).glob("RUN*"):
         try:
@@ -58,8 +76,13 @@ def load_bonds(base, pairs):
         for site, d in pairs.items():
             f = run_dir / "hbond_analysis" / d / "hbond_per_frame.csv"
             if f.exists():
-                t = pd.read_csv(f)
-                out[(run, site)] = dict(zip(t["frame"].astype(int), (t["hbond"] > 0).astype(int)))
+                t = pd.read_csv(f, keep_default_na=False)
+                if carboxylate_only and "bonds_detail" in t:
+                    on = t["bonds_detail"].map(carboxylate_bond).astype(int)
+                else:
+                    col = "hbond_present" if "hbond_present" in t else "hbond"
+                    on = (pd.to_numeric(t[col], errors="coerce").fillna(0) > 0).astype(int)
+                out[(run, site)] = dict(zip(t["frame"].astype(int), on))
     return out
 
 

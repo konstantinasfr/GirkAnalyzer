@@ -15,9 +15,9 @@ USAGE
         --pairs pairs.csv [--max_k 5]
 pairs.csv: columns site,hbond_dir, e.g.
     site,hbond_dir
-    E152.2a,148_152.2a
-    E152.2b,148_152.2b
-    E152.2c,148_152.2c
+    E152.2a,SER148_2a_GLU152_2a
+    E152.2b,SER148_2b_GLU152_2b
+    E152.2c,SER148_2c_GLU152_2c
 (site = the glutamate label used by the site chain; hbond_dir = the folder name under RUN*/hbond_analysis/)
 """
 
