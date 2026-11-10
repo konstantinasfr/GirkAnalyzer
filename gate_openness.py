@@ -14,9 +14,10 @@ and the per-run permeation summary, and writes two tables.
 
 THE THRESHOLD
 -------------
-Default 5.6 A. The published Kir/GIRK criterion is 5.69 A (Li et al. 2019):
-a gate narrower than that cannot pass a K+ ion, and a channel counts as open
-only when EVERY gate exceeds it. Set --threshold 5.69 to use it exactly.
+Default 5.69 A, the published GIRK criterion (Li, Jin, Gazgalis, Cui &
+Logothetis 2019, J Biol Chem, PMID 31659119): HBC and G-loop gates wider than
+this minimum distance required for permeation count as open, and a channel
+counts as open only when EVERY gate exceeds it.
 The number refers to the MINIMUM atom-to-atom distance across the pore, not
 a Calpha distance -- Calpha distances for these gates run ~11-15 A, so if
 your input files hold Calpha distances this threshold is meaningless for
@@ -89,7 +90,7 @@ GATE_ORDER = ["hbc", "upper_gl", "lower_gl"]
 DIAGONALS = ["A_C", "B_D"]
 
 PERM_DIR = "permeation_summary"
-DEFAULT_THRESHOLD = 5.6
+DEFAULT_THRESHOLD = 5.69   # Li et al. 2019 (Logothetis lab), PMID 31659119
 DEFAULT_PERM_COL = "Full_Permeations_Unique"
 # Different channels' summaries use different column names, so when the
 # requested one is absent the first of these that exists is used instead.

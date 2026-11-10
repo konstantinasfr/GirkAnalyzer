@@ -26,6 +26,7 @@ that were NOT swapped (GIRK1 still in A_C) pass --mut_girk1_col A_C.
 PER RUN (one row per run, both systems)
     median / mean distance of each diagonal
     frac_open_<diag>     fraction of frames with that diagonal > threshold
+                         (default 5.69 A, Li et al. 2019 J Biol Chem, PMID 31659119)
     frac_both_open       both diagonals > threshold
     median_asym          median(GIRK1_diag - GIRK2_diag); negative = the
                          GIRK1 diagonal is the narrower one
@@ -245,7 +246,8 @@ def main():
     ap.add_argument("--mut_runs", default=None, help='e.g. "1-6" (default: all RUN*)')
     ap.add_argument("--wt_girk1_col", default="B_D", choices=["A_C", "B_D"])
     ap.add_argument("--mut_girk1_col", default="B_D", choices=["A_C", "B_D"])
-    ap.add_argument("--threshold", type=float, default=5.6)
+    ap.add_argument("--threshold", type=float, default=5.69,
+                    help="gate open above this (A); 5.69 = Li et al. 2019, PMID 31659119")
     ap.add_argument("--perm_col", default=DEFAULT_PERM_COL)
     ap.add_argument("--wt_label", default="WT")
     ap.add_argument("--mut_label", default="E141Q")
