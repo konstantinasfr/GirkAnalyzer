@@ -15,14 +15,13 @@ subunit before comparing:
 
 GIRK1 is the subunit with Asp at the cavity position (GIRK1 D173, GIRK2 N184),
 i.e. the Asp in asn_residues; its HBC Phe is that resid + 8.
-Default mapping:
-    G12 WT, runs <  21   GIRK1 = Asp131 / Phe139, B_D = (139, 464)
-                         -> GIRK1_diag = B_D   (default --wt_girk1_col)
-    G12_E141Q            GIRK1 = Gln1073 / Phe1113, A_C = (138, 1113)
-                         -> GIRK1_diag = A_C   (default --mut_girk1_col)
-    G12 WT, runs >= 21   not checked -- find the Asp before using them.
-For any other system, check which asn_residues entry is ASP and pass
---wt_girk1_col / --mut_girk1_col accordingly.
+Convention: GIRK1 (subunit D) is always in B_D. That holds for
+    - G12 WT runs 1-20 (pairs (788,1113),(139,464); GIRK1 = Asp131/Phe139)
+    - any system whose main.py config passes the subunit check
+      (main.py ... --subunit_check_only -> "SUBUNIT CHECK PASSED")
+    - old CSVs brought into the new order with swap_gate_columns.py
+So both --wt_girk1_col and --mut_girk1_col default to B_D. Only for old CSVs
+that were NOT swapped (GIRK1 still in A_C) pass --mut_girk1_col A_C.
 
 PER RUN (one row per run, both systems)
     median / mean distance of each diagonal
@@ -231,7 +230,7 @@ def main():
     ap.add_argument("--wt_runs", default=None, help='e.g. "1-20" (default: all RUN*)')
     ap.add_argument("--mut_runs", default=None, help='e.g. "1-6" (default: all RUN*)')
     ap.add_argument("--wt_girk1_col", default="B_D", choices=["A_C", "B_D"])
-    ap.add_argument("--mut_girk1_col", default="A_C", choices=["A_C", "B_D"])
+    ap.add_argument("--mut_girk1_col", default="B_D", choices=["A_C", "B_D"])
     ap.add_argument("--threshold", type=float, default=5.6)
     ap.add_argument("--perm_col", default=DEFAULT_PERM_COL)
     ap.add_argument("--wt_label", default="WT")
