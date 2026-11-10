@@ -42,7 +42,7 @@ USAGE
     python3 compare_hbc_girk1_diagonal.py \\
         --wt_dir  /media/ziyue/.../girk_analyser_results/G12 \\
         --mut_dir /media/ziyue/.../girk_analyser_results/G12_E141Q \\
-        --out_dir /media/ziyue/.../girk_analyser_results/hbc_girk1_comparison
+        # -> saved in .../girk_analyser_results/hbc_girk1_G12_vs_G12_E141Q/
 
     # only some WT runs, a different threshold, a different mutant label
     python3 compare_hbc_girk1_diagonal.py --wt_dir ... --mut_dir ... \\
@@ -168,7 +168,7 @@ def write_csv(rows, path):
     print(f"  Saved: {path}")
 
 
-def plot_open_fraction(wt_rows, mut_rows, wt_label, mut_label, threshold, path):
+def plot_open_fraction(wt_rows, mut_rows, wt_label, mut_label, threshold, path, source=""):
     panels = [("frac_open_GIRK1_diag", "GIRK1–GIRK2 diagonal"),
               ("frac_open_GIRK2_diag", "GIRK2–GIRK2 diagonal"),
               ("frac_both_open", "Both diagonals")]
@@ -190,16 +190,16 @@ def plot_open_fraction(wt_rows, mut_rows, wt_label, mut_label, threshold, path):
         ax.spines[["top", "right"]].set_visible(False)
     axes[0].set_ylabel(f"% of frames > {threshold} Å")
     axes[0].set_ylim(0, 100)
-    fig.suptitle("HBC openness per run, diagonals matched by subunit",
-                 fontweight="bold")
+    fig.suptitle("HBC openness per run, diagonals matched by subunit"
+                 + (f"\n{source}" if source else ""), fontweight="bold", fontsize=10)
     plt.tight_layout()
     plt.savefig(path, dpi=150)
     plt.close()
     print(f"  Saved: {path}")
 
 
-def plot_hist(wt_pool, mut_pool, wt_label, mut_label, threshold, path):
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
+def plot_hist(wt_pool, mut_pool, wt_label, mut_label, threshold, path, source=""):
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.4), sharey=True)
     bins = np.linspace(1.5, 12, 64)
     for ax, d, title in zip(axes, DIAGS,
                             ("GIRK1–GIRK2 diagonal", "GIRK2–GIRK2 diagonal")):
@@ -214,6 +214,8 @@ def plot_hist(wt_pool, mut_pool, wt_label, mut_label, threshold, path):
         ax.spines[["top", "right"]].set_visible(False)
     axes[0].set_ylabel("Density (all runs pooled)")
     axes[0].legend(frameon=False)
+    if source:
+        fig.suptitle(source, fontsize=9)
     plt.tight_layout()
     plt.savefig(path, dpi=150)
     plt.close()
@@ -226,7 +228,7 @@ def main():
     ap.add_argument("--wt_dir", required=True, help="e.g. .../girk_analyser_results/G12")
     ap.add_argument("--mut_dir", required=True, help="e.g. .../girk_analyser_results/G12_E141Q")
     ap.add_argument("--out_dir", default=None,
-                    help="default: <parent of mut_dir>/hbc_girk1_comparison")
+                    help="default: <parent of mut_dir>/hbc_girk1_<wt folder>_vs_<mut folder>")
     ap.add_argument("--wt_runs", default=None, help='e.g. "1-20" (default: all RUN*)')
     ap.add_argument("--mut_runs", default=None, help='e.g. "1-6" (default: all RUN*)')
     ap.add_argument("--wt_girk1_col", default="B_D", choices=["A_C", "B_D"])
@@ -237,8 +239,13 @@ def main():
     ap.add_argument("--mut_label", default="E141Q")
     args = ap.parse_args()
 
+    wt_name = Path(args.wt_dir).resolve().name
+    mut_name = Path(args.mut_dir).resolve().name
+    # one folder per comparison, so e.g. G12_E141Q and G12_E141Q_4fs never overwrite each other
     out_dir = Path(args.out_dir) if args.out_dir else \
-        Path(args.mut_dir).resolve().parent / "hbc_girk1_comparison"
+        Path(args.mut_dir).resolve().parent / f"hbc_girk1_{wt_name}_vs_{mut_name}"
+    source = (f"{args.wt_label} = {wt_name} (GIRK1 col {args.wt_girk1_col})   |   "
+              f"{args.mut_label} = {mut_name} (GIRK1 col {args.mut_girk1_col})")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     wt_rows, wt_pool = analyse_system(
@@ -248,14 +255,14 @@ def main():
         args.mut_dir, expand_runs(args.mut_runs) if args.mut_runs else None,
         args.mut_girk1_col, args.threshold, args.perm_col, args.mut_label)
 
-    print(f"\nWriting to {out_dir}")
+    print(f"\nWriting to {out_dir}\n  {source}")
     write_csv(wt_rows + mut_rows, out_dir / "hbc_girk1_per_run.csv")
     summary = summarise(wt_rows, mut_rows, args.wt_label, args.mut_label)
     write_csv(summary, out_dir / "hbc_girk1_summary.csv")
     plot_open_fraction(wt_rows, mut_rows, args.wt_label, args.mut_label,
-                       args.threshold, out_dir / "hbc_girk1_open_fraction.png")
+                       args.threshold, out_dir / "hbc_girk1_open_fraction.png", source)
     plot_hist(wt_pool, mut_pool, args.wt_label, args.mut_label,
-              args.threshold, out_dir / "hbc_girk1_distance_hist.png")
+              args.threshold, out_dir / "hbc_girk1_distance_hist.png", source)
 
     print("\nSummary (mean over runs; Mann-Whitney p, WT vs mutant):")
     for r in summary:
