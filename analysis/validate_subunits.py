@@ -229,7 +229,13 @@ def validate_subunits(u, channel_type, gates, subunit_groups=None,
     if results_dir is not None:
         try:
             Path(results_dir).mkdir(parents=True, exist_ok=True)
-            (Path(results_dir) / "subunit_check.txt").write_text(report + "\n")
+            chk = Path(results_dir) / "subunit_check.txt"
+            # Rewrite only if the content changed: swap_gate_columns.py uses this
+            # file's age to tell old-order CSVs (older than the check) from CSVs
+            # already written in the new order (newer), so re-running the check
+            # must not make the file look newer than a run made after it.
+            if not chk.is_file() or chk.read_text() != report + "\n":
+                chk.write_text(report + "\n")
         except OSError as exc:
             print(f"  [warn] could not write subunit_check.txt: {exc}")
     if errors:
