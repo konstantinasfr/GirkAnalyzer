@@ -282,6 +282,10 @@ python3 compare_hbc_girk1_diagonal.py \
   --wt_dir  /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 \
   --mut_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q
 
+python3 compare_hbc_girk1_diagonal.py \
+  --wt_dir  /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 \
+  --mut_dir /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_GAT
+
 
 python3 compare_hbc_girk1_diagonal.py \
   --wt_dir  /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2 \
