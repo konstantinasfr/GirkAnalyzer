@@ -365,22 +365,22 @@ def main():
         # lower5 = [259, 583, 908, 1234]
 
         hbc_residues = [139,464,789,1114]
-        hbc_diagonal_pairs = [(139, 1114 ), (464, 789)]
+        hbc_diagonal_pairs = [(464, 789),(139, 1114 )]
 
         upper_gl_residues = [266,591,916,1241]
-        upper_gl_diagonal_pairs = [(266, 1241 ), (591, 916)]
+        upper_gl_diagonal_pairs = [(591, 916),(266, 1241 ) ]
 
         lower_gl_residues = [260,585, 910, 1235 ]
-        lower_gl_diagonal_pairs = [(260, 1235 ), (585, 910)]
+        lower_gl_diagonal_pairs = [(585, 910), (260, 1235 ) ]
 
         sf_low_res_residues = [101, 426, 751, 1076] 
-        sf_low_res_diagonal_pairs = [(101, 1076 ), (426, 751)]
+        sf_low_res_diagonal_pairs = [(426, 751), (101, 1076 ) ]
 
         glu_residues = [99,424,749,1074]
-        glu_residues_pairs =[(99,1074),(424,749)]
+        glu_residues_pairs =[(424,749), (99,1074)]
 
         asn_residues = [131,456,781,1106 ]
-        asn_residues_pairs = [(131,1106),(456,781)]
+        asn_residues_pairs = [(456,781), (131,1106)]
 
         gly_residues = [127, 452, 777, 1102]
 
@@ -436,24 +436,24 @@ def main():
         mapping_json = "/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/find_pip_residue_mapping/G12_GAT/A_B_C/pip_residue_mapping.json"
 
         hbc_residues = [138,462,787,1113]
-        hbc_diagonal_pairs = [(138, 1113 ), (462, 787)]
+        hbc_diagonal_pairs = [(462, 787), (138, 1113 )]
 
         upper_gl_residues = [265, 589, 914, 1240 ]
-        upper_gl_diagonal_pairs = [(265, 1240 ), (589, 914)]
+        upper_gl_diagonal_pairs = [(589, 914), (265, 1240)]
 
         lower_gl_residues = [259, 583, 908, 1234 ]
-        lower_gl_diagonal_pairs = [(259, 1234 ), (583, 908)]
+        lower_gl_diagonal_pairs = [(583, 908), (259, 1234 )]
 
         # sf_low_res_residues = [101, 425, 750, 1076]   the I of TIGYG; G2 and G12 WT use the T
         # sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
         sf_low_res_residues = [100, 424, 749, 1075]  # T of TIGYG in every subunit (checked on a frame PDB)
-        sf_low_res_diagonal_pairs = [(100, 1075), (424, 749)]
+        sf_low_res_diagonal_pairs = [(424, 749), (100, 1075)]
 
         glu_residues = [98,422,747,1073]
-        glu_residues_pairs = [(98,1073), (422,747)]
+        glu_residues_pairs = [(422,747), (98,1073)]
 
         asn_residues = [130,454,779,1105 ]
-        asn_residues_pairs = [(130,1105), (454,779)]
+        asn_residues_pairs = [(454,779), (130,1105)]
 
         pip_resids = [1301, 1302, 1303, 1304]
 
@@ -588,24 +588,24 @@ def main():
         # mapping_json = "/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/find_pip_residue_mapping/G12_GAT/A_B_C/pip_residue_mapping.json"
 
         hbc_residues = [138,462,787,1113]
-        hbc_diagonal_pairs = [(138, 1113 ), (462, 787)]
+        hbc_diagonal_pairs = [(462, 787), (138, 1113 )]
 
         upper_gl_residues = [265, 589, 914, 1240 ]
-        upper_gl_diagonal_pairs = [(265, 1240 ), (589, 914)]
+        upper_gl_diagonal_pairs = [(589, 914), (265, 1240 )]
 
         lower_gl_residues = [259, 583, 908, 1234 ]
-        lower_gl_diagonal_pairs = [(259, 1234 ), (583, 908)]
+        lower_gl_diagonal_pairs = [(583, 908),(259, 1234 )]
 
         # sf_low_res_residues = [101, 425, 750, 1076]   the I of TIGYG; G2 and G12 WT use the T
         # sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
         sf_low_res_residues = [100, 424, 749, 1075]  # T of TIGYG in every subunit (checked on a frame PDB)
-        sf_low_res_diagonal_pairs = [(100, 1075), (424, 749)]
+        sf_low_res_diagonal_pairs = [(424, 749), (100, 1075)]
 
         glu_residues = [98,422,747,1073]
-        glu_residues_pairs = [(98,1073), (422,747)]
+        glu_residues_pairs = [(422,747), (98,1073)]
 
         asn_residues = [130,454,779,1105 ]
-        asn_residues_pairs = [(130,1105), (454,779)]
+        asn_residues_pairs = [(454,779), (130,1105)]
 
         pip_resids = [1301, 1302, 1303, 1304]
 
@@ -670,24 +670,24 @@ def main():
         # mapping_json = "/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/find_pip_residue_mapping/G12_GAT/A_B_C/pip_residue_mapping.json"
 
         hbc_residues = [138,462,787,1113]
-        hbc_diagonal_pairs = [(138, 1113 ), (462, 787)]
+        hbc_diagonal_pairs = [(462, 787), (138, 1113 )]
 
         upper_gl_residues = [265, 589, 914, 1240 ]
-        upper_gl_diagonal_pairs = [(265, 1240 ), (589, 914)]
+        upper_gl_diagonal_pairs = [(589, 914), (265, 1240 )]
 
         lower_gl_residues = [259, 583, 908, 1234 ]
-        lower_gl_diagonal_pairs = [(259, 1234 ), (583, 908)]
+        lower_gl_diagonal_pairs = [(583, 908), (259, 1234 )]
 
         # sf_low_res_residues = [101, 425, 750, 1076]   the I of TIGYG; G2 and G12 WT use the T
         # sf_low_res_diagonal_pairs = [(101, 1076 ), (425, 750)]
         sf_low_res_residues = [100, 424, 749, 1075]  # T of TIGYG; assumes the GAT / D173N numbering (no frame checked)
-        sf_low_res_diagonal_pairs = [(100, 1075), (424, 749)]
+        sf_low_res_diagonal_pairs = [(424, 749), (100, 1075)]
 
         glu_residues = [98,422,747,1073]
-        glu_residues_pairs = [(98,1073), (422,747)]
+        glu_residues_pairs = [(422,747), (98,1073)]
 
         asn_residues = [130,454,779,1105 ]
-        asn_residues_pairs = [(130,1105), (454,779)]
+        asn_residues_pairs = [(454,779), (130,1105)]
 
         pip_resids = [1301, 1302, 1303, 1304]
 
