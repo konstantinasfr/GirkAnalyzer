@@ -72,6 +72,9 @@ def main():
                         help="ignore analyzer_state.pkl and redo the trajectory pass (ion region tracking, "
                              "permeation events, gate diameters); the new state overwrites the pkl. Also "
                              "reruns the SF-dependent analyses even if their results exist")
+    parser.add_argument("--skip_subunit_check", action="store_true",
+                        help="run even if the subunit check fails (gate columns A_C/B_D may then "
+                             "not be subunits A-C/B-D, and GIRK1 may not be in B_D)")
     # parser.add_argument("--channel_type", default="G2_FD")
     args = parser.parse_args()
     generate_electric_field_heatmap =  False
@@ -731,6 +734,32 @@ def main():
     from analysis.analyzer_utils import save_analyzer_state, load_analyzer_state, restore_analyzer_from_state
     # end_frame = 6562
     u = mda.Universe(top_file, traj_file)
+
+    # ========== SUBUNIT CHECK ==========
+    # Before any distance is computed: are the A_C / B_D columns really subunits
+    # A-C / B-D, are the pairs real diagonals, and is GIRK1 subunit D (in B_D)?
+    # Report also saved to results_dir/subunit_check.txt.
+    from analysis.validate_subunits import validate_subunits, SubunitCheckError
+    _cfg = locals()
+    _gates = {name: (_cfg.get(res), _cfg.get(pairs)) for name, res, pairs in [
+        ("hbc",        "hbc_residues",        "hbc_diagonal_pairs"),
+        ("sf_low_res", "sf_low_res_residues", "sf_low_res_diagonal_pairs"),
+        ("upper_gl",   "upper_gl_residues",   "upper_gl_diagonal_pairs"),
+        ("lower_gl",   "lower_gl_residues",   "lower_gl_diagonal_pairs"),
+        ("glu",        "glu_residues",        "glu_residues_pairs"),
+        ("asn",        "asn_residues",        "asn_residues_pairs"),
+    ]}
+    try:
+        validate_subunits(u, channel_type, _gates,
+                          subunit_groups=_cfg.get("subunit_groups"),
+                          asn_residues=_cfg.get("asn_residues"),
+                          glu_residues=_cfg.get("glu_residues"),
+                          results_dir=results_dir)
+    except SubunitCheckError:
+        if not args.skip_subunit_check:
+            raise SystemExit("Subunit check failed - see the report above "
+                             "(rerun with --skip_subunit_check to ignore it).")
+        print("--skip_subunit_check: continuing although the subunit check failed")
     results_dir.mkdir(exist_ok=True)
 
     # start_frame = 5414
