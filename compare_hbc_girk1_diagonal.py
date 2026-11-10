@@ -59,6 +59,11 @@ OUTPUTS   <out_dir>/
     hbc_girk1_distance_hist_counts.png     unscaled: raw frames, and frames per run
     hbc_girk1_distance_hist_bootstrap.png  density + 95% band from resampling runs
     hbc_girk1_distance_hist_per_run.png    one thin curve per run + pooled curve
+    stats_table.csv / stats_table.png      Mann-Whitney U and Kolmogorov-Smirnov on
+                                one value per run (median, mean distance), plus
+                                pooled-histogram median, mean, IQR and peak
+    stats_per_run.png                      per-run medians/means with both p-values
+    stats_ks_cdf.png                       the cumulative curves KS compares, D marked
     hbc_girk1_distribution_tests.csv       peak and median shift with 95% CI,
                                 permutation tests (median, Kolmogorov-Smirnov,
                                 Wasserstein) and Cliff's delta -- all resampling
@@ -77,6 +82,7 @@ import matplotlib.pyplot as plt
 from gate_openness import (DEFAULT_PERM_COL, expand_runs, find_run_dirs,
                            load_gate, load_permeations, natural_key)
 import hbc_distribution_stats as hds
+import hbc_presentation_stats as hps
 
 DIAGS = ["GIRK1_diag", "GIRK2_diag"]
 METRICS = ["median_GIRK1_diag", "median_GIRK2_diag",
@@ -282,6 +288,20 @@ def main():
     hds.plot_bootstrap_bands(wt_runs, mut_runs, *lab,
                              out_dir / "hbc_girk1_distance_hist_bootstrap.png", source)
     hds.plot_per_run(wt_runs, mut_runs, *lab, out_dir / "hbc_girk1_distance_hist_per_run.png", source)
+
+    print("\nMann-Whitney and Kolmogorov-Smirnov tests (one value per run):")
+    pres = hps.run_tests(wt_rows, mut_rows, wt_pool, mut_pool, args.wt_label, args.mut_label)
+    write_csv(pres, out_dir / "stats_table.csv")
+    hps.plot_table(pres, args.wt_label, args.mut_label, out_dir / "stats_table.png", source)
+    hps.plot_per_run(wt_rows, mut_rows, pres, args.wt_label, args.mut_label, COLORS,
+                     out_dir / "stats_per_run.png", source)
+    hps.plot_ks_cdf(wt_rows, mut_rows, pres, args.wt_label, args.mut_label, COLORS,
+                    out_dir / "stats_ks_cdf.png", source)
+    for r in pres:
+        print(f"  {r['diagonal']:<21} {r['measure']:<24} "
+              f"{args.wt_label} {r[args.wt_label + '_mean_sem']:<13} "
+              f"{args.mut_label} {r[args.mut_label + '_mean_sem']:<13} "
+              f"MW p={r['mannwhitney_p']:<8} KS D={r['ks_D']:<6} p={r['ks_p']}")
 
     print("\nDistribution tests (resampling whole runs; this takes a minute)...")
     dist = hds.distribution_tests(wt_runs, mut_runs, args.wt_label, args.mut_label)
