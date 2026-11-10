@@ -72,6 +72,8 @@ def main():
                         help="ignore analyzer_state.pkl and redo the trajectory pass (ion region tracking, "
                              "permeation events, gate diameters); the new state overwrites the pkl. Also "
                              "reruns the SF-dependent analyses even if their results exist")
+    parser.add_argument("--subunit_check_only", action="store_true",
+                        help="run the subunit check (writes subunit_check.txt) and exit")
     parser.add_argument("--skip_subunit_check", action="store_true",
                         help="run even if the subunit check fails (gate columns A_C/B_D may then "
                              "not be subunits A-C/B-D, and GIRK1 may not be in B_D)")
@@ -760,6 +762,8 @@ def main():
             raise SystemExit("Subunit check failed - see the report above "
                              "(rerun with --skip_subunit_check to ignore it).")
         print("--skip_subunit_check: continuing although the subunit check failed")
+    if args.subunit_check_only:
+        raise SystemExit("--subunit_check_only: done.")
     results_dir.mkdir(exist_ok=True)
 
     # start_frame = 5414
