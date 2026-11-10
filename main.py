@@ -635,8 +635,8 @@ def main():
             top_file =    Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_D173N/RUN{run_number}/com.prmtop")
             traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_D173N/RUN{run_number}/protein.nc")
         else:
-            top_file =    Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_D173N_4fs/RUN{run_number}/com_4fs.prmtop")
-            traj_file =   Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/GIRK12_D173N_4fs/RUN{run_number}/protein.nc")
+            top_file =    Path(f"/media/ziyue/0ee8ca64-ce91-46ac-a5e9-713084eedfed/mutant/G12_D173N/RUN{run_number}/com_4fs.prmtop")
+            traj_file =   Path(f"/media/ziyue/0ee8ca64-ce91-46ac-a5e9-713084eedfed/mutant/G12_D173N/RUN{run_number}/protein.nc")
         results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
         results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -720,7 +720,7 @@ def main():
             results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
         else:
             top_file =    Path(f"/media/ziyue/0ee8ca64-ce91-46ac-a5e9-713084eedfed/mutant/G12_E141Q/RUN{run_number}/com_4fs.prmtop")
-            traj_file =   Path(f"/media/ziyue/0ee8ca64-ce91-46ac-a5e9-713084eedfed/mutant/G12_E141Q/RUN{run_number}/traj/protein.nc")
+            traj_file =   Path(f"/media/ziyue/0ee8ca64-ce91-46ac-a5e9-713084eedfed/mutant/G12_E141Q/RUN{run_number}/protein.nc")
             results_dir = Path(f"/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/{args.channel_type}/RUN{run_number}")
         results_dir.mkdir(parents=True, exist_ok=True)
 

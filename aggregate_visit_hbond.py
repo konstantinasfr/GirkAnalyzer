@@ -42,5 +42,6 @@ if __name__ == "__main__":
     main()
 
 '''
-python3 aggregate_visit_hbond.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 --site_chain /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/aggregated_site_chain/t3.5_d10/residue_a5b
+python3 aggregate_visit_hbond.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 --site_chain /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12/aggregated_site_chain/t3.5_d10/residue_a5b3
+python3 aggregate_visit_hbond.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2 --site_chain /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2/aggregated_site_chain/t3.5_d2/residue_a5b3
 '''
