@@ -13,12 +13,16 @@ subunit before comparing:
     GIRK1_diag   the diagonal that contains the GIRK1 HBC Phe (GIRK1 vs GIRK2)
     GIRK2_diag   the other one (GIRK2 vs GIRK2)
 
-Default mapping (from main.py, GIRK1 = chain D, HBC resid 1113):
-    G12 WT, runs <  21   A_C = (788, 1113)  -> GIRK1_diag = A_C
-    G12 WT, runs >= 21   A_C = (138, 1113)  -> GIRK1_diag = A_C
-    G12_E141Q            A_C = (138, 1113)  -> GIRK1_diag = A_C
-If GIRK1 is a different chain in a system, pass --wt_girk1_col B_D or
---mut_girk1_col B_D.
+GIRK1 is the subunit with Asp at the cavity position (GIRK1 D173, GIRK2 N184),
+i.e. the Asp in asn_residues; its HBC Phe is that resid + 8.
+Default mapping:
+    G12 WT, runs <  21   GIRK1 = Asp131 / Phe139, B_D = (139, 464)
+                         -> GIRK1_diag = B_D   (default --wt_girk1_col)
+    G12_E141Q            GIRK1 = Gln1073 / Phe1113, A_C = (138, 1113)
+                         -> GIRK1_diag = A_C   (default --mut_girk1_col)
+    G12 WT, runs >= 21   not checked -- find the Asp before using them.
+For any other system, check which asn_residues entry is ASP and pass
+--wt_girk1_col / --mut_girk1_col accordingly.
 
 PER RUN (one row per run, both systems)
     median / mean distance of each diagonal
@@ -226,7 +230,7 @@ def main():
                     help="default: <parent of mut_dir>/hbc_girk1_comparison")
     ap.add_argument("--wt_runs", default=None, help='e.g. "1-20" (default: all RUN*)')
     ap.add_argument("--mut_runs", default=None, help='e.g. "1-6" (default: all RUN*)')
-    ap.add_argument("--wt_girk1_col", default="A_C", choices=["A_C", "B_D"])
+    ap.add_argument("--wt_girk1_col", default="B_D", choices=["A_C", "B_D"])
     ap.add_argument("--mut_girk1_col", default="A_C", choices=["A_C", "B_D"])
     ap.add_argument("--threshold", type=float, default=5.6)
     ap.add_argument("--perm_col", default=DEFAULT_PERM_COL)
