@@ -72,6 +72,11 @@ def main():
                         help="ignore analyzer_state.pkl and redo the trajectory pass (ion region tracking, "
                              "permeation events, gate diameters); the new state overwrites the pkl. Also "
                              "reruns the SF-dependent analyses even if their results exist")
+    parser.add_argument("--neighbors_resids", default=None,
+                        help="run the subunit check, then only residue_neighbors_analysis "
+                             "(neighbours + H-bonds) for these resids, and exit. 'glu' = the four "
+                             "pore-helix Glu of this config (glu_residues: GIRK1 E141 + GIRK2 E152); "
+                             "or a list like '1073,98'")
     parser.add_argument("--pip_binding_only", action="store_true",
                         help="run the subunit check, then only the PIP2 binding-quality analysis "
                              "(results_dir/pip_binding_quality/), and exit")
@@ -784,6 +789,24 @@ def main():
     end_frame = len(u.trajectory) - 1
     # end_frame = 3000
     print(f"Using end_frame = {end_frame} (last frame of trajectory)")
+
+    if args.neighbors_resids:
+        from analysis.residue_neighbors_analysis import run_residue_neighbors_analysis
+        from analysis.converter import to_pdb
+        if args.neighbors_resids.strip().lower() == "glu":
+            nb_resids = [int(r) for r in glu_residues]
+        else:
+            nb_resids = [int(x) for x in args.neighbors_resids.replace(",", " ").split()]
+        for r in nb_resids:
+            print(f"  neighbours of resid {r} = "
+                  f"{u.select_atoms(f'resid {r}').residues[0].resname}{to_pdb(r, args.channel_type)}")
+        run_residue_neighbors_analysis(
+            u=u, results_dir=results_dir, channel_type=args.channel_type,
+            resids=nb_resids, start_frame=start_frame, end_frame=end_frame,
+            threshold=4.0, prescreen_factor=3.0, smoothing_window=100,
+            min_frames=500,   # partner must be < 4 A for >= 500 frames (~7 %) to be plotted
+        )
+        raise SystemExit("--neighbors_resids: done.")
 
     if args.pip_binding_only:
         from analysis.pip_binding_quality import run_pip_binding_quality
