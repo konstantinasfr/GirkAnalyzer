@@ -804,7 +804,9 @@ def main():
             u=u, results_dir=results_dir, channel_type=args.channel_type,
             resids=nb_resids, start_frame=start_frame, end_frame=end_frame,
             threshold=4.0, prescreen_factor=3.0, smoothing_window=100,
-            min_frames=500,   # partner must be < 4 A for >= 500 frames (~7 %) to be plotted
+            # partner must be < 4 A for >= ~7.35 % of the frames to be plotted
+            # (500 frames for a 6800-frame G12 run, ~92 for a 1250-frame G2 run)
+            min_frames=max(1, int(round(0.0735 * (end_frame - start_frame + 1)))),
         )
         raise SystemExit("--neighbors_resids: done.")
 
