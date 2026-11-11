@@ -14,6 +14,11 @@ Part 2 — Global HBC threshold analysis:
     Missing partners treated as 0%.
 
 Output (saved in base_path/global_hbond_summary/<resid_folder>/):
+    ALL runs in this folder; the same files for the HIGH / TYPICAL / LOW runs
+    (permeation categories from permeation_summary/run_categories_full_permeations_total.csv,
+    written by analyze_permeation_summary.py) in HIGH/, TYPICAL/, LOW/, plus
+    categories_comparison_<type>.csv: each partner's mean +- SD per group and a
+    Mann-Whitney test HIGH vs LOW on the per-run values.
     Part 1:
         global_all.csv / barplot_all.png
         global_bb_bb.csv / barplot_bb_bb.png
@@ -237,7 +242,7 @@ def _part1_global_hbond(
 
     if n_valid == 0:
         print(f"  No valid RUNs found for {resid_folder}")
-        return
+        return {}, 0
 
     print(f"  Aggregating across {n_valid} of {len(run_dirs)} RUN folders...")
 
@@ -272,6 +277,8 @@ def _part1_global_hbond(
                      f"{pdb_label} — {bt_label} (global, {n_valid} RUNs)",
                      out_dir / f"barplot_{bt}.png",
                      COLORS[bt], bt_label)
+
+    return all_data, n_valid
 
 
 # -----------------------------------------------------------------------------
@@ -376,7 +383,65 @@ def _part2_hbc_threshold(
 # Main
 # -----------------------------------------------------------------------------
 
-def run_global_hbond_summary(base_path: Path, resid_folder: str):
+CATEGORIES = ["HIGH", "TYPICAL", "LOW"]
+DEFAULT_CATEGORY_FILE = "permeation_summary/run_categories_full_permeations_total.csv"
+
+
+def _load_categories(path):
+    """{RUN name: HIGH/TYPICAL/LOW} from analyze_permeation_summary.py's run_categories CSV."""
+    df = pd.read_csv(path)
+    return {str(r).strip(): str(c).strip().upper()
+            for r, c in zip(df["Run"], df["Category"]) if pd.notna(c)}
+
+
+def _compare_categories(per_group, out_dir, pdb_label):
+    """
+    One table per bond type: each partner's mean +- SD of % frames H-bonded in
+    ALL / HIGH / TYPICAL / LOW, and a Mann-Whitney test HIGH vs LOW on the
+    per-run values (one value per run).
+    """
+    try:
+        from scipy.stats import mannwhitneyu
+    except ImportError:
+        mannwhitneyu = None
+    groups = [g for g in ["ALL"] + CATEGORIES if g in per_group]
+    for bt in BOND_TYPES:
+        partners = set()
+        for g in groups:
+            partners |= set(per_group[g][0].get(bt, {}))
+        rows = []
+        for p in partners:
+            row = {"partner": p}
+            for g in groups:
+                vals = np.array(per_group[g][0].get(bt, {}).get(p, []) +
+                                [0.0] * (per_group[g][1] - len(per_group[g][0].get(bt, {}).get(p, []))))
+                row[f"{g}_n_runs"] = per_group[g][1]
+                row[f"{g}_mean_pct"] = round(float(vals.mean()), 2) if vals.size else ""
+                row[f"{g}_std_pct"] = round(float(vals.std()), 2) if vals.size else ""
+                row[f"_{g}_vals"] = vals
+            hi, lo = row.get("_HIGH_vals"), row.get("_LOW_vals")
+            p_val = ""
+            if mannwhitneyu is not None and hi is not None and lo is not None \
+                    and hi.size >= 2 and lo.size >= 2 and (hi.sum() + lo.sum()) > 0:
+                try:
+                    p_val = float(f"{mannwhitneyu(hi, lo, alternative='two-sided').pvalue:.3g}")
+                except ValueError:
+                    p_val = ""
+            row["HIGH_vs_LOW_mannwhitney_p"] = p_val
+            for g in groups:
+                row.pop(f"_{g}_vals")
+            if max(float(row.get(f"{g}_mean_pct") or 0) for g in groups) >= 1.0:
+                rows.append(row)
+        if rows:
+            df = pd.DataFrame(rows).sort_values("ALL_mean_pct" if "ALL" in groups
+                                                else f"{groups[0]}_mean_pct", ascending=False)
+            path = out_dir / f"categories_comparison_{bt}.csv"
+            df.to_csv(path, index=False)
+            print(f"  Saved -> {path.name}  ({len(df)} partners; groups {', '.join(groups)})")
+
+
+def run_global_hbond_summary(base_path: Path, resid_folder: str,
+                             categories_file=None, use_categories: bool = True):
     base_path = Path(base_path)
     out_dir   = base_path / "global_hbond_summary" / resid_folder
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -401,8 +466,37 @@ def run_global_hbond_summary(base_path: Path, resid_folder: str):
     print(f"  output       : {out_dir}")
     print("=" * 70)
 
-    _part1_global_hbond(run_dirs, resid_folder, out_dir, pdb_label)
+    # ALL runs: written straight into out_dir (as before)
+    per_group = {"ALL": _part1_global_hbond(run_dirs, resid_folder, out_dir, pdb_label)}
     _part2_hbc_threshold(run_dirs, resid_folder, out_dir, pdb_label)
+
+    # HIGH / TYPICAL / LOW runs (permeation categories): out_dir/<category>/
+    if use_categories:
+        cat_file = Path(categories_file) if categories_file else base_path / DEFAULT_CATEGORY_FILE
+        if not cat_file.is_file():
+            print(f"\n⚠ Categories file not found: {cat_file}\n"
+                  f"  Run analyze_permeation_summary.py for this system first -- "
+                  f"no HIGH/TYPICAL/LOW results.")
+        else:
+            cats = _load_categories(cat_file)
+            names = {d.name for d in run_dirs}
+            unlisted = sorted(names - set(cats))
+            if unlisted:
+                print(f"\n⚠ RUN folders without a category (left out of HIGH/TYPICAL/LOW): "
+                      f"{', '.join(unlisted)}")
+            for cat in CATEGORIES:
+                sub = [d for d in run_dirs if cats.get(d.name) == cat]
+                print(f"\n=== {cat}: {len(sub)} RUNs ({', '.join(d.name for d in sub) or 'none'}) ===")
+                if not sub:
+                    continue
+                cat_dir = out_dir / cat
+                cat_dir.mkdir(exist_ok=True)
+                per_group[cat] = _part1_global_hbond(sub, resid_folder, cat_dir,
+                                                     f"{pdb_label} [{cat}]")
+                _part2_hbc_threshold(sub, resid_folder, cat_dir, f"{pdb_label} [{cat}]")
+            print("\n--- HIGH / TYPICAL / LOW comparison ---")
+            _compare_categories({g: v for g, v in per_group.items() if v[1] > 0},
+                                out_dir, pdb_label)
 
     print(f"\n✓ Global H-bond summary complete.")
     print(f"  Results in: {out_dir}")
@@ -416,9 +510,16 @@ if __name__ == "__main__":
                         help="Folder containing RUN1, RUN2, ...")
     parser.add_argument("--resid_folder", type=str, required=True,
                         help="Residue folder name e.g. '197_2b'")
+    parser.add_argument("--categories", type=str, default=None,
+                        help="run_categories CSV from analyze_permeation_summary.py (default: "
+                             f"base_path/{DEFAULT_CATEGORY_FILE})")
+    parser.add_argument("--no_categories", action="store_true",
+                        help="only the ALL-runs analysis")
     args = parser.parse_args()
 
     run_global_hbond_summary(
-        base_path    = args.base_path,
-        resid_folder = args.resid_folder,
+        base_path       = args.base_path,
+        resid_folder    = args.resid_folder,
+        categories_file = args.categories,
+        use_categories  = not args.no_categories,
     )
