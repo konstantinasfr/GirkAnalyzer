@@ -192,6 +192,8 @@ def _part1_global_hbond(
         # --- all types from hbond_residue_summary.csv ---
         res_csv = hb_dir / "hbond_residue_summary.csv"
         if not res_csv.exists():
+            print(f"  [skip] {run_dir.name}: no {res_csv.relative_to(run_dir)} "
+                  f"(residue_neighbors analysis not run / not finished for {resid_folder})")
             continue
         n_valid += 1
         df_res = pd.read_csv(res_csv)
@@ -237,7 +239,7 @@ def _part1_global_hbond(
         print(f"  No valid RUNs found for {resid_folder}")
         return
 
-    print(f"  Aggregating across {n_valid} RUNs...")
+    print(f"  Aggregating across {n_valid} of {len(run_dirs)} RUN folders...")
 
     # fill missing RUNs with 0
     for bt in BOND_TYPES:
