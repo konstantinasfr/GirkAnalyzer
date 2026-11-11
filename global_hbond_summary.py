@@ -125,6 +125,39 @@ def _barplot(partner_stats, title, out_path, color, bt_label):
     print(f"  Saved -> {out_path.name}")
 
 
+def _barplot_pooled(rows, title, out_path, color):
+    """Bar plot of pooled % (all frames of all runs together); no error bars."""
+    if not rows:
+        return
+    rows = sorted(rows, key=lambda r: -r["pooled_pct"])
+    partners = [r["partner"] for r in rows]
+    vals     = [r["pooled_pct"] for r in rows]
+    total    = rows[0]["total_frames"]
+    n_runs   = rows[0]["n_runs"]
+
+    fig_w = max(6, len(partners) * 0.6)
+    fig, ax = plt.subplots(figsize=(fig_w, 4))
+    x    = np.arange(len(partners))
+    bars = ax.bar(x, vals, color=color, edgecolor="white", alpha=0.85)
+    max_val = max(vals) if vals else 1
+    for bar, v in zip(bars, vals):
+        if v >= 5.0:
+            ax.text(bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + max_val * 0.02,
+                    f"{v:.1f}%", ha="center", va="bottom", fontsize=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels(partners, rotation=45, ha="right", fontsize=14)
+    ax.set_ylabel("% of all frames with H-bond", fontsize=15)
+    ax.set_xlabel("Partner residue", fontsize=15)
+    ax.set_title(f"{title}\n(all frames of {n_runs} RUNs pooled, {total} frames)", fontsize=14)
+    ax.tick_params(axis="y", labelsize=13)
+    ax.set_ylim(0, min(130, max_val * 1.6))
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=70)
+    plt.close(fig)
+    print(f"  Saved -> {out_path.name}")
+
+
 def _lineplot_threshold(data, title, out_path, color):
     """
     Line plot: x=threshold, y=mean%, shaded std.
@@ -181,6 +214,10 @@ def _part1_global_hbond(
     # collect per-bond-type data across RUNs
     # {bt: {partner: [pct_run1, pct_run2, ...]}}
     all_data = {bt: {} for bt in BOND_TYPES}
+    # pooled: frames with the H-bond / all frames, summed over runs
+    pooled_hits   = {bt: {} for bt in BOND_TYPES}
+    pooled_frames = {bt: 0 for bt in BOND_TYPES}
+    pooled_runs   = {bt: 0 for bt in BOND_TYPES}
 
     bond_cols = {
         "all":    "partners",
@@ -203,6 +240,9 @@ def _part1_global_hbond(
         n_valid += 1
         df_res = pd.read_csv(res_csv)
         n_total = df_res["n_total_frames"].max() if "n_total_frames" in df_res.columns else None
+        per_frame_csv = hb_dir / "hbond_per_frame.csv"
+        if (n_total is None or pd.isna(n_total)) and per_frame_csv.exists():
+            n_total = len(pd.read_csv(per_frame_csv, usecols=[0]))
 
         for _, row in df_res.iterrows():
             p   = str(row["partner"])
@@ -210,9 +250,13 @@ def _part1_global_hbond(
             if p not in all_data["all"]:
                 all_data["all"][p] = []
             all_data["all"][p].append(pct)
+            if n_total:
+                pooled_hits["all"][p] = pooled_hits["all"].get(p, 0.0) + pct / 100.0 * n_total
+        if n_total:
+            pooled_frames["all"] += int(n_total)
+            pooled_runs["all"]   += 1
 
         # --- bond type breakdown from hbond_type_per_frame.csv in pair folders ---
-        per_frame_csv = hb_dir / "hbond_per_frame.csv"
         if not per_frame_csv.exists():
             continue
         df_pf = pd.read_csv(per_frame_csv)
@@ -239,6 +283,9 @@ def _part1_global_hbond(
                 if p not in all_data[bt]:
                     all_data[bt][p] = []
                 all_data[bt][p].append(pct)
+                pooled_hits[bt][p] = pooled_hits[bt].get(p, 0) + cnt
+            pooled_frames[bt] += n_frames
+            pooled_runs[bt]   += 1
 
     if n_valid == 0:
         print(f"  No valid RUNs found for {resid_folder}")
@@ -277,6 +324,26 @@ def _part1_global_hbond(
                      f"{pdb_label} — {bt_label} (global, {n_valid} RUNs)",
                      out_dir / f"barplot_{bt}.png",
                      COLORS[bt], bt_label)
+
+        # pooled: every frame of every run counted together
+        if pooled_frames[bt] > 0:
+            prow = []
+            for p, hits in pooled_hits[bt].items():
+                pct = 100.0 * hits / pooled_frames[bt]
+                if pct < 0.1:
+                    continue
+                prow.append({"partner": p, "pooled_pct": round(pct, 2),
+                             "frames_with_hbond": int(round(hits)),
+                             "total_frames": pooled_frames[bt],
+                             "n_runs": pooled_runs[bt]})
+            if prow:
+                df_p = (pd.DataFrame(prow)
+                        .sort_values("pooled_pct", ascending=False)
+                        .reset_index(drop=True))
+                df_p.to_csv(out_dir / f"global_pooled_{bt}.csv", index=False)
+                print(f"  Saved -> global_pooled_{bt}.csv  ({len(df_p)} partners)")
+                _barplot_pooled(prow, f"{pdb_label} — {bt_label} (pooled)",
+                                out_dir / f"barplot_pooled_{bt}.png", COLORS[bt])
 
     return all_data, n_valid
 
