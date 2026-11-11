@@ -422,3 +422,13 @@ if __name__ == "__main__":
         base_path    = args.base_path,
         resid_folder = args.resid_folder,
     )
+
+
+'''
+for f in 141_G1 152_2a 152_2b 152_2c; do python3 global_hbond_summary.py --base_path /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12 --resid_folder $f; done
+
+for f in 141_G1 152_2a 152_2b 152_2c; do python3 global_hbond_summary.py --base_path /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q --resid_folder $f; done
+
+for f in 141_G1 152_2a 152_2b 152_2c; do python3 global_hbond_summary.py --base_path /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12_E141Q_4fs --resid_folder $f; done
+
+'''

@@ -591,10 +591,10 @@ def main():
         lower4 = [265, 589, 914 ,1240]
 
         pip_mapping = {
-            1301: "G1",
-            1302: "2c",
-            1303: "2a",
-            1304: "2b"
+            1301: "2b",
+            1302: "2a",
+            1303: "2c",
+            1304: "G1"
         }
 
         # mapping_json = "/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/jaguar/find_pip_residue_mapping/G12_GAT/A_B_C/pip_residue_mapping.json"
