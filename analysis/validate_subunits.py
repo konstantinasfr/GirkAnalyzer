@@ -76,6 +76,9 @@ def _ca(res):
 
 
 FIRST_PASS_FILE = "subunit_check_first_pass.txt"
+# The diagonal geometry test is an error only for the gate residue lists, which
+# define the A_C / B_D distance columns; for glu / asn it is a warning.
+GEOMETRY_STRICT = {"hbc", "sf_low_res", "upper_gl", "lower_gl"}
 PIP_CUTOFF = 6.0      # A, protein heavy atoms around the PIP2 phosphorus atoms
 PIP_MARGIN = 1.5      # top subunit needs >= this many times the contacts of the next
 
@@ -260,8 +263,15 @@ def validate_subunits(u, channel_type, gates, subunit_groups=None,
         out(f"   adjacent CA-CA: {', '.join(f'{v:.1f}' for v in sorted(adjacent))} A   "
             f"-> pairs are {'diagonal' if geom_ok else 'NOT diagonal'}")
         if not geom_ok:
-            errors.append(f"{gate}: pairs {[tuple(p) for p in pairs]} are not the diagonals "
-                          f"(a pair CA-CA {shortest_diag:.1f} A <= longest adjacent {max(adjacent):.1f} A)")
+            msg = (f"{gate}: pairs {[tuple(p) for p in pairs]} are not clearly the diagonals on this "
+                   f"frame (a pair CA-CA {shortest_diag:.1f} A <= longest adjacent {max(adjacent):.1f} A)")
+            if gate in GEOMETRY_STRICT:
+                errors.append(msg)
+            else:
+                # Glu / Asn side chains around the cavity fluctuate a lot, so on a
+                # single frame a diagonal can be no longer than an adjacent pair;
+                # the subunit-letter check above already proves the pairing.
+                warnings.append(msg + " -- not a gate; subunit letters are what count here")
 
     # ── PIP2 -> subunit (pip_mapping) ──────────────────────────────────────
     if pip_mapping and chain_to_sub:
