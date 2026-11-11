@@ -129,14 +129,14 @@ def to_pdb(resid: int, channel_type: str) -> str:
     """
     ct = channel_type.upper().strip()
 
-    if ct in ("G2"):
+    if ct in ("G2",):
         END1, END2, END3, END4 = 328, 656, 984, 1312
         o = 54
         if   resid <= END1: return f"{resid + o}.2a"
         elif resid <= END2: return f"{resid - END1 + o}.2c"
         elif resid <= END3: return f"{resid - END2 + o}.2b"
         elif resid <= END4: return f"{resid - END3 + o}.2d"
-    elif ct in ("G12"):
+    elif ct in ("G12",):
         END1, END2, END3, END4 = 326, 650, 975, 1300
         o1, o = 42, 54
         if   resid <= END1: return f"{resid + o1}.G1"
@@ -152,7 +152,7 @@ def to_pdb(resid: int, channel_type: str) -> str:
         elif resid <= END3: return f"{resid - END2 + 1 + o}.2a"
         elif resid <= END4: return f"{resid - END3 + 1 + o}.2b"
 
-    elif ct in ("G12_GAT", "GAT", "G12_D173N", "G12_D173N_4FS", "G12_E141Q"):
+    elif ct in ("G12_GAT", "GAT", "G12_D173N", "G12_D173N_4FS", "G12_E141Q", "G12_E141Q_4FS"):
         END1, END2, END3, END4 = 324, 649, 974, 1300
         o1, o = 42, 54
         if   resid <= END1: return f"{resid + o}.2b"
