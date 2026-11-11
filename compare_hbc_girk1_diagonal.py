@@ -26,6 +26,7 @@ that were NOT swapped (GIRK1 still in A_C) pass --mut_girk1_col A_C.
 PER RUN (one row per run, both systems)
     median / mean distance of each diagonal
     frac_open_<diag>     fraction of frames with that diagonal > threshold
+                         (default 5.69 A, Li et al. 2019 J Biol Chem, PMID 31659119)
     frac_both_open       both diagonals > threshold
     median_asym          median(GIRK1_diag - GIRK2_diag); negative = the
                          GIRK1 diagonal is the narrower one
@@ -54,6 +55,19 @@ OUTPUTS   <out_dir>/
                                 Mann-Whitney test WT vs mutant per metric
     hbc_girk1_open_fraction.png box plot, one dot per run
     hbc_girk1_distance_hist.png pooled distance distributions per diagonal
+                                (density: area under each curve = 1)
+    hbc_girk1_distance_hist_counts.png     unscaled: raw frames, and frames per run
+    hbc_girk1_distance_hist_bootstrap.png  density + 95% band from resampling runs
+    hbc_girk1_distance_hist_per_run.png    one thin curve per run + pooled curve
+    stats_table.csv / stats_table.png      Mann-Whitney U and Kolmogorov-Smirnov on
+                                one value per run (median, mean distance), plus
+                                pooled-histogram median, mean, IQR and peak
+    stats_per_run.png                      per-run medians/means with both p-values
+    stats_ks_cdf.png                       the cumulative curves KS compares, D marked
+    hbc_girk1_distribution_tests.csv       peak and median shift with 95% CI,
+                                permutation tests (median, Kolmogorov-Smirnov,
+                                Wasserstein) and Cliff's delta -- all resampling
+                                whole runs (see hbc_distribution_stats.py)
 """
 
 import argparse
@@ -67,6 +81,8 @@ import matplotlib.pyplot as plt
 
 from gate_openness import (DEFAULT_PERM_COL, expand_runs, find_run_dirs,
                            load_gate, load_permeations, natural_key)
+import hbc_distribution_stats as hds
+import hbc_presentation_stats as hps
 
 DIAGS = ["GIRK1_diag", "GIRK2_diag"]
 METRICS = ["median_GIRK1_diag", "median_GIRK2_diag",
@@ -115,9 +131,10 @@ def analyse_system(base, runs, girk1_col, threshold, perm_col, label):
               f"{r['median_GIRK2_diag']:5.2f} open "
               f"{r['frac_open_GIRK2_diag']:5.1%} | both "
               f"{r['frac_both_open']:5.1%} | perm {r['n_permeations']}")
+    per_run = pooled
     pooled = {k: np.concatenate(v) if v else np.array([])
-              for k, v in pooled.items()}
-    return rows, pooled
+              for k, v in per_run.items()}
+    return rows, pooled, per_run
 
 
 def values(rows, metric):
@@ -200,7 +217,9 @@ def plot_open_fraction(wt_rows, mut_rows, wt_label, mut_label, threshold, path, 
 
 def plot_hist(wt_pool, mut_pool, wt_label, mut_label, threshold, path, source=""):
     fig, axes = plt.subplots(1, 2, figsize=(10, 4.4), sharey=True)
-    bins = np.linspace(1.5, 12, 64)
+    hi = max([12.0] + [float(p[d].max()) for p in (wt_pool, mut_pool) for d in DIAGS if p[d].size])
+    lo = min([1.5] + [float(p[d].min()) for p in (wt_pool, mut_pool) for d in DIAGS if p[d].size])
+    bins = np.arange(np.floor(lo * 6) / 6, np.ceil(hi * 6) / 6 + 1 / 6 + 1e-9, 1 / 6)  # 1/6 A bins, nothing cut
     for ax, d, title in zip(axes, DIAGS,
                             ("GIRK1–GIRK2 diagonal", "GIRK2–GIRK2 diagonal")):
         for pool, lab, key in ((wt_pool, wt_label, "WT"),
@@ -233,7 +252,8 @@ def main():
     ap.add_argument("--mut_runs", default=None, help='e.g. "1-6" (default: all RUN*)')
     ap.add_argument("--wt_girk1_col", default="B_D", choices=["A_C", "B_D"])
     ap.add_argument("--mut_girk1_col", default="B_D", choices=["A_C", "B_D"])
-    ap.add_argument("--threshold", type=float, default=5.6)
+    ap.add_argument("--threshold", type=float, default=5.69,
+                    help="gate open above this (A); 5.69 = Li et al. 2019, PMID 31659119")
     ap.add_argument("--perm_col", default=DEFAULT_PERM_COL)
     ap.add_argument("--wt_label", default="WT")
     ap.add_argument("--mut_label", default="E141Q")
@@ -248,10 +268,10 @@ def main():
               f"{args.mut_label} = {mut_name} (GIRK1 col {args.mut_girk1_col})")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    wt_rows, wt_pool = analyse_system(
+    wt_rows, wt_pool, wt_runs = analyse_system(
         args.wt_dir, expand_runs(args.wt_runs) if args.wt_runs else None,
         args.wt_girk1_col, args.threshold, args.perm_col, args.wt_label)
-    mut_rows, mut_pool = analyse_system(
+    mut_rows, mut_pool, mut_runs = analyse_system(
         args.mut_dir, expand_runs(args.mut_runs) if args.mut_runs else None,
         args.mut_girk1_col, args.threshold, args.perm_col, args.mut_label)
 
@@ -263,6 +283,34 @@ def main():
                        args.threshold, out_dir / "hbc_girk1_open_fraction.png", source)
     plot_hist(wt_pool, mut_pool, args.wt_label, args.mut_label,
               args.threshold, out_dir / "hbc_girk1_distance_hist.png", source)
+    lab = (args.wt_label, args.mut_label, COLORS, args.threshold)
+    hds.plot_counts(wt_runs, mut_runs, *lab, out_dir / "hbc_girk1_distance_hist_counts.png", source)
+    hds.plot_bootstrap_bands(wt_runs, mut_runs, *lab,
+                             out_dir / "hbc_girk1_distance_hist_bootstrap.png", source)
+    hds.plot_per_run(wt_runs, mut_runs, *lab, out_dir / "hbc_girk1_distance_hist_per_run.png", source)
+
+    print("\nMann-Whitney and Kolmogorov-Smirnov tests (one value per run):")
+    pres = hps.run_tests(wt_rows, mut_rows, wt_pool, mut_pool, args.wt_label, args.mut_label)
+    write_csv(pres, out_dir / "stats_table.csv")
+    hps.plot_table(pres, args.wt_label, args.mut_label, out_dir / "stats_table.png", source)
+    hps.plot_per_run(wt_rows, mut_rows, pres, args.wt_label, args.mut_label, COLORS,
+                     out_dir / "stats_per_run.png", source)
+    hps.plot_ks_cdf(wt_rows, mut_rows, pres, args.wt_label, args.mut_label, COLORS,
+                    out_dir / "stats_ks_cdf.png", source)
+    for r in pres:
+        print(f"  {r['diagonal']:<21} {r['measure']:<24} "
+              f"{args.wt_label} {r[args.wt_label + '_mean_sem']:<13} "
+              f"{args.mut_label} {r[args.mut_label + '_mean_sem']:<13} "
+              f"MW p={r['mannwhitney_p']:<8} KS D={r['ks_D']:<6} p={r['ks_p']}")
+
+    print("\nDistribution tests (resampling whole runs; this takes a minute)...")
+    dist = hds.distribution_tests(wt_runs, mut_runs, args.wt_label, args.mut_label)
+    write_csv(dist, out_dir / "hbc_girk1_distribution_tests.csv")
+    for r in dist:
+        ci = f"  95% CI [{r['ci95_low']}, {r['ci95_high']}]" if r["ci95_low"] != "" else ""
+        pv = f"  p = {r['p_value']}" if r["p_value"] != "" else ""
+        print(f"  {r['diagonal']:<11} {r['statistic']:<38} {args.wt_label}={r['wt']!s:<6} "
+              f"{args.mut_label}={r['mut']!s:<6} diff={r['diff_mut_minus_wt']}{ci}{pv}")
 
     print("\nSummary (mean over runs; Mann-Whitney p, WT vs mutant):")
     for r in summary:
