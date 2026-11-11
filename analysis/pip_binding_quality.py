@@ -302,12 +302,22 @@ def run_pip_binding_quality(
     df_occ.to_csv(out / "pip_occupancy.csv", index=False)
 
     # ---- four sites on a common residue axis ----
-    comp = (df_occ.groupby(["pip", "res_num"])
+    # Column = residue number + protein: "52 G1" (GIRK1 numbering) or "64 G2"
+    # (GIRK2 numbering, any of 2a/2b/2c/2d). GIRK1 and GIRK2 are numbered
+    # differently, so the same number in the two proteins gets two columns
+    # instead of being merged.
+    df_occ["res_col"] = [f"{n} {'G1' if s.upper() == 'G1' else 'G2'}" if s else str(n)
+                         for n, s in zip(df_occ.res_num, df_occ.res_sub)]
+    comp = (df_occ.groupby(["pip", "res_col"])
                   .contact_occupancy.max().unstack(fill_value=0.0))
-    try:
-        comp = comp[sorted(comp.columns, key=int)]
-    except ValueError:
-        pass
+
+    def _col_key(c):
+        num, _, prot = str(c).partition(" ")
+        try:
+            return (int(num), prot)
+        except ValueError:
+            return (10 ** 9, str(c))
+    comp = comp[sorted(comp.columns, key=_col_key)]
     comp.to_csv(out / "pip_interface_comparison.csv")
 
     # ---- per-PIP verdict ----
@@ -384,7 +394,7 @@ def _plots(df_ts, df_occ, comp, resids, labels, out):
     if len(comp.columns):
         _heatmap(comp.values, list(comp.columns), list(comp.index),
                  "PIP sites on a common residue axis",
-                 "residue (subunit collapsed)", "contact occupancy",
+                 "residue (G1 = GIRK1 numbering, G2 = GIRK2 numbering; 2a/2b/2c merged)", "contact occupancy",
                  out / "pip_interface_comparison.png")
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6.6), sharex=True)
