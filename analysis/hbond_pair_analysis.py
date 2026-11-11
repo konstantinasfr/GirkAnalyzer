@@ -368,15 +368,27 @@ def regenerate_type_breakdown(path, smoothing_window=100):
     path = Path(path)
     folders = [path] if (path / "hbond_per_frame.csv").is_file() else \
         sorted(p.parent for p in path.rglob("hbond_per_frame.csv"))
+    done = skipped = 0
     for d in folders:
         summ = d / "hbond_residue_summary.csv"
         if not summ.is_file():
-            print(f"  [skip] {d}: no hbond_residue_summary.csv (needed for the residue labels)")
+            skipped += 1
             continue
-        r = pd.read_csv(summ).iloc[0]
+        r = pd.read_csv(summ)
+        df = pd.read_csv(d / "hbond_per_frame.csv", nrows=1)
+        # only hbond_pair_analysis folders; residue_neighbors_analysis writes files
+        # with the same names in another format (and already splits by type)
+        if r.empty or not {"residue_A", "residue_B"} <= set(r.columns) \
+                or "bonds_detail" not in df.columns:
+            skipped += 1
+            continue
+        r = r.iloc[0]
         print(f"\n  {d}  ({r['residue_A']} ↔ {r['residue_B']})")
         hbond_type_breakdown(pd.read_csv(d / "hbond_per_frame.csv"), str(r["residue_A"]),
                              str(r["residue_B"]), d, smoothing_window)
+        done += 1
+    print(f"\n  done: {done} pair folder(s); skipped {skipped} folder(s) that are not "
+          f"hbond_pair_analysis output (e.g. residue_neighbors/.../hbonds)")
 
 # -----------------------------------------------------------------------------
 # Main per-pair analysis
