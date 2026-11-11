@@ -340,10 +340,12 @@ def _part1_global_hbond(
                 df_p = (pd.DataFrame(prow)
                         .sort_values("pooled_pct", ascending=False)
                         .reset_index(drop=True))
-                df_p.to_csv(out_dir / f"global_pooled_{bt}.csv", index=False)
-                print(f"  Saved -> global_pooled_{bt}.csv  ({len(df_p)} partners)")
+                pooled_dir = out_dir / "pooled"
+                pooled_dir.mkdir(exist_ok=True)
+                df_p.to_csv(pooled_dir / f"global_{bt}.csv", index=False)
+                print(f"  Saved -> pooled/global_{bt}.csv  ({len(df_p)} partners)")
                 _barplot_pooled(prow, f"{pdb_label} — {bt_label} (pooled)",
-                                out_dir / f"barplot_pooled_{bt}.png", COLORS[bt])
+                                pooled_dir / f"barplot_{bt}.png", COLORS[bt])
 
     return all_data, n_valid
 
