@@ -36,6 +36,7 @@ A failed check raises SubunitCheckError; main.py turns that into an exit
 unless --skip_subunit_check is given.
 """
 
+import os
 from itertools import combinations
 from pathlib import Path
 
@@ -74,9 +75,61 @@ def _ca(res):
     return ca.positions[0] if len(ca) else res.atoms.center_of_geometry()
 
 
+FIRST_PASS_FILE = "subunit_check_first_pass.txt"
+PIP_CUTOFF = 6.0      # A, protein heavy atoms around the PIP2 phosphorus atoms
+PIP_MARGIN = 1.5      # top subunit needs >= this many times the contacts of the next
+
+
+def _check_pips(u, pip_mapping, chain_to_sub, girk1_chains, out, errors, warnings):
+    """
+    Which subunit is each PIP2 bound to? Counts protein heavy atoms within
+    PIP_CUTOFF of the PIP's phosphorus atoms (P1/P4/P5) on the current frame,
+    per chain. Labels must follow the subunit letters: G1 = the GIRK1 subunit
+    (D), 2a/2b/2c/2d = GIRK2 subunits A/B/C/D.
+    """
+    out("\nPIP2 sites (protein heavy atoms within "
+        f"{PIP_CUTOFF:.0f} A of the PIP phosphorus atoms, per subunit):")
+    for resid, label in sorted(pip_mapping.items()):
+        pip = u.select_atoms(f"resid {resid}")
+        if not len(pip):
+            errors.append(f"pip_mapping: PIP resid {resid} not found")
+            continue
+        phos = pip.select_atoms("name P1 P4 P5") or pip.select_atoms("name P*")
+        if not len(phos):
+            errors.append(f"PIP {resid}: no phosphorus atoms (P1/P4/P5) found")
+            continue
+        near = u.select_atoms(f"protein and not name H* and around {PIP_CUTOFF} group phos",
+                              phos=phos)
+        counts = {}
+        for a in near:
+            sub = chain_to_sub.get(int(a.fragindex), "?")
+            counts[sub] = counts.get(sub, 0) + 1
+        ranked = sorted(counts.items(), key=lambda kv: -kv[1])
+        label = str(label)
+        if label.upper() == "G1":
+            expected = sorted({chain_to_sub[c] for c in girk1_chains if c in chain_to_sub}) or ["D"]
+        elif len(label) == 2 and label[0] == "2" and label[1].upper() in "ABCD":
+            expected = [label[1].upper()]
+        else:
+            expected = []
+        top = ranked[0][0] if ranked else "?"
+        second = ranked[1][1] if len(ranked) > 1 else 0
+        clear = bool(ranked) and ranked[0][1] >= PIP_MARGIN * max(second, 1)
+        txt = ", ".join(f"{s} {n}" for s, n in ranked[:3]) or "no protein contact"
+        verdict = ("ok" if top in expected else
+                   "MISMATCH" if clear and expected else "unclear")
+        out(f"   PIP {resid} labelled {label:<3} -> closest subunit {top}  ({txt})   {verdict}")
+        if not expected:
+            warnings.append(f"PIP {resid}: label '{label}' not understood (expected G1, 2a, 2b, 2c, 2d)")
+        elif top not in expected:
+            msg = (f"PIP {resid} is labelled {label} (subunit {'/'.join(expected)}) but sits "
+                   f"closest to subunit {top} ({txt})")
+            (errors if clear else warnings).append(msg + ("" if clear else " -- too close to call"))
+
+
 def validate_subunits(u, channel_type, gates, subunit_groups=None,
                       asn_residues=None, glu_residues=None,
-                      results_dir=None, verbose=True):
+                      results_dir=None, verbose=True, pip_mapping=None):
     """
     gates: {name: (residues, diagonal_pairs)}, e.g.
         {"hbc": (hbc_residues, hbc_diagonal_pairs), ...}
@@ -210,6 +263,10 @@ def validate_subunits(u, channel_type, gates, subunit_groups=None,
             errors.append(f"{gate}: pairs {[tuple(p) for p in pairs]} are not the diagonals "
                           f"(a pair CA-CA {shortest_diag:.1f} A <= longest adjacent {max(adjacent):.1f} A)")
 
+    # ── PIP2 -> subunit (pip_mapping) ──────────────────────────────────────
+    if pip_mapping and chain_to_sub:
+        _check_pips(u, pip_mapping, chain_to_sub, girk1_chains, out, errors, warnings)
+
     # ── verdict ─────────────────────────────────────────────────────────────
     out("")
     for w in warnings:
@@ -230,10 +287,20 @@ def validate_subunits(u, channel_type, gates, subunit_groups=None,
         try:
             Path(results_dir).mkdir(parents=True, exist_ok=True)
             chk = Path(results_dir) / "subunit_check.txt"
-            # Rewrite only if the content changed: swap_gate_columns.py uses this
-            # file's age to tell old-order CSVs (older than the check) from CSVs
-            # already written in the new order (newer), so re-running the check
-            # must not make the file look newer than a run made after it.
+            first = Path(results_dir) / FIRST_PASS_FILE
+            # swap_gate_columns.py tells old-order gate CSVs (written BEFORE the
+            # config first passed this check) from new-order ones (written after)
+            # by the time of the FIRST passing check. That time lives in its own
+            # file, never overwritten; if only an older passing report exists,
+            # the marker gets that report's time, not "now".
+            if not first.is_file():
+                old_ok = chk.is_file() and "SUBUNIT CHECK PASSED" in chk.read_text()
+                if old_ok or not errors:
+                    t = chk.stat().st_mtime if old_ok else None
+                    first.write_text("first passing subunit check (time = this file's "
+                                     "modification time); used by swap_gate_columns.py\n")
+                    if t is not None:
+                        os.utime(first, (t, t))
             if not chk.is_file() or chk.read_text() != report + "\n":
                 chk.write_text(report + "\n")
         except OSError as exc:

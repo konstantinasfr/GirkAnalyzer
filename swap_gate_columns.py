@@ -21,8 +21,9 @@ SAFETY -- a run is swapped only if all of these hold:
      this system was checked against the topology (A_C = A-C, B_D = B-D,
      GIRK1 in B_D). Make it without the long analysis:
          python3 main.py --channel_type G12_E141Q --run_number 1 --subunit_check_only
-  2. hbc_distances.csv is OLDER than subunit_check.txt, i.e. it was written
-     before the new order was checked (old order). A CSV newer than the check
+  2. hbc_distances.csv is OLDER than the FIRST passing check
+     (subunit_check_first_pass.txt, never rewritten; subunit_check.txt if that
+     is missing), i.e. it was written before the new order was checked. A CSV newer than the check
      was written by a rerun with the new order and is left alone.
   3. there is no gate_columns_swapped.json marker (not swapped already).
 Originals are copied to RUN*/gate_csv_backup_old_order/ first.
@@ -58,6 +59,7 @@ GATE_FILES = ["hbc_distances.csv", "sf_distances.csv",
 MARKER = "gate_columns_swapped.json"
 BACKUP_DIR = "gate_csv_backup_old_order"
 CHECK_FILE = "subunit_check.txt"
+FIRST_PASS_FILE = "subunit_check_first_pass.txt"
 
 
 def run_dirs(base, runs):
@@ -79,7 +81,9 @@ def check_status(rd):
                        f"{rd.name[3:]} --subunit_check_only first")
     if "SUBUNIT CHECK PASSED" not in chk.read_text():
         return False, f"{CHECK_FILE} does not say PASSED -- fix the config first"
-    if hbc.stat().st_mtime >= chk.stat().st_mtime:
+    first = rd / FIRST_PASS_FILE      # time of the first passing check (never rewritten)
+    ref = first if first.is_file() else chk
+    if hbc.stat().st_mtime >= ref.stat().st_mtime:
         return False, ("hbc_distances.csv is newer than the subunit check -- "
                        "already written in the new order")
     return True, "old order"

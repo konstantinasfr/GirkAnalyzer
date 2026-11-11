@@ -756,7 +756,8 @@ def main():
                           subunit_groups=_cfg.get("subunit_groups"),
                           asn_residues=_cfg.get("asn_residues"),
                           glu_residues=_cfg.get("glu_residues"),
-                          results_dir=results_dir)
+                          results_dir=results_dir,
+                          pip_mapping=_cfg.get("pip_mapping"))
     except SubunitCheckError:
         if not args.skip_subunit_check:
             raise SystemExit("Subunit check failed - see the report above "
