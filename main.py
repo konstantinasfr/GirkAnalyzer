@@ -72,6 +72,11 @@ def main():
                         help="ignore analyzer_state.pkl and redo the trajectory pass (ion region tracking, "
                              "permeation events, gate diameters); the new state overwrites the pkl. Also "
                              "reruns the SF-dependent analyses even if their results exist")
+    parser.add_argument("--pip_binding_only", action="store_true",
+                        help="run the subunit check, then only the PIP2 binding-quality analysis "
+                             "(results_dir/pip_binding_quality/), and exit")
+    parser.add_argument("--pip_force_rerun", action="store_true",
+                        help="with --pip_binding_only: recompute even if pip_summary.csv exists")
     parser.add_argument("--subunit_check_only", action="store_true",
                         help="run the subunit check (writes subunit_check.txt) and exit")
     parser.add_argument("--skip_subunit_check", action="store_true",
@@ -779,6 +784,17 @@ def main():
     end_frame = len(u.trajectory) - 1
     # end_frame = 3000
     print(f"Using end_frame = {end_frame} (last frame of trajectory)")
+
+    if args.pip_binding_only:
+        from analysis.pip_binding_quality import run_pip_binding_quality
+        run_pip_binding_quality(
+            u=u, results_dir=results_dir, channel_type=args.channel_type,
+            pip_resids=pip_resids, pip_mapping=pip_mapping,
+            start_frame=start_frame, end_frame=end_frame,
+            cutoff=4.0, sb_cutoff=4.0, min_event=5,
+            force_rerun=args.pip_force_rerun,
+        )
+        raise SystemExit("--pip_binding_only: done.")
 
     # if channel_type in ("G12", "G2"):
     #     from analysis.pore_salt_bridge import run_pore_salt_bridge, SaltBridgeCheckError
