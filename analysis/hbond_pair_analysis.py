@@ -218,6 +218,166 @@ def _plot_hbond_summary_bar(
     print(f"    Saved -> {out_path.name}")
 
 
+
+# -----------------------------------------------------------------------------
+# Breakdown by H-bond type and by atom pair
+# -----------------------------------------------------------------------------
+
+BACKBONE_ATOMS = {"N", "H", "HN", "H1", "H2", "H3", "CA", "HA", "HA2", "HA3",
+                  "C", "O", "OXT", "OT1", "OT2"}
+
+TYPE_NAMES = {
+    "bb_bb":     "backbone ↔ backbone",
+    "sc_sc":     "side chain ↔ side chain",
+    "bbA_scB":   "backbone({a}) ↔ side chain({b})",
+    "scA_bbB":   "side chain({a}) ↔ backbone({b})",
+}
+
+
+def _bond_type(bond, label_a):
+    """bb_bb / sc_sc / bbA_scB / scA_bbB, from the atom of residue A and of residue B."""
+    if bond["donor_res"] == label_a:
+        atom_a, atom_b = bond["donor_atom"], bond["acceptor_atom"]
+    else:
+        atom_a, atom_b = bond["acceptor_atom"], bond["donor_atom"]
+    a_bb, b_bb = atom_a in BACKBONE_ATOMS, atom_b in BACKBONE_ATOMS
+    if a_bb and b_bb:
+        return "bb_bb"
+    if not a_bb and not b_bb:
+        return "sc_sc"
+    return "bbA_scB" if a_bb else "scA_bbB"
+
+
+def _parse_details(cell):
+    import ast
+    if not isinstance(cell, str) or not cell.startswith("["):
+        return []
+    try:
+        return ast.literal_eval(cell)
+    except (ValueError, SyntaxError):
+        return []
+
+
+def _plot_state_rows(frames, rows, title, out_path, smoothing_window):
+    """One binary time-series row per entry of rows = [(label, 0/1 array), ...]."""
+    if not rows:
+        return
+    fig, axes = plt.subplots(len(rows), 1, figsize=(14, 1.5 * len(rows) + 1.0),
+                             sharex=True, squeeze=False)
+    for ax, (lab, y) in zip(axes[:, 0], rows):
+        y = np.asarray(y, dtype=float)
+        ax.fill_between(frames, y, step="mid", alpha=0.4, color="steelblue")
+        if smoothing_window and smoothing_window > 1:
+            sm = pd.Series(y).rolling(smoothing_window, center=True, min_periods=1).mean()
+            ax.plot(frames, sm.values, color="navy", linewidth=1.8)
+        ax.set_ylim(-0.1, 1.15)
+        ax.set_yticks([0, 1])
+        ax.set_yticklabels(["No", "Yes"], fontsize=8)
+        ax.set_ylabel(f"{lab}\n{100 * y.mean():.1f}%", rotation=0, ha="right",
+                      va="center", fontsize=9)
+        ax.spines[["top", "right"]].set_visible(False)
+    axes[-1, 0].set_xlabel("Frame")
+    sub = f"  (line: fraction in a {smoothing_window}-frame window)" if smoothing_window else ""
+    axes[0, 0].set_title(title + sub, fontsize=11)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"    Saved -> {out_path.name}")
+
+
+def _plot_type_bar(pcts, title, out_path):
+    labs = list(pcts)
+    vals = [pcts[k] for k in labs]
+    fig, ax = plt.subplots(figsize=(1.6 * len(labs) + 2, 4.6))
+    bars = ax.bar(range(len(labs)), vals, color="steelblue", alpha=0.85)
+    for b, v in zip(bars, vals):
+        ax.text(b.get_x() + b.get_width() / 2, v + 1, f"{v:.1f}%", ha="center", fontsize=10)
+    ax.set_xticks(range(len(labs)))
+    ax.set_xticklabels(labs, fontsize=9)
+    ax.set_ylim(0, 110)
+    ax.set_ylabel("% of frames with this H-bond")
+    ax.set_title(title, fontsize=11)
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"    Saved -> {out_path.name}")
+
+
+def hbond_type_breakdown(df_per_frame, label_a, label_b, out_dir, smoothing_window=100):
+    """
+    Split the H-bonds of one residue pair by type and by atom pair.
+
+    Uses only hbond_per_frame.csv (its bonds_detail column), so it can be re-run
+    on existing results without the trajectory. Writes into out_dir:
+        hbond_type_per_frame.csv       frame + 0/1 per type
+        hbond_type_summary.csv         % of frames per type (and any)
+        hbond_type_summary.png         bar plot of the above
+        hbond_type_states.png          time series, one row per type
+        hbond_atom_pair_per_frame.csv  frame + 0/1 per donor-acceptor atom pair
+        hbond_atom_pair_states.png     time series, one row per atom pair
+    Types (A = first residue of the pair, B = second):
+        bb_bb    backbone of A <-> backbone of B   (e.g. the alpha-helix i/i+4 bond)
+        sc_sc    side chain of A <-> side chain of B
+        bbA_scB  backbone of A <-> side chain of B
+        scA_bbB  side chain of A <-> backbone of B
+    """
+    out_dir = Path(out_dir)
+    frames = df_per_frame["frame"].to_numpy()
+    types = {k: np.zeros(len(frames), dtype=int) for k in TYPE_NAMES}
+    pairs = {}
+    for i, cell in enumerate(df_per_frame["bonds_detail"]):
+        for b in _parse_details(cell):
+            types[_bond_type(b, label_a)][i] = 1
+            key = f"{b['donor_res']}:{b['donor_atom']} -> {b['acceptor_res']}:{b['acceptor_atom']}"
+            pairs.setdefault(key, np.zeros(len(frames), dtype=int))[i] = 1
+
+    names = {k: v.format(a=label_a, b=label_b) for k, v in TYPE_NAMES.items()}
+    any_hb = (df_per_frame.get("hbond_present", pd.Series(np.zeros(len(frames)))) > 0).to_numpy()
+
+    pd.DataFrame({"frame": frames, **types}).to_csv(out_dir / "hbond_type_per_frame.csv", index=False)
+    summ = [dict(type=k, description=names[k], n_frames=int(v.sum()),
+                 pct_frames=round(100 * v.mean(), 2)) for k, v in types.items()]
+    summ.append(dict(type="any", description="any H-bond between the two residues",
+                     n_frames=int(any_hb.sum()), pct_frames=round(100 * any_hb.mean(), 2)))
+    pd.DataFrame(summ).to_csv(out_dir / "hbond_type_summary.csv", index=False)
+    print(f"    Saved -> hbond_type_summary.csv  "
+          + "  ".join(f"{r['type']} {r['pct_frames']}%" for r in summ))
+
+    bar = {"any": 100 * any_hb.mean()}
+    bar.update({names[k].replace(" ↔ ", "\n↔ "): 100 * v.mean() for k, v in types.items()})
+    _plot_type_bar(bar, f"H-bond types: {label_a} ↔ {label_b}", out_dir / "hbond_type_summary.png")
+    _plot_state_rows(frames, [(names[k].replace(" ↔ ", "\n↔ "), v) for k, v in types.items()],
+                     f"H-bond types over time: {label_a} ↔ {label_b}",
+                     out_dir / "hbond_type_states.png", smoothing_window)
+
+    order = sorted(pairs, key=lambda k: -pairs[k].sum())
+    pd.DataFrame({"frame": frames, **{k: pairs[k] for k in order}}).to_csv(
+        out_dir / "hbond_atom_pair_per_frame.csv", index=False)
+    _plot_state_rows(frames, [(k.replace(" -> ", "\n-> "), pairs[k]) for k in order],
+                     f"H-bonds per atom pair: {label_a} ↔ {label_b}",
+                     out_dir / "hbond_atom_pair_states.png", smoothing_window)
+
+
+def regenerate_type_breakdown(path, smoothing_window=100):
+    """
+    Re-make the type / atom-pair breakdown for existing results, without the
+    trajectory. path = one pair folder (with hbond_per_frame.csv) or any folder
+    above it (every pair folder below it is done).
+    """
+    path = Path(path)
+    folders = [path] if (path / "hbond_per_frame.csv").is_file() else \
+        sorted(p.parent for p in path.rglob("hbond_per_frame.csv"))
+    for d in folders:
+        summ = d / "hbond_residue_summary.csv"
+        if not summ.is_file():
+            print(f"  [skip] {d}: no hbond_residue_summary.csv (needed for the residue labels)")
+            continue
+        r = pd.read_csv(summ).iloc[0]
+        print(f"\n  {d}  ({r['residue_A']} ↔ {r['residue_B']})")
+        hbond_type_breakdown(pd.read_csv(d / "hbond_per_frame.csv"), str(r["residue_A"]),
+                             str(r["residue_B"]), d, smoothing_window)
+
 # -----------------------------------------------------------------------------
 # Main per-pair analysis
 # -----------------------------------------------------------------------------
@@ -368,6 +528,9 @@ def _analyse_pair(
         out_path  = out_dir / "hbond_count_summary.png",
     )
 
+    # split by type (backbone / side chain) and by atom pair
+    hbond_type_breakdown(df_per_frame, label_a, label_b, out_dir, smoothing_window)
+
 
 # -----------------------------------------------------------------------------
 # Public entry point
@@ -438,3 +601,16 @@ def run_hbond_pair_analysis(
 
     print(f"\n✓ H-bond pair analysis complete.")
     print(f"  Results in: {out_base}")
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Re-make the H-bond type / atom-pair breakdown from existing "
+                    "hbond_per_frame.csv files (no trajectory needed).")
+    ap.add_argument("path", help="a pair folder, or any folder above (e.g. .../RUN3/hbond_analysis "
+                                 "or .../G12_E141Q)")
+    ap.add_argument("--smoothing_window", type=int, default=100)
+    a = ap.parse_args()
+    regenerate_type_breakdown(a.path, a.smoothing_window)
+
