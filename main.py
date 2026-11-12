@@ -87,6 +87,10 @@ def main():
     parser.add_argument("--skip_subunit_check", action="store_true",
                         help="run even if the subunit check fails (gate columns A_C/B_D may then "
                              "not be subunits A-C/B-D, and GIRK1 may not be in B_D)")
+    parser.add_argument("--skip_pip_check", action="store_true",
+                        help="leave the PIP2 part out of the subunit check (subunit order and "
+                             "GIRK1 placement are still checked). Use only for analyses that do "
+                             "not use the PIP2s, e.g. --neighbors_resids")
     # parser.add_argument("--channel_type", default="G2_FD")
     args = parser.parse_args()
     generate_electric_field_heatmap =  False
@@ -767,12 +771,14 @@ def main():
                           asn_residues=_cfg.get("asn_residues"),
                           glu_residues=_cfg.get("glu_residues"),
                           results_dir=results_dir,
-                          pip_mapping=_cfg.get("pip_mapping"))
+                          pip_mapping=None if args.skip_pip_check else _cfg.get("pip_mapping"))
     except SubunitCheckError:
         if not args.skip_subunit_check:
             raise SystemExit("Subunit check failed - see the report above "
                              "(rerun with --skip_subunit_check to ignore it).")
         print("--skip_subunit_check: continuing although the subunit check failed")
+    if args.skip_pip_check:
+        print("--skip_pip_check: PIP2 sites were NOT checked -- do not trust PIP2 results of this run")
     if args.subunit_check_only:
         raise SystemExit("--subunit_check_only: done.")
     results_dir.mkdir(exist_ok=True)
