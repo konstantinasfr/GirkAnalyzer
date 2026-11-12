@@ -87,6 +87,10 @@ def main():
     parser.add_argument("--skip_subunit_check", action="store_true",
                         help="run even if the subunit check fails (gate columns A_C/B_D may then "
                              "not be subunits A-C/B-D, and GIRK1 may not be in B_D)")
+    parser.add_argument("--hbond_cavity_pairs", default=None,
+                        help='H-bond of residue pairs split by the number of K+ in the Glu-Asn cavity, '
+                             'every frame (analysis/hbond_by_cavity_ions.py), then exit. Raw resid pairs '
+                             '"144-148,472-476" or "glu" (each Glu of glu_residues with the residue 4 before it)')
     parser.add_argument("--skip_pip_check", action="store_true",
                         help="leave the PIP2 part out of the subunit check (subunit order and "
                              "GIRK1 placement are still checked). Use only for analyses that do "
@@ -849,6 +853,24 @@ def main():
     ch2 = Channel(u, upper2, lower2, num=2, radius=15.0)
     ch3 = Channel(u, upper3, lower3, num=3, radius=15.0)
     ch4 = Channel(u, upper4, lower4, num=4, radius=10.0)
+
+    if args.hbond_cavity_pairs:
+        from analysis.hbond_by_cavity_ions import run_hbond_by_cavity_ions
+        spec = args.hbond_cavity_pairs.strip()
+        if spec.lower() == "glu":
+            cav_pairs = [(int(g) - 4, int(g)) for g in glu_residues]
+        else:
+            cav_pairs = []
+            for item in spec.replace(" ", "").split(","):
+                a_, b_ = item.split("-")
+                cav_pairs.append((int(a_), int(b_)))
+        run_hbond_by_cavity_ions(
+            u=u, results_dir=results_dir, channel_type=args.channel_type,
+            residue_pairs=cav_pairs, channel1=ch1, channel2=ch2,
+            start_frame=start_frame, end_frame=end_frame,
+            hbond_dist=3.5, hbond_angle=120.0,
+        )
+        raise SystemExit("--hbond_cavity_pairs: done.")
 
  # ========== TRY TO LOAD SAVED STATE ==========
     # --force_pkl_generation: redo the trajectory pass even if analyzer_state.pkl exists
