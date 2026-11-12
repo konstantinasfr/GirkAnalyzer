@@ -108,7 +108,7 @@ def _barplot(partner_stats, title, out_path, color, bt_label):
         # only label bars >= 5% to avoid crowding
         if mean >= 5.0:
             ax.text(bar.get_x() + bar.get_width() / 2,
-                    bar.get_height() + max_val * 0.02,
+                    bar.get_height() + 2,
                     f"{mean:.1f}%\n±{std:.1f}",
                     ha="center", va="bottom", fontsize=12)
 
@@ -118,7 +118,8 @@ def _barplot(partner_stats, title, out_path, color, bt_label):
     ax.set_xlabel("Partner residue", fontsize=15)
     ax.set_title(f"{title}\n(n={n_runs} RUNs, mean ± std)", fontsize=14)
     ax.tick_params(axis="y", labelsize=13)
-    ax.set_ylim(0, min(130, max_val * 1.6))
+    ax.set_ylim(0, 132)                      # same 0-100 % scale on every plot (headroom for labels)
+    ax.set_yticks([0, 20, 40, 60, 80, 100])
     plt.tight_layout()
     fig.savefig(out_path, dpi=70)
     plt.close(fig)
@@ -143,7 +144,7 @@ def _barplot_pooled(rows, title, out_path, color):
     for bar, v in zip(bars, vals):
         if v >= 5.0:
             ax.text(bar.get_x() + bar.get_width() / 2,
-                    bar.get_height() + max_val * 0.02,
+                    bar.get_height() + 2,
                     f"{v:.1f}%", ha="center", va="bottom", fontsize=12)
     ax.set_xticks(x)
     ax.set_xticklabels(partners, rotation=45, ha="right", fontsize=14)
@@ -151,7 +152,8 @@ def _barplot_pooled(rows, title, out_path, color):
     ax.set_xlabel("Partner residue", fontsize=15)
     ax.set_title(f"{title}\n(all frames of {n_runs} RUNs pooled, {total} frames)", fontsize=14)
     ax.tick_params(axis="y", labelsize=13)
-    ax.set_ylim(0, min(130, max_val * 1.6))
+    ax.set_ylim(0, 132)                      # same 0-100 % scale on every plot (headroom for labels)
+    ax.set_yticks([0, 20, 40, 60, 80, 100])
     plt.tight_layout()
     fig.savefig(out_path, dpi=70)
     plt.close(fig)
