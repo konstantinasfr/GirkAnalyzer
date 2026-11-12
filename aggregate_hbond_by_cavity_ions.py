@@ -185,9 +185,17 @@ def _table_png(tab, cols, title, out_path):
         ax.text(x + w / 2, y + 0.5, text, ha="center", va="center", color=color, fontsize=size,
                 fontweight=weight)
 
-    cell(0, 0, first_w, "K+ in cavity →", navy, "#ffffff", "bold", 10)
+    # the frame count goes under the K+ number in the header when it is the same for every pair
+    # (same runs); otherwise it stays in each cell
+    same_n = all(tab[f"{b}_n_frames"].nunique() == 1 for b in cols)
+    cell(0, 0, first_w, "K+ in cavity →" + ("\n(frames)" if same_n else ""), navy, "#ffffff", "bold", 10)
     for j, b in enumerate(cols):
-        cell(first_w + j, 0, 1, b, navy, "#ffffff", "bold", 12)
+        ax.add_patch(plt.Rectangle((first_w + j, 0), 1, 1, facecolor=navy, edgecolor="#d9d6cf", lw=0.8))
+        ax.text(first_w + j + 0.5, 0.36 if same_n else 0.5, b, ha="center", va="center",
+                color="#ffffff", fontsize=13, fontweight="bold")
+        if same_n:
+            ax.text(first_w + j + 0.5, 0.74, f"{int(tab[f'{b}_n_frames'].iloc[0]):,} fr",
+                    ha="center", va="center", color="#c9d2e3", fontsize=9.5)
     for i, (_, r) in enumerate(tab.iterrows(), start=1):
         cell(0, i, first_w, r["site"], light, "#c8651b", "bold", 11)
         for j, b in enumerate(cols):
@@ -197,8 +205,8 @@ def _table_png(tab, cols, title, out_path):
                 continue
             t = min(max(v, 0) / 80.0, 1.0)                     # 80 % and above = full shade
             fc = tuple(1 - t * (1 - accent))
-            cell(first_w + j, i, 1, f"{v:.0f}%\n{n:,} fr", fc, "#1b2233",
-                 "bold" if b == "all" else "normal", 10.5)
+            txt = f"{v:.1f}%" if same_n else f"{v:.1f}%\n{n:,} fr"
+            cell(first_w + j, i, 1, txt, fc, "#1b2233", "bold" if b == "all" else "normal", 12)
     ax.set_title(title, fontsize=11, pad=8)
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
