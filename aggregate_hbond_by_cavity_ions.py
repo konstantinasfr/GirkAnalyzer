@@ -20,6 +20,9 @@ OUTPUT  <system>/hbond_by_cavity_ions_summary/<pair>/[HIGH|TYPICAL|LOW/]
     by_ion_count_per_run.csv    one row per run and bin
     by_ion_count_mean_sd.csv    bin, n_runs_used, mean/sd of pct_any, pct_sc_any, pct_sc_sc
     by_ion_count_<type>.png     pooled bars (n frames on top) with the per-run mean +- SD
+and <system>/hbond_by_cavity_ions_summary/tables/[HIGH|TYPICAL|LOW/]table_<type>.csv/.png:
+    every pair in one table, rows = pairs, columns = K+ in the cavity and all, each cell =
+    % of frames with the bond (all runs pooled) and the number of frames
 """
 
 import argparse
@@ -114,6 +117,94 @@ def aggregate(runs, out_dir, title, min_frames, max_k=MAX_K):
     print(f"  -> {out_dir}")
 
 
+AA1 = {"ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C", "GLN": "Q", "GLU": "E", "GLY": "G",
+       "HIS": "H", "HIE": "H", "HID": "H", "HIP": "H", "ILE": "I", "LEU": "L", "LYS": "K", "MET": "M",
+       "PHE": "F", "PRO": "P", "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V"}
+TYPE_TITLE = {"sc_sc": "side chain–side chain H-bond", "sc_any": "H-bond with a side chain",
+              "any": "any H-bond (incl. backbone)"}
+
+
+def pair_label(pair):
+    """SER148_2a_GLU152_2a -> 'S148–E152.2a';  PHE137_G1_GLU141_G1 -> 'F137–E141.G1'."""
+    import re
+    m = re.match(r"([A-Z]{3})(\d+)_([^_]+)_([A-Z]{3})(\d+)_([^_]+)$", pair)
+    if not m:
+        return pair
+    ra, na, ca, rb, nb, cb = m.groups()
+    a, b = AA1.get(ra, ra), AA1.get(rb, rb)
+    return f"{a}{na}–{b}{nb}.{cb}" if ca == cb else f"{a}{na}.{ca}–{b}{nb}.{cb}"
+
+
+def _row_order(pair):
+    sub = pair.rsplit("_", 1)[-1]
+    return (0 if sub.upper().startswith("G") else 1, sub, pair)
+
+
+def combined_tables(frames_by_pair, out_dir, title, max_k=MAX_K):
+    """One table per bond type: rows = pairs, columns = K+ in the cavity (0 .. 5+) and all;
+    each cell = % of frames with the bond and the number of frames. CSV + PNG."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    order = bin_order(max_k)
+    pairs = sorted(frames_by_pair, key=_row_order)
+    tabs = {p: summarize(frames_by_pair[p], max_k).set_index("bin") for p in pairs}
+    # leave out K+ bins without frames in any pair
+    cols = [b for b in order if any(tabs[p].loc[b, "n_frames"] > 0 for p in pairs)] + ["all"]
+    for bt in BOND_TYPES:
+        rows = []
+        for p in pairs:
+            row = {"site": pair_label(p), "pair": p}
+            df = frames_by_pair[p]
+            for b in cols:
+                if b == "all":
+                    n, v = len(df), 100.0 * df[bt].mean() if len(df) else np.nan
+                else:
+                    n, v = int(tabs[p].loc[b, "n_frames"]), tabs[p].loc[b, f"pct_{bt}"]
+                row[f"{b}_pct"] = v
+                row[f"{b}_n_frames"] = n
+            rows.append(row)
+        tab = pd.DataFrame(rows)
+        tab.to_csv(out_dir / f"table_{bt}.csv", index=False, float_format="%.2f")
+        _table_png(tab, cols, f"{title}\n{TYPE_TITLE[bt]}: % of frames, by K+ in the Glu–Asn cavity",
+                   out_dir / f"table_{bt}.png")
+    print(f"  combined tables -> {out_dir}")
+
+
+def _table_png(tab, cols, title, out_path):
+    from matplotlib.colors import to_rgb
+    navy, light, accent = "#1f3b5c", "#ffffff", np.array(to_rgb("#e8a35c"))
+    nr, nc = len(tab) + 1, len(cols) + 1
+    fig_w, fig_h = 1.6 + 1.25 * len(cols), 0.9 + 0.62 * nr
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.set_xlim(0, nc)
+    ax.set_ylim(nr, 0)
+    ax.axis("off")
+    first_w = 1.0
+
+    def cell(x, y, w, text, fc, color="#1b2233", weight="normal", size=11):
+        ax.add_patch(plt.Rectangle((x, y), w, 1, facecolor=fc, edgecolor="#d9d6cf", lw=0.8))
+        ax.text(x + w / 2, y + 0.5, text, ha="center", va="center", color=color, fontsize=size,
+                fontweight=weight)
+
+    cell(0, 0, first_w, "K+ in cavity →", navy, "#ffffff", "bold", 10)
+    for j, b in enumerate(cols):
+        cell(first_w + j, 0, 1, b, navy, "#ffffff", "bold", 12)
+    for i, (_, r) in enumerate(tab.iterrows(), start=1):
+        cell(0, i, first_w, r["site"], light, "#c8651b", "bold", 11)
+        for j, b in enumerate(cols):
+            v, n = r[f"{b}_pct"], int(r[f"{b}_n_frames"])
+            if n == 0 or v != v:
+                cell(first_w + j, i, 1, "–", light, "#9a968c")
+                continue
+            t = min(max(v, 0) / 80.0, 1.0)                     # 80 % and above = full shade
+            fc = tuple(1 - t * (1 - accent))
+            cell(first_w + j, i, 1, f"{v:.0f}%\n{n:,} fr", fc, "#1b2233",
+                 "bold" if b == "all" else "normal", 10.5)
+    ax.set_title(title, fontsize=11, pad=8)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("system_dir", help="folder with RUN*/ (e.g. .../girk_analyser_results/G12)")
@@ -138,11 +229,17 @@ def main():
     elif not args.no_categories:
         print(f"(no {CATEGORY_FILE}: no HIGH/TYPICAL/LOW split)")
 
+    per_group = {"ALL": {}, "HIGH": {}, "TYPICAL": {}, "LOW": {}}
     for pair in pairs:
         runs = load_runs(base, pair)
         if not runs:
             print(f"{pair}: no runs")
             continue
+        per_group["ALL"][pair] = pd.concat(runs.values(), ignore_index=True)
+        for cat in ("HIGH", "TYPICAL", "LOW"):
+            sub = [d for r, d in runs.items() if cats.get(r) == cat]
+            if sub:
+                per_group[cat][pair] = pd.concat(sub, ignore_index=True)
         out = base / "hbond_by_cavity_ions_summary" / pair
         print(f"\n=== {pair}: {len(runs)} runs ({', '.join(runs)}) ===")
         aggregate(runs, out, f"{pair}  ({base.name}, {len(runs)} runs)", args.min_frames)
@@ -150,6 +247,13 @@ def main():
             sub = {r: d for r, d in runs.items() if cats.get(r) == cat}
             if sub:
                 aggregate(sub, out / cat, f"{pair} [{cat}]  ({base.name}, {len(sub)} runs)", args.min_frames)
+
+    # one table per bond type with every pair (all runs pooled), also per permeation group
+    tdir = base / "hbond_by_cavity_ions_summary" / "tables"
+    for grp, fb in per_group.items():
+        if fb:
+            combined_tables(fb, tdir if grp == "ALL" else tdir / grp,
+                            f"{base.name}" + ("" if grp == "ALL" else f" [{grp}]"))
 
 
 if __name__ == "__main__":
