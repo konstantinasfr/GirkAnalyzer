@@ -22,7 +22,9 @@ OUTPUT  <system>/hbond_by_cavity_ions_summary/<pair>/[HIGH|TYPICAL|LOW/]
     by_ion_count_<type>.png     pooled bars (n frames on top) with the per-run mean +- SD
 and <system>/hbond_by_cavity_ions_summary/tables/[HIGH|TYPICAL|LOW/]table_<type>.csv/.png:
     every pair in one table, rows = pairs, columns = K+ in the cavity and all, each cell =
-    % of frames with the bond (all runs pooled) and the number of frames
+    % of frames with the bond (all runs pooled) and the number of frames;
+    tables/by_partner/<position>_<residues>/: the same, one table per partner residue (GIRK1 rows
+    matched by the 11-residue offset: F137.G1 with S148, Q165.G1 with Q176)
 """
 
 import argparse
@@ -140,10 +142,42 @@ def _row_order(pair):
     return (0 if sub.upper().startswith("G") else 1, sub, pair)
 
 
-def combined_tables(frames_by_pair, out_dir, title, max_k=MAX_K):
+GIRK1_OFFSET = 11      # GIRK1 numbering is 11 lower than the matching GIRK2 position
+
+
+def partner_key(pair):
+    """(GIRK2-equivalent position, residue name, number, chain) of the FIRST residue of the pair
+    (the partner of the Glu); a GIRK1 residue is moved up by 11 so F137.G1 groups with S148,
+    Q165.G1 with Q176."""
+    import re
+    m = re.match(r"([A-Z]{3})(\d+)_([^_]+)_", pair)
+    if not m:
+        return None
+    res, num, chain = m.group(1), int(m.group(2)), m.group(3)
+    pos = num + GIRK1_OFFSET if chain.upper().startswith("G1") else num
+    return pos, res, num, chain
+
+
+def combined_tables(frames_by_pair, out_dir, title, max_k=MAX_K, by_partner=True):
     """One table per bond type: rows = pairs, columns = K+ in the cavity (0 .. 5+) and all;
-    each cell = % of frames with the bond and the number of frames. CSV + PNG."""
+    each cell = % of frames with the bond and the number of frames. CSV + PNG.
+    by_partner: also one table per partner residue (the first residue of each pair, GIRK1 rows
+    matched to GIRK2 by the 11-residue offset) in out_dir/by_partner/<position>_<names>/."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    if by_partner:
+        groups = {}
+        for p in frames_by_pair:
+            k = partner_key(p)
+            if k is not None:
+                groups.setdefault(k[0], []).append((k, p))
+        if len(groups) > 1:
+            for pos, items in sorted(groups.items()):
+                names = sorted({f"{AA1.get(k[1], k[1])}{k[2]}" + (".G1" if k[3].upper().startswith("G1") else "")
+                                for k, _ in items}, key=lambda n: n.endswith(".G1"))
+                gname = f"{pos}_" + "_".join(n.replace(".", "") for n in names)
+                gtitle = f"{title} — partner {' / '.join(n.replace('.G1', ' (GIRK1)') for n in names)}"
+                combined_tables({p: frames_by_pair[p] for _, p in items}, out_dir / "by_partner" / gname,
+                                gtitle, max_k, by_partner=False)
     order = bin_order(max_k)
     pairs = sorted(frames_by_pair, key=_row_order)
     tabs = {p: summarize(frames_by_pair[p], max_k).set_index("bin") for p in pairs}
