@@ -9,8 +9,8 @@ USAGE
   python3 aggregate_cavity_esp.py \\
       --system G12=/path/girk_analyser_results/G12 \\
       --system G2=/path/girk_analyser_results/G2 \\
-      --system D173N=/path/girk_analyser_results/G12_D173N \\
-      --system E141Q=/path/girk_analyser_results/G12_E141Q \\
+      --system D173N=/path/girk_analyser_results/G12_D173N,/path/girk_analyser_results/G12_D173N_4fs \\
+      --system E141Q=/path/girk_analyser_results/G12_E141Q,/path/girk_analyser_results/G12_E141Q_4fs \\
       [--out cavity_esp_summary] [--no_eq] [--boot 5000]
 The first --system is the reference for the differences. The equilibration start of each run is read from
 <system>/aggregated_site_chain/<settings>/equilibration.csv (used_start_frame) when it exists; frames of
@@ -43,7 +43,7 @@ FOUR = "four-subunit mean"
 COLORS = ["#1F4E79", "#D9784F", "#13896B", "#C0392B", "#6B6B6B", "#3B7DD8"]
 
 
-def load_system(base, use_eq=True):
+def load_one(base, use_eq=True):
     base = Path(base)
     fr = [pd.read_csv(f) for f in sorted(base.glob("RUN*/cavity_esp/esp_frames_run*.csv"))]
     pr = [pd.read_csv(f) for f in sorted(base.glob("RUN*/cavity_esp/esp_profile_run*.csv.gz"))]
@@ -58,11 +58,30 @@ def load_system(base, use_eq=True):
             eq = dict(zip(t["run"].astype(int), t["used_start_frame"].fillna(0).astype(int)))
             print(f"  {base.name}: equilibration starts from {f}")
             break
-    start = frames["run"].map(eq).fillna(0)
-    frames["after_eq"] = frames["frame"] >= start
+        if not eq:
+            print(f"  {base.name}: no equilibration.csv found, all frames used")
+    frames["after_eq"] = frames["frame"] >= frames["run"].map(eq).fillna(0)
     if len(prof):
         prof = prof[prof["frame"] >= prof["run"].map(eq).fillna(0)]
-    return frames, prof, eq
+    return frames, prof
+
+
+def load_system(paths, use_eq=True):
+    """One or more folders (comma-separated) pooled as one system; with several folders the runs are
+    renamed <folder>:<run> so that RUN1 of one folder is not mixed with RUN1 of another."""
+    paths = [p for p in paths.split(",") if p]
+    F, P = [], []
+    for p in paths:
+        fr, pr = load_one(p, use_eq)
+        if len(paths) > 1:
+            tag = Path(p).name
+            fr["run"] = tag + ":" + fr["run"].astype(str)
+            if len(pr):
+                pr["run"] = tag + ":" + pr["run"].astype(str)
+        F.append(fr)
+        if len(pr):
+            P.append(pr)
+    return pd.concat(F, ignore_index=True), (pd.concat(P, ignore_index=True) if P else pd.DataFrame()), None
 
 
 def add_four(frames):
@@ -95,7 +114,7 @@ def boot_diff(a, b, n=5000, seed=1):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--system", action="append", required=True, help="LABEL=PATH (folder holding RUN*/)")
+    ap.add_argument("--system", action="append", required=True, help="LABEL=PATH[,PATH2...] (folders holding RUN*/; several folders = one system, runs kept apart)")
     ap.add_argument("--out", default="cavity_esp_summary")
     ap.add_argument("--no_eq", action="store_true", help="use all frames (no equilibration cut)")
     ap.add_argument("--boot", type=int, default=5000)
