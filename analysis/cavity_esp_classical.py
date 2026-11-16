@@ -141,7 +141,7 @@ def mesh_xyz(p0, p1, t, r, a):
 
 def potential_by_group(points, xyz, q, groups, names):
     """(total V per point, {group: V per point}); V = 332.06 sum q/r."""
-    d = np.linalg.norm(points[:, None, :] - xyz[None, :, :], axis=2)
+    d = _dist(points, xyz)
     w = COULOMB * q[None, :] / np.maximum(d, 1e-6)
     return w.sum(axis=1), {g: w[:, groups == g].sum(axis=1) for g in names}, d.min(axis=1)
 
@@ -166,6 +166,15 @@ def inward(universe, pairs):
     return out
 
 
+def _dist(a, b):
+    """Pairwise distances (fast C routine of MDAnalysis when available)."""
+    try:
+        from MDAnalysis.lib.distances import distance_array
+        return distance_array(np.ascontiguousarray(a, dtype=np.float64), np.ascontiguousarray(b, dtype=np.float64))
+    except ImportError:
+        return np.linalg.norm(a[:, None, :] - b[None, :, :], axis=2)
+
+
 def cyl_mask(points, p0, p1, radius, extend):
     u = (p1 - p0) / np.linalg.norm(p1 - p0)
     rel = points - p0
@@ -179,7 +188,7 @@ def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0,
     """(rows, profile rows) for the current frame."""
     xyz = atoms.positions.astype(float)
     rmin = np.array([JAG_RMIN.get(n[0].upper(), 1.94) for n in atoms.names])
-    jag_all = (xyz[:, None, :] + _JAG_DIRS[None, :, :]).reshape(-1, 3)
+
     names = [str(r) for p in pairs for r in p] + ["caps"]
     inw = inward(universe, pairs)
     max_r_o = float(np.nanmax([v[2] for v in inw.values()]))
@@ -201,9 +210,12 @@ def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0,
             key = "caps" if nmx == "caps" else labels.get(int(nmx), nmx)
             row[f"contrib_{key}"] = parts[nmx][keep].mean()
         # the Jaguar-like grid in the same cylinder
-        jp = jag_all[cyl_mask(jag_all, p0, p1, radius, extend)]
+        # only atoms whose spheres can reach the cylinder carry candidate points
+        near = cyl_mask(xyz, p0, p1, radius + JAG_RADII[-1], extend + JAG_RADII[-1])
+        cand = (xyz[near][:, None, :] + _JAG_DIRS[None, :, :]).reshape(-1, 3)
+        jp = cand[cyl_mask(cand, p0, p1, radius, extend)]
         if len(jp):
-            dj = np.linalg.norm(jp[:, None, :] - xyz[None, :, :], axis=2)
+            dj = _dist(jp, xyz)
             jp, dj = jp[(dj >= rmin[None, :] - 1e-6).all(axis=1)], dj[(dj >= rmin[None, :] - 1e-6).all(axis=1)]
         if len(jp):
             vj = COULOMB * (q[None, :] / np.maximum(dj, 1e-6)).sum(axis=1)
