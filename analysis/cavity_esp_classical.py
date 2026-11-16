@@ -41,6 +41,9 @@ OUTPUT  <results_dir>/cavity_esp/esp_frames_run<run>.csv     one row per frame a
         <results_dir>/cavity_esp/esp_profile_run<run>.csv.gz  frame, cylinder, axial bin, mean
         <results_dir>/cavity_esp/esp_atoms_run<run>.txt       the atoms used and their charges
         <results_dir>/cavity_esp/esp_run<run>.png             over time, distribution, axial profile
+        <results_dir>/cavity_esp/esp_hist_run<run>.npz / .png  histogram of the ESP over the cylinder points
+                                                               (5 kcal/mol bins), per frame; plot pooled over
+                                                               frames, like esp_cylinders.py
 """
 
 from pathlib import Path
@@ -62,6 +65,9 @@ def _fib(n):
     phi = np.arccos(1 - 2 * i / n)
     th = np.pi * (1 + 5 ** 0.5) * i
     return np.c_[np.cos(th) * np.sin(phi), np.sin(th) * np.sin(phi), np.cos(phi)]
+
+
+HIST_EDGES = np.arange(-500.0, 0.0 + 1e-9, 5.0)     # 5 kcal/mol bins, as in esp_cylinders.py
 
 
 _JAG_DIRS = np.concatenate([r * _fib(n) for r, n in zip(JAG_RADII, JAG_NPTS)])
@@ -227,6 +233,7 @@ def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0,
             row.update(jag_n=len(vj), jag_mean=vj.mean(), jag_median=np.median(vj), jag_sd=vj.std(ddof=1))
         else:
             row.update(jag_n=0, jag_mean=np.nan, jag_median=np.nan, jag_sd=np.nan)
+        row["_hist"] = np.histogram(np.clip(v, HIST_EDGES[0], HIST_EDGES[-1] - 1e-6), HIST_EDGES)[0].astype(np.uint16)
         rows.append(row)
         b = np.floor((t[keep] + extend) / bin_w).astype(int)
         for k in np.unique(b):
@@ -265,12 +272,14 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
     end = n - 1 if end_frame is None else min(end_frame, n - 1)
     frames = sorted(set(range(start_frame, end + 1, stride)) | {int(f) for f in extra_frames if 0 <= int(f) < n})
     extra = {int(f) for f in extra_frames}
-    rows, prof = [], []
+    f_hist = od / f"esp_hist_run{run}.npz"
+    rows, prof, hists = [], [], []
     for f in tqdm(frames, desc=f"cavity_esp RUN{run}", unit="frame"):
         universe.trajectory[f]
         r_, p_ = frame_esp(universe, pairs, atoms, q, groups, labels, jaguar=f in extra)
         for r in r_:
             r.update(run=run, frame=f, time_ns=f * frame_duration, frame_of_interest=f in extra)
+            hists.append(r.pop("_hist"))
         rows += r_
         prof += [(run, f, c, t, v) for c, t, v in p_]
     cols = ["run", "frame", "time_ns", "frame_of_interest", "cylinder", "upper", "lower", "length_A",
@@ -281,9 +290,65 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
     df.to_csv(f_rows, index=False, float_format="%.3f")
     pd.DataFrame(prof, columns=["run", "frame", "cylinder", "t_A", "mean"]).to_csv(f_prof, index=False,
                                                                                     float_format="%.3f")
+    np.savez_compressed(f_hist, edges=HIST_EDGES, frame=df["frame"].to_numpy(), cylinder=df["cylinder"].to_numpy().astype(str),
+                        counts=np.array(hists))
     print(f"cavity_esp: wrote {f_rows} ({len(frames)} frames, cluster charge {q.sum():+.2f})")
+    plot_hist(df, np.array(hists), od / f"esp_hist_run{run}.png", f"{channel_type} RUN{run}")
     plot_run(df, pd.DataFrame(prof, columns=["run", "frame", "cylinder", "t_A", "mean"]), od / f"esp_run{run}.png",
              f"{channel_type} RUN{run}")
+
+
+def hist_stats(counts, edges):
+    """Mean and median of the values behind a histogram (bin centres; the median interpolated in its bin)."""
+    c = counts.astype(float)
+    if c.sum() == 0:
+        return np.nan, np.nan
+    mid = 0.5 * (edges[:-1] + edges[1:])
+    cum = np.cumsum(c) / c.sum()
+    k = int(np.searchsorted(cum, 0.5))
+    lo = cum[k - 1] if k else 0.0
+    med = edges[k] + (0.5 - lo) / max(cum[k] - lo, 1e-12) * (edges[k + 1] - edges[k])
+    return float((mid * c).sum() / c.sum()), float(med)
+
+
+def plot_hist_panels(cyl_counts, edges, path, title, overlay=None, xlim=(-300, -50)):
+    """2 x 2 panels like esp_cylinders.py: % of points per 5 kcal/mol bin, mean and median lines.
+    cyl_counts: {cylinder: counts}; overlay: {cylinder: counts} drawn as a black step line (e.g. a QM frame)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    names = list(cyl_counts)
+    fig, axes = plt.subplots(int(np.ceil(len(names) / 2)), 2, figsize=(11, 3.9 * int(np.ceil(len(names) / 2))), squeeze=False)
+    for ax, c in zip(axes.ravel(), names):
+        cnt = cyl_counts[c].astype(float)
+        frac = 100 * cnt / max(cnt.sum(), 1)
+        ax.bar(edges[:-1], frac, width=np.diff(edges), align="edge", color="#3b6ea5", alpha=0.85, edgecolor="white", lw=0.3)
+        m, md = hist_stats(cnt, edges)
+        ax.axvline(m, color="crimson", ls="--", lw=1.5, label=f"mean {m:.1f}")
+        ax.axvline(md, color="darkorange", ls="-.", lw=1.5, label=f"median {md:.1f}")
+        if overlay and c in overlay:
+            o = overlay[c].astype(float)
+            ax.step(edges[:-1], 100 * o / max(o.sum(), 1), where="post", color="#1B2631", lw=1.2, label="frame of interest")
+        ax.set_title(f"{c}   ({int(cnt.sum()):,} points)", fontsize=11)
+        ax.set_xlim(*xlim)
+        ax.set_xlabel("ESP (kcal/mol per +1e)")
+        ax.set_ylabel("% of points")
+        ax.grid(alpha=0.25)
+        ax.legend(fontsize=8, loc="upper left")
+    for ax in axes.ravel()[len(names):]:
+        ax.axis("off")
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def plot_hist(df, hists, path, title):
+    cyl = list(dict.fromkeys(df["cylinder"]))
+    allc = {c: hists[(df["cylinder"] == c).to_numpy()].sum(axis=0) for c in cyl}
+    foi = df["frame_of_interest"].to_numpy()
+    over = {c: hists[(df["cylinder"] == c).to_numpy() & foi].sum(axis=0) for c in cyl} if foi.any() else None
+    plot_hist_panels(allc, HIST_EDGES, path, f"{title}: ESP over the cylinder points, all frames (5 kcal/mol bins)", over)
 
 
 def plot_run(df, prof, path, title):

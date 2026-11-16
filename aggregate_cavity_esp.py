@@ -28,7 +28,9 @@ OUTPUTS (in --out)
   contributions.csv        per system and cylinder: the mean contribution of each ring residue and the caps
   profiles.csv             axial profile (distance from the Glu CA): mean over runs, SD between runs
   cavity_esp.txt, per_run.png (each run), cylinders.png (each cylinder), profiles.png (axial profiles),
-  frames_hist.png (distribution over frames), timeseries.png (each run over time)
+  frames_hist.png (distribution over frames), timeseries.png (each run over time),
+  hist_<system>.png  histogram of the ESP over all cylinder points of all frames after equilibration, 2 x 2 like
+                     esp_cylinders.py (5 kcal/mol bins, -300..-50); black line = the frame(s) of interest
 """
 
 import argparse
@@ -41,6 +43,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 FOUR = "four-subunit mean"
+HIST = {}
 GRID = "mesh"
 COLORS = ["#1F4E79", "#D9784F", "#13896B", "#C0392B", "#6B6B6B", "#3B7DD8"]
 
@@ -63,6 +66,23 @@ def load_one(base, use_eq=True):
         if not eq:
             print(f"  {base.name}: no equilibration.csv found, all frames used")
     frames["after_eq"] = frames["frame"] >= frames["run"].map(eq).fillna(0)
+    # pooled histograms of the ESP over the cylinder points (after equilibration) and of the frames of interest
+    hist, hist_foi = {}, {}
+    if GRID == "mesh":
+        foi_set = set(zip(frames.loc[frames["frame_of_interest"], "run"], frames.loc[frames["frame_of_interest"], "frame"]))
+        for f in sorted(base.glob("RUN*/cavity_esp/esp_hist_run*.npz")):
+            run = int(f.stem.replace("esp_hist_run", ""))
+            z = np.load(f, allow_pickle=False)
+            ok = z["frame"] >= eq.get(run, 0)
+            isf = np.array([(run, int(fr)) in foi_set for fr in z["frame"]])
+            for c in np.unique(z["cylinder"]):
+                sel = z["cylinder"] == c
+                hist[c] = hist.get(c, 0) + z["counts"][sel & ok].sum(axis=0).astype(np.int64)
+                if isf.any():
+                    hist_foi[c] = hist_foi.get(c, 0) + z["counts"][sel & isf].sum(axis=0).astype(np.int64)
+            HIST["edges"] = z["edges"]
+    HIST.setdefault(str(base), (hist, hist_foi))
+    HIST[str(base)] = (hist, hist_foi)
     if GRID == "jaguar":
         if "jag_mean" not in frames:
             raise SystemExit(f"{base}: no Jaguar-like columns (run the newer cavity_esp_classical.py)")
@@ -352,6 +372,26 @@ def main():
     fig.tight_layout()
     fig.savefig(od / "timeseries.png", dpi=170)
     plt.close(fig)
+
+    # 9. histograms of the ESP over the cylinder points, like esp_cylinders.py, pooled per system
+    if "edges" in HIST:
+        from analysis.cavity_esp_classical import plot_hist_panels, hist_stats
+        for s_arg in a.system:
+            lab, paths = s_arg.split("=", 1)
+            hc, hf = {}, {}
+            for pth in paths.split(","):
+                h, f_ = HIST.get(str(Path(pth)), ({}, {}))
+                for c, v in h.items():
+                    hc[c] = hc.get(c, 0) + v
+                for c, v in f_.items():
+                    hf[c] = hf.get(c, 0) + v
+            if hc:
+                plot_hist_panels(hc, HIST["edges"], od / f"hist_{lab}.png",
+                                 f"{lab}: ESP over the cylinder points, all runs, all frames after equilibration (5 kcal/mol bins)",
+                                 hf or None)
+                lines.append(f"\nPOINT HISTOGRAM {lab} (all points, all frames after equilibration): " + ", ".join(
+                    f"{c.split('/')[0]} mean {hist_stats(v, HIST['edges'])[0]:.1f} median {hist_stats(v, HIST['edges'])[1]:.1f}"
+                    for c, v in hc.items()))
 
     (od / "cavity_esp.txt").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
