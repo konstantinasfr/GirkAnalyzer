@@ -18,7 +18,8 @@ are rebuilt in every frame from that frame's CA atoms, so they move with the pro
 
 POINTS, two grids per cylinder:
   regular mesh (columns mean, median, sd, n_points): even sampling, the fair grid between frames and systems;
-  Jaguar-like (columns jag_mean, jag_median, jag_sd, jag_n): spheres around every cluster atom at the radii of
+  Jaguar-like (columns jag_mean, jag_median, jag_sd, jag_n; ONLY for the frames of interest, NaN elsewhere):
+  spheres around every cluster atom at the radii of
   the Jaguar ESP grid (JAG_RADII), points nearer than an element's minimum distance (JAG_RMIN) removed, as
   measured from the frame-5606 .resp; comparable to the QM numbers of esp_cylinders.py.
 Regular mesh: Jaguar points exist only for the QM frames, so every frame gets a regular mesh inside each
@@ -184,7 +185,7 @@ def cyl_mask(points, p0, p1, radius, extend):
 
 
 def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0, step=0.5, exclude=1.4,
-              bin_w=0.5):
+              bin_w=0.5, jaguar=True):
     """(rows, profile rows) for the current frame."""
     xyz = atoms.positions.astype(float)
     rmin = np.array([JAG_RMIN.get(n[0].upper(), 1.94) for n in atoms.names])
@@ -209,11 +210,14 @@ def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0,
         for nmx in names:
             key = "caps" if nmx == "caps" else labels.get(int(nmx), nmx)
             row[f"contrib_{key}"] = parts[nmx][keep].mean()
-        # the Jaguar-like grid in the same cylinder
+        # the Jaguar-like grid in the same cylinder (only when asked: the frames of interest)
         # only atoms whose spheres can reach the cylinder carry candidate points
-        near = cyl_mask(xyz, p0, p1, radius + JAG_RADII[-1], extend + JAG_RADII[-1])
-        cand = (xyz[near][:, None, :] + _JAG_DIRS[None, :, :]).reshape(-1, 3)
-        jp = cand[cyl_mask(cand, p0, p1, radius, extend)]
+        if jaguar:
+            near = cyl_mask(xyz, p0, p1, radius + JAG_RADII[-1], extend + JAG_RADII[-1])
+            cand = (xyz[near][:, None, :] + _JAG_DIRS[None, :, :]).reshape(-1, 3)
+            jp = cand[cyl_mask(cand, p0, p1, radius, extend)]
+        else:
+            jp = np.empty((0, 3))
         if len(jp):
             dj = _dist(jp, xyz)
             jp, dj = jp[(dj >= rmin[None, :] - 1e-6).all(axis=1)], dj[(dj >= rmin[None, :] - 1e-6).all(axis=1)]
@@ -263,7 +267,7 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
     rows, prof = [], []
     for f in tqdm(frames, desc=f"cavity_esp RUN{run}", unit="frame"):
         universe.trajectory[f]
-        r_, p_ = frame_esp(universe, pairs, atoms, q, groups, labels)
+        r_, p_ = frame_esp(universe, pairs, atoms, q, groups, labels, jaguar=f in extra)
         for r in r_:
             r.update(run=run, frame=f, time_ns=f * frame_duration, frame_of_interest=f in extra)
         rows += r_

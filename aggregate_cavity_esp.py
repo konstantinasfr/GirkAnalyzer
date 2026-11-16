@@ -110,8 +110,10 @@ def mark_inward(frames, label, max_r=None, tol=0.5):
 def add_four(frames):
     """Append, per frame, a 'four-subunit mean' row (mean of the four cylinder means)."""
     keys = ["run", "frame", "time_ns", "frame_of_interest", "all_inward", "after_eq"]
-    g = frames.groupby(keys, as_index=False).agg(mean=("mean", "mean"), median=("median", "mean"),
-                                                 sd=("sd", "mean"), n_points=("n_points", "sum"))
+    agg = dict(mean=("mean", "mean"), median=("median", "mean"), sd=("sd", "mean"), n_points=("n_points", "sum"))
+    if "jag_mean" in frames:
+        agg["jag_mean"] = ("jag_mean", "mean")
+    g = frames.groupby(keys, as_index=False).agg(**agg)
     g["cylinder"] = FOUR
     return pd.concat([frames, g], ignore_index=True)
 
@@ -142,8 +144,8 @@ def main():
     ap.add_argument("--no_eq", action="store_true", help="use all frames (no equilibration cut)")
     ap.add_argument("--boot", type=int, default=5000)
     ap.add_argument("--grid", choices=["mesh", "jaguar"], default="mesh",
-                    help="mesh: the regular grid (default); jaguar: the Jaguar-like grid, comparable to the QM numbers "
-                         "(no per-residue contributions, no profiles)")
+                    help="mesh: the regular grid (default, the analysis); jaguar: the Jaguar-like grid, computed only for the "
+                         "frames of interest (see frames_of_interest.csv)")
     ap.add_argument("--inward_max_r", type=float, default=None,
                     help="'all Glu pointing in' when all four carboxylates are within this distance (A) of the pore "
                          "axis; default: the largest value in that system's frames of interest (the QM frames) + 0.5 A")
@@ -175,7 +177,8 @@ def main():
 
     # 1. frames of interest
     foi = F[F["frame_of_interest"]].copy()
-    foi[["system", "run", "frame", "cylinder", "mean", "median", "sd", "n_points", "r_o_upper", "all_inward", "after_eq"]].to_csv(
+    foi[[c for c in ["system", "run", "frame", "cylinder", "mean", "median", "sd", "n_points", "jag_mean", "r_o_upper",
+                     "all_inward", "after_eq"] if c in foi]].to_csv(
         od / "frames_of_interest.csv", index=False, float_format="%.2f")
     if len(foi):
         lines.append("\nFRAMES OF INTEREST (exact values on the mesh)")
@@ -183,7 +186,8 @@ def main():
             lines.append(f"  {sy} RUN{run} frame {fr_}  (all Glu pointing in: {bool(g['all_inward'].iloc[0])})")
             for r in g.to_dict("records"):
                 lines.append(f"    {r['cylinder']:<20} mean {r['mean']:8.1f}  median {r['median']:8.1f}  "
-                             f"SD in cylinder {r['sd']:6.1f}")
+                             f"SD in cylinder {r['sd']:6.1f}"
+                             + (f"   Jaguar-like grid {r['jag_mean']:8.1f}" if r.get("jag_mean") == r.get("jag_mean") and "jag_mean" in r else ""))
 
     # 2. per run
     use = F[F["after_eq"]]
