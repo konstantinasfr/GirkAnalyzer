@@ -65,8 +65,21 @@ def load_one(base, use_eq=True):
             eq = dict(zip(t["run"].astype(int), t["used_start_frame"].fillna(0).astype(int)))
             print(f"  {base.name}: equilibration starts from {f}")
             break
-        if not eq:
-            print(f"  {base.name}: no equilibration.csv found, all frames used")
+        # runs missing from the pooled table: the per-run table written by run_site_chain (same RMSD rule)
+        for run in sorted(frames["run"].unique()):
+            if int(run) in eq:
+                continue
+            for f in sorted(base.glob(f"RUN{int(run)}/site_chain/*/equilibration.csv")):
+                t = pd.read_csv(f)
+                t = t[t["run"].astype(int) == int(run)]
+                if len(t):
+                    eq[int(run)] = int(t["used_start_frame"].fillna(0).iloc[0])
+                    print(f"  {base.name}: RUN{int(run)} not in the pooled equilibration.csv; start frame {eq[int(run)]} "
+                          f"from {f}")
+                    break
+        missing = [int(r) for r in sorted(frames["run"].unique()) if int(r) not in eq]
+        if missing:
+            print(f"  {base.name}: WARNING no equilibration start for RUN {missing}: all their frames are used")
     if MIN_T > 0:                                  # the later of the equilibration start and --min_time_ns
         dt = (frames["time_ns"] / frames["frame"].where(frames["frame"] > 0)).groupby(frames["run"]).median()
         for run, d in dt.items():
