@@ -83,6 +83,31 @@ def main():
         dif = dif[dif > 1e-3]
         mode = np.round(np.median(dif), 4) if len(dif) else np.nan
         print(f"  {axn}: {len(u)} distinct values; median gap {mode} A (few distinct values + constant gap = lattice)")
+    # spheres: distances from every point to EVERY atom within 6 A; the sphere radii are the sharp peaks
+    D, C = [], []
+    for s0 in range(0, len(grid), 5000):
+        d = np.linalg.norm(grid[s0:s0 + 5000, None, :] - atoms[None], axis=2)
+        i, j = np.where(d < 6.0)
+        D.append(d[i, j]); C.append(j)
+    D, C = np.concatenate(D), np.concatenate(C)
+    h, e = np.histogram(D, bins=np.arange(1.0, 6.0, 0.002))
+    base = np.convolve(h, np.ones(51) / 51, mode="same")
+    cand = [k for k in range(1, len(h) - 1) if h[k] >= h[k - 1] and h[k] >= h[k + 1] and h[k] > 4 * base[k] + 20]
+    radii = []
+    for k in cand:
+        sel = (D > e[k] - 0.004) & (D < e[k + 1] + 0.004)
+        radii.append(round(float(np.median(D[sel])), 4))
+    radii = sorted(set(radii))
+    print("\nSPHERES (sharp peaks of point-atom distances):")
+    print("  radius A | atoms with points on it | points per atom: median / max | by centre element (median)")
+    elarr = np.array(el)
+    for r in radii:
+        on = np.abs(D - r) < 0.003
+        cnt = np.bincount(C[on], minlength=len(atoms))
+        has = cnt > 0
+        byel = ", ".join(f"{E} {int(np.median(cnt[(elarr == E) & has])) if ((elarr == E) & has).any() else 0}"
+                         for E in sorted(set(el)))
+        print(f"  {r:7.4f} | {has.sum():4d} | {int(np.median(cnt[has])) if has.any() else 0:5d} / {cnt.max():5d} | {byel}")
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
