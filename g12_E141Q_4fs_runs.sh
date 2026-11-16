@@ -1,7 +1,7 @@
 python3 main.py --channel_type G12_E141Q_4fs --run_number 1 #--force_pkl_generation 
 python3 main.py --channel_type G12_E141Q_4fs --run_number 2 
 python3 main.py --channel_type G12_E141Q_4fs --run_number 3 
-# python3 main.py --channel_type G12_E141Q --run_number 4 
+python3 main.py --channel_type G12_E141Q_4fs --run_number 4
 # python3 main.py --channel_type G12_E141Q --run_number 5 
 # python3 main.py --channel_type G12_E141Q --run_number 6 
 # python3 main.py --channel_type G12_ML --run_number 7
