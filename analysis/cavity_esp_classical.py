@@ -41,6 +41,9 @@ OUTPUT  <results_dir>/cavity_esp/esp_frames_run<run>.csv     one row per frame a
         <results_dir>/cavity_esp/esp_profile_run<run>.csv.gz  frame, cylinder, axial bin, mean
         <results_dir>/cavity_esp/esp_atoms_run<run>.txt       the atoms used and their charges
         <results_dir>/cavity_esp/esp_run<run>.png             over time, distribution, axial profile
+        <results_dir>/cavity_esp/esp_axial_run<run>.npz / .png axial profile like esp_maps.py: median and IQR of all
+                                                               points in each 0.5 A slice (2D histograms summed
+                                                               over blocks of 10 frames)
         <results_dir>/cavity_esp/esp_hist_run<run>.npz / .png  histogram of the ESP over the cylinder points
                                                                (5 kcal/mol bins), per frame; plot pooled over
                                                                frames, like esp_cylinders.py
@@ -68,6 +71,8 @@ def _fib(n):
 
 
 HIST_EDGES = np.arange(-500.0, 0.0 + 1e-9, 5.0)     # 5 kcal/mol bins, as in esp_cylinders.py
+AX_EDGES = np.arange(-3.0, 20.0 + 1e-9, 0.5)        # 0.5 A slices along the cylinder (distance from the Glu CA)
+BLOCK = 10                                           # axial 2D histograms are summed over blocks of 10 frames
 
 
 _JAG_DIRS = np.concatenate([r * _fib(n) for r, n in zip(JAG_RADII, JAG_NPTS)])
@@ -234,6 +239,8 @@ def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0,
         else:
             row.update(jag_n=0, jag_mean=np.nan, jag_median=np.nan, jag_sd=np.nan)
         row["_hist"] = np.histogram(np.clip(v, HIST_EDGES[0], HIST_EDGES[-1] - 1e-6), HIST_EDGES)[0].astype(np.uint16)
+        row["_h2"] = np.histogram2d(np.clip(t[keep], AX_EDGES[0], AX_EDGES[-1] - 1e-6),
+                                    np.clip(v, HIST_EDGES[0], HIST_EDGES[-1] - 1e-6), [AX_EDGES, HIST_EDGES])[0]
         rows.append(row)
         b = np.floor((t[keep] + extend) / bin_w).astype(int)
         for k in np.unique(b):
@@ -273,13 +280,18 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
     frames = sorted(set(range(start_frame, end + 1, stride)) | {int(f) for f in extra_frames if 0 <= int(f) < n})
     extra = {int(f) for f in extra_frames}
     f_hist = od / f"esp_hist_run{run}.npz"
+    f_ax = od / f"esp_axial_run{run}.npz"
     rows, prof, hists = [], [], []
+    ax_blocks = {}                                   # (block, cylinder) -> summed 2D histogram
     for f in tqdm(frames, desc=f"cavity_esp RUN{run}", unit="frame"):
         universe.trajectory[f]
         r_, p_ = frame_esp(universe, pairs, atoms, q, groups, labels, jaguar=f in extra)
         for r in r_:
             r.update(run=run, frame=f, time_ns=f * frame_duration, frame_of_interest=f in extra)
             hists.append(r.pop("_hist"))
+            h2 = r.pop("_h2")
+            k = (f // BLOCK, r["cylinder"])
+            ax_blocks[k] = ax_blocks.get(k, 0) + h2
         rows += r_
         prof += [(run, f, c, t, v) for c, t, v in p_]
     cols = ["run", "frame", "time_ns", "frame_of_interest", "cylinder", "upper", "lower", "length_A",
@@ -294,6 +306,17 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
                         counts=np.array(hists))
     print(f"cavity_esp: wrote {f_rows} ({len(frames)} frames, cluster charge {q.sum():+.2f})")
     plot_hist(df, np.array(hists), od / f"esp_hist_run{run}.png", f"{channel_type} RUN{run}")
+    cyl = list(dict.fromkeys(df["cylinder"]))
+    blocks = sorted({b for b, _ in ax_blocks})
+    A = np.zeros((len(blocks), len(cyl), len(AX_EDGES) - 1, len(HIST_EDGES) - 1), np.uint16)   # <= 10 frames x ~2,500 points per bin
+    for (b, c), h in ax_blocks.items():
+        A[blocks.index(b), cyl.index(c)] = h
+    lengths = df.groupby("cylinder")["length_A"].mean()
+    np.savez_compressed(f_ax, ax_edges=AX_EDGES, esp_edges=HIST_EDGES, block=np.array(blocks), block_size=BLOCK,
+                        cylinder=np.array(cyl), counts=A, length=np.array([lengths[c] for c in cyl]))
+    plot_axial({c: A[:, i].sum(axis=0) for i, c in enumerate(cyl)}, {c: lengths[c] for c in cyl},
+               od / f"esp_axial_run{run}.png", f"{channel_type} RUN{run}  |  axial ESP profile, median and IQR over all "
+               f"points of all frames (r = 3.0 Å cylinder)")
     plot_run(df, pd.DataFrame(prof, columns=["run", "frame", "cylinder", "t_A", "mean"]), od / f"esp_run{run}.png",
              f"{channel_type} RUN{run}")
 
@@ -346,9 +369,53 @@ def plot_hist_panels(cyl_counts, edges, path, title, overlay=None, xlim=(-300, -
 def plot_hist(df, hists, path, title):
     cyl = list(dict.fromkeys(df["cylinder"]))
     allc = {c: hists[(df["cylinder"] == c).to_numpy()].sum(axis=0) for c in cyl}
-    foi = df["frame_of_interest"].to_numpy()
-    over = {c: hists[(df["cylinder"] == c).to_numpy() & foi].sum(axis=0) for c in cyl} if foi.any() else None
-    plot_hist_panels(allc, HIST_EDGES, path, f"{title}: ESP over the cylinder points, all frames (5 kcal/mol bins)", over)
+    plot_hist_panels(allc, HIST_EDGES, path, f"{title}: ESP over the cylinder points, all frames (5 kcal/mol bins)")
+
+
+def hist_quantiles(counts, edges, ps=(0.25, 0.5, 0.75)):
+    """Quantiles of the values behind a histogram (linear inside the bin); NaN if empty."""
+    c = counts.astype(float)
+    tot = c.sum()
+    if tot == 0:
+        return [np.nan] * len(ps)
+    cum = np.cumsum(c) / tot
+    out = []
+    for p in ps:
+        k = int(np.searchsorted(cum, p))
+        lo = cum[k - 1] if k else 0.0
+        out.append(edges[k] + (p - lo) / max(cum[k] - lo, 1e-12) * (edges[k + 1] - edges[k]))
+    return out
+
+
+def plot_axial(h2_by_cyl, length_by_cyl, path, title, ylim=(-280, -60), min_points=50):
+    """esp_maps.py-style axial profile: median and IQR of all points in each 0.5 A slice, one line per cylinder,
+    dashed line at the Glu CA (0), dotted lines at each cylinder's mean Asn/Asp CA position."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    cols = ["#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd", "#d62728"]
+    mid = 0.5 * (AX_EDGES[:-1] + AX_EDGES[1:])
+    fig, ax = plt.subplots(figsize=(10, 5.6))
+    for (c, h), col in zip(h2_by_cyl.items(), cols):
+        q = np.array([hist_quantiles(h[i], HIST_EDGES) if h[i].sum() >= min_points else [np.nan] * 3
+                      for i in range(len(mid))])
+        L = length_by_cyl[c]
+        keep = mid <= L + 3.0 + 1e-9
+        ax.plot(mid[keep], q[keep, 1], color=col, lw=2, label=f"{c}  ({int(h.sum()):,} points)")
+        ax.fill_between(mid[keep], q[keep, 0], q[keep, 2], color=col, alpha=0.18, lw=0)
+        ax.axvline(L, color=col, ls=":", lw=1, alpha=0.7)
+    ax.axvline(0, color="black", ls="--", lw=1.2)
+    ax.set_ylim(*ylim)
+    ax.text(0, ylim[1], " Glu CA", va="top", fontsize=10)
+    ax.text(np.mean(list(length_by_cyl.values())), ylim[1], " Asn/Asp CA", va="top", fontsize=10)
+    ax.set_xlabel("position along Glu-CA → Asn/Asp-CA axis (Å)")
+    ax.set_ylabel("ESP (kcal/mol per +1e)")
+    ax.set_title(title, fontsize=11)
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
 
 
 def plot_run(df, prof, path, title):

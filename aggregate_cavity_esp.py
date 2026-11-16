@@ -30,7 +30,8 @@ OUTPUTS (in --out)
   cavity_esp.txt, per_run.png (each run), cylinders.png (each cylinder), profiles.png (axial profiles),
   frames_hist.png (distribution over frames), timeseries.png (each run over time),
   hist_<system>.png  histogram of the ESP over all cylinder points of all frames after equilibration, 2 x 2 like
-                     esp_cylinders.py (5 kcal/mol bins, -300..-50); black line = the frame(s) of interest
+                     esp_cylinders.py (5 kcal/mol bins, -300..-50)
+  axial_<system>.png like esp_maps.py: median and IQR of all points in each 0.5 A slice, one line per cylinder
 """
 
 import argparse
@@ -81,8 +82,17 @@ def load_one(base, use_eq=True):
                 if isf.any():
                     hist_foi[c] = hist_foi.get(c, 0) + z["counts"][sel & isf].sum(axis=0).astype(np.int64)
             HIST["edges"] = z["edges"]
-    HIST.setdefault(str(base), (hist, hist_foi))
-    HIST[str(base)] = (hist, hist_foi)
+    # axial 2D histograms (blocks of frames after equilibration)
+    axial, lengths = {}, {}
+    if GRID == "mesh":
+        for f in sorted(base.glob("RUN*/cavity_esp/esp_axial_run*.npz")):
+            run = int(f.stem.replace("esp_axial_run", ""))
+            z = np.load(f, allow_pickle=False)
+            ok = z["block"] * int(z["block_size"]) >= eq.get(run, 0)
+            for i, c in enumerate(z["cylinder"]):
+                axial[c] = axial.get(c, 0) + z["counts"][ok, i].sum(axis=0).astype(np.int64)
+                lengths.setdefault(c, []).append(float(z["length"][i]))
+    HIST[str(base)] = (hist, hist_foi, axial, lengths)
     if GRID == "jaguar":
         if "jag_mean" not in frames:
             raise SystemExit(f"{base}: no Jaguar-like columns (run the newer cavity_esp_classical.py)")
@@ -378,17 +388,23 @@ def main():
         from analysis.cavity_esp_classical import plot_hist_panels, hist_stats
         for s_arg in a.system:
             lab, paths = s_arg.split("=", 1)
-            hc, hf = {}, {}
+            hc, hf, ha, hl = {}, {}, {}, {}
             for pth in paths.split(","):
-                h, f_ = HIST.get(str(Path(pth)), ({}, {}))
+                h, f_, ax_, ln_ = HIST.get(str(Path(pth)), ({}, {}, {}, {}))
                 for c, v in h.items():
                     hc[c] = hc.get(c, 0) + v
-                for c, v in f_.items():
-                    hf[c] = hf.get(c, 0) + v
+                for c, v in ax_.items():
+                    ha[c] = ha.get(c, 0) + v
+                for c, v in ln_.items():
+                    hl.setdefault(c, []).extend(v)
             if hc:
                 plot_hist_panels(hc, HIST["edges"], od / f"hist_{lab}.png",
-                                 f"{lab}: ESP over the cylinder points, all runs, all frames after equilibration (5 kcal/mol bins)",
-                                 hf or None)
+                                 f"{lab}: ESP over the cylinder points, all runs, all frames after equilibration (5 kcal/mol bins)")
+            if ha:
+                from analysis.cavity_esp_classical import plot_axial
+                plot_axial(ha, {c: float(np.mean(v)) for c, v in hl.items()}, od / f"axial_{lab}.png",
+                           f"{lab}  |  axial ESP profile, median and IQR over all points of all runs and frames after "
+                           f"equilibration (r = 3.0 Å)")
                 lines.append(f"\nPOINT HISTOGRAM {lab} (all points, all frames after equilibration): " + ", ".join(
                     f"{c.split('/')[0]} mean {hist_stats(v, HIST['edges'])[0]:.1f} median {hist_stats(v, HIST['edges'])[1]:.1f}"
                     for c, v in hc.items()))
