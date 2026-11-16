@@ -46,6 +46,7 @@ import matplotlib.pyplot as plt
 FOUR = "four-subunit mean"
 HIST = {}
 GRID = "mesh"
+MIN_T = 0.0          # --min_time_ns: also drop every frame before this time
 COLORS = ["#1F4E79", "#D9784F", "#13896B", "#C0392B", "#6B6B6B", "#3B7DD8"]
 
 
@@ -66,6 +67,11 @@ def load_one(base, use_eq=True):
             break
         if not eq:
             print(f"  {base.name}: no equilibration.csv found, all frames used")
+    if MIN_T > 0:                                  # the later of the equilibration start and --min_time_ns
+        dt = (frames["time_ns"] / frames["frame"].where(frames["frame"] > 0)).groupby(frames["run"]).median()
+        for run, d in dt.items():
+            if d == d and d > 0:
+                eq[int(run)] = max(eq.get(int(run), 0), int(np.ceil(MIN_T / d)))
     frames["after_eq"] = frames["frame"] >= frames["run"].map(eq).fillna(0)
     # pooled histograms of the ESP over the cylinder points (after equilibration) and of the frames of interest
     hist, hist_foi = {}, {}
@@ -173,6 +179,9 @@ def main():
     ap.add_argument("--system", action="append", required=True, help="LABEL=PATH[,PATH2...] (folders holding RUN*/; several folders = one system, runs kept apart)")
     ap.add_argument("--out", default="cavity_esp_summary")
     ap.add_argument("--no_eq", action="store_true", help="use all frames (no equilibration cut)")
+    ap.add_argument("--min_time_ns", type=float, default=0.0,
+                    help="also leave out every frame before this time (ns), e.g. 250 = only the last part of each run; "
+                         "a check that slow relaxation does not change the result")
     ap.add_argument("--boot", type=int, default=5000)
     ap.add_argument("--grid", choices=["mesh", "jaguar"], default="mesh",
                     help="mesh: the regular grid (default, the analysis); jaguar: the Jaguar-like grid, computed only for the "
@@ -183,6 +192,8 @@ def main():
     a = ap.parse_args()
     global GRID
     GRID = a.grid
+    global MIN_T
+    MIN_T = a.min_time_ns
     od = Path(a.out)
     od.mkdir(parents=True, exist_ok=True)
 
