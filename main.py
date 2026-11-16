@@ -2020,6 +2020,20 @@ def main():
     #         force_rerun=args.force_pkl_generation   # n_sf uses the SF cylinder ch1
     #     )
 
+    # CLASSICAL CAVITY ESP: the electrostatic potential in the Glu -> Asn/Asp cylinders of the QM analysis
+    # (esp_cylinders.py), from the force-field charges of the same atoms (8 ring residues + ACE/NME-like caps,
+    # no ions), on a regular mesh, every ~0.75 ns + the frames of interest (the QM frames). Validated against
+    # the QM with esp_classical_check.py. One pass per run -> cavity_esp/ (cached); pool with
+    # aggregate_cavity_esp.py.
+    from analysis.cavity_esp_classical import run_cavity_esp
+    ESP_FRAMES = {("G12", 3): [5606], ("G2", 14): [814], ("G12_E141Q", 5): [6220]}
+    run_cavity_esp(
+        u, glu_residues, asn_residues, results_dir=results_dir, run=run_number,
+        channel_type=args.channel_type, frame_duration=frame_duration,
+        extra_frames=ESP_FRAMES.get((args.channel_type, int(run_number)), []),
+        force_rerun=args.force_pkl_generation
+    )
+
     # # SITE-TO-SITE CHAIN: every permeating ion as visits to the GLU / ASN-ASP residues,
     # # state = residue | K+ above | K+ below when it leaves; network, exit by K+ counts
     # # (real and control), crowding checks, Markov tests. Only ions entering after the
