@@ -23,9 +23,10 @@ charge diverges there); the number dropped is recorded.
 
 PER FRAME AND CYLINDER: mean, median, SD (over the cylinder's points), Q1, Q3, the number of points, the
 CA-CA length, the contribution of each of the 8 ring residues and of the caps to the mean (they add up to
-it), and whether all four upper-ring side chains point into the pore (carboxylate / amide carbon CD closer
-to the pore axis than the CA; the pore axis goes through the centroid of the 8 CAs, along Glu ring -> lower
-ring). Axial profile: the mean in 0.5 A slices along the cylinder (distance from the Glu CA).
+it), and how far the upper-ring side chain reaches toward the pore axis: distances from the axis of its CA,
+CD and carboxylate oxygens (r_o_upper), and the largest r_o of the four in that frame (max_r_o_upper); the
+pore axis goes through the centroid of the 8 CAs, along Glu ring -> lower ring. "All Glu pointing in" is
+decided when pooling (aggregate_cavity_esp.py). Axial profile: the mean in 0.5 A slices along the cylinder.
 
 Frames: every `stride` frames (default: ~0.75 ns) plus any `extra_frames` (frames of interest, e.g. the
 QM frames), from frame 0; the equilibration cut is applied when pooling (aggregate_cavity_esp.py).
@@ -122,7 +123,8 @@ def potential_by_group(points, xyz, q, groups, names):
 
 
 def inward(universe, pairs):
-    """{upper resid: r(CD) - r(CA) from the pore axis (A, < 0 = side chain points in)}."""
+    """{upper resid: (r_CA, r_CD, r_O)}: distances (A) from the pore axis of the CA, the CD and the mean of
+    the side-chain terminal O / N (Glu OE1 OE2, Gln OE1 NE2). Small r_O = the carboxylate faces the lumen."""
     cas = np.array([universe.select_atoms(f"resid {r} and name CA").positions[0] for p in pairs for r in p])
     up = cas[0::2].mean(axis=0)
     lo = cas[1::2].mean(axis=0)
@@ -131,9 +133,12 @@ def inward(universe, pairs):
     rad = lambda x: np.linalg.norm((x - c) - np.dot(x - c, ax) * ax)
     out = {}
     for g, _ in pairs:
-        cd = universe.select_atoms(f"resid {g} and name CD CG")   # Glu / Gln CD (Asp CG if ever upper)
         ca = universe.select_atoms(f"resid {g} and name CA")
-        out[g] = rad(cd.positions[0]) - rad(ca.positions[0]) if len(cd) else np.nan
+        cd = universe.select_atoms(f"resid {g} and name CD")
+        tip = universe.select_atoms(f"resid {g} and name OE1 OE2 NE2")
+        out[g] = (rad(ca.positions[0]),
+                  rad(cd.positions[0]) if len(cd) else np.nan,
+                  rad(tip.positions.mean(axis=0)) if len(tip) else np.nan)
     return out
 
 
@@ -143,7 +148,7 @@ def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0,
     xyz = atoms.positions.astype(float)
     names = [str(r) for p in pairs for r in p] + ["caps"]
     inw = inward(universe, pairs)
-    all_in = bool(np.all([v < 0 for v in inw.values()]))
+    max_r_o = float(np.nanmax([v[2] for v in inw.values()]))
     rows, prof = [], []
     for g, l in pairs:
         p0 = universe.select_atoms(f"resid {g} and name CA").positions[0].astype(float)
@@ -156,7 +161,8 @@ def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0,
         v = V[keep]
         row = dict(cylinder=labels[(g, l)], upper=g, lower=l, length_A=length, n_points=int(keep.sum()),
                    n_excluded=int((~keep).sum()), mean=v.mean(), median=np.median(v), sd=v.std(ddof=1),
-                   q1=np.percentile(v, 25), q3=np.percentile(v, 75), inward_this=inw[g], all_inward=all_in)
+                   q1=np.percentile(v, 25), q3=np.percentile(v, 75), r_ca_upper=inw[g][0], r_cd_upper=inw[g][1],
+                   r_o_upper=inw[g][2], max_r_o_upper=max_r_o)
         for nmx in names:
             key = "caps" if nmx == "caps" else labels.get(int(nmx), nmx)
             row[f"contrib_{key}"] = parts[nmx][keep].mean()
@@ -207,7 +213,8 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
         rows += r_
         prof += [(run, f, c, t, v) for c, t, v in p_]
     cols = ["run", "frame", "time_ns", "frame_of_interest", "cylinder", "upper", "lower", "length_A",
-            "n_points", "n_excluded", "mean", "median", "sd", "q1", "q3", "inward_this", "all_inward"]
+            "n_points", "n_excluded", "mean", "median", "sd", "q1", "q3", "r_ca_upper", "r_cd_upper", "r_o_upper",
+            "max_r_o_upper"]
     df = pd.DataFrame(rows)
     df = df[cols + [c for c in df.columns if c not in cols]]
     df.to_csv(f_rows, index=False, float_format="%.3f")

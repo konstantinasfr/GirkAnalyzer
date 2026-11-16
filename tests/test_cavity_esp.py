@@ -74,5 +74,5 @@ chk("contributions add up to the mean", abs(sum(v for k, v in rows[0].items() if
 uax = (p1 - p0) / np.linalg.norm(p1 - p0); rel = pts - p0; tt = rel @ uax
 chk("mesh inside radius 3 A", np.linalg.norm(rel - np.outer(tt, uax), axis=1).max() <= 3 + 1e-9)
 chk("mesh spans -3 .. L+3 A", tt.min() >= -3 - 1e-9 and tt.max() <= np.linalg.norm(p1 - p0) + 3 + 1e-9)
-chk("side chains pointing in detected", rows[0]["all_inward"])
+chk("carboxylate distance from the axis recorded", rows[0]["r_o_upper"] < rows[0]["r_ca_upper"] and rows[0]["max_r_o_upper"] >= rows[0]["r_o_upper"])
 print("\nALL OK" if ok else "\nSOME FAILED"); sys.exit(not ok)

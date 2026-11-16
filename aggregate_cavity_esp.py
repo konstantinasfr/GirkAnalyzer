@@ -84,6 +84,22 @@ def load_system(paths, use_eq=True):
     return pd.concat(F, ignore_index=True), (pd.concat(P, ignore_index=True) if P else pd.DataFrame()), None
 
 
+def mark_inward(frames, label, max_r=None, tol=0.5):
+    """all_inward per frame: all four upper-ring carboxylates at least as close to the pore axis as in the frames
+    of interest (largest r_o there + tol), or closer than max_r if given. Returns (frames, threshold used)."""
+    if "max_r_o_upper" not in frames:
+        frames["all_inward"] = False
+        return frames, np.nan
+    thr = max_r
+    if thr is None:
+        ref = frames[frames["frame_of_interest"]]["max_r_o_upper"]
+        thr = ref.max() + tol if len(ref) else np.nan
+    frames["all_inward"] = frames["max_r_o_upper"] <= thr if thr == thr else False
+    print(f"  {label}: 'all Glu pointing in' = all four carboxylates within {thr:.2f} A of the pore axis"
+          if thr == thr else f"  {label}: no frame of interest and no --inward_max_r: inward frames not defined")
+    return frames, thr
+
+
 def add_four(frames):
     """Append, per frame, a 'four-subunit mean' row (mean of the four cylinder means)."""
     keys = ["run", "frame", "time_ns", "frame_of_interest", "all_inward", "after_eq"]
@@ -118,14 +134,19 @@ def main():
     ap.add_argument("--out", default="cavity_esp_summary")
     ap.add_argument("--no_eq", action="store_true", help="use all frames (no equilibration cut)")
     ap.add_argument("--boot", type=int, default=5000)
+    ap.add_argument("--inward_max_r", type=float, default=None,
+                    help="'all Glu pointing in' when all four carboxylates are within this distance (A) of the pore "
+                         "axis; default: the largest value in that system's frames of interest (the QM frames) + 0.5 A")
     a = ap.parse_args()
     od = Path(a.out)
     od.mkdir(parents=True, exist_ok=True)
 
-    systems, allf, allp = [], [], []
+    systems, allf, allp, inward_thr = [], [], [], {}
     for s in a.system:
         lab, path = s.split("=", 1)
         fr, pr, eq = load_system(path, not a.no_eq)
+        fr, thr = mark_inward(fr, lab, a.inward_max_r)
+        inward_thr[lab] = thr
         fr = add_four(fr)
         fr.insert(0, "system", lab)
         allf.append(fr)
@@ -136,11 +157,13 @@ def main():
     F = pd.concat(allf, ignore_index=True)
     P = pd.concat(allp, ignore_index=True) if allp else pd.DataFrame()
     lines = ["CLASSICAL CAVITY ESP (kcal/mol per +1e), force-field charges of the QM cluster atoms, "
-             "regular mesh in the Glu -> Asn/Asp cylinders"]
+             "regular mesh in the Glu -> Asn/Asp cylinders",
+             "'all Glu pointing in' thresholds (largest carboxylate distance from the pore axis, A): "
+             + ", ".join(f"{k} {v:.2f}" for k, v in inward_thr.items())]
 
     # 1. frames of interest
     foi = F[F["frame_of_interest"]].copy()
-    foi[["system", "run", "frame", "cylinder", "mean", "median", "sd", "n_points", "all_inward", "after_eq"]].to_csv(
+    foi[["system", "run", "frame", "cylinder", "mean", "median", "sd", "n_points", "r_o_upper", "all_inward", "after_eq"]].to_csv(
         od / "frames_of_interest.csv", index=False, float_format="%.2f")
     if len(foi):
         lines.append("\nFRAMES OF INTEREST (exact values on the mesh)")
