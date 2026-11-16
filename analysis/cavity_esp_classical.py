@@ -34,12 +34,13 @@ CD and carboxylate oxygens (r_o_upper), and the largest r_o of the four in that 
 pore axis goes through the centroid of the 8 CAs, along Glu ring -> lower ring. "All Glu pointing in" is
 decided when pooling (aggregate_cavity_esp.py). Axial profile: the mean in 0.5 A slices along the cylinder.
 
-Frames: every `stride` frames (default: ~0.75 ns) plus any `extra_frames` (frames of interest, e.g. the
+Frames: every `stride` frames (default 1 = every frame) plus any `extra_frames` (frames of interest, e.g. the
 QM frames), from frame 0; the equilibration cut is applied when pooling (aggregate_cavity_esp.py).
 
 OUTPUT  <results_dir>/cavity_esp/esp_frames_run<run>.csv     one row per frame and cylinder
         <results_dir>/cavity_esp/esp_profile_run<run>.csv.gz  frame, cylinder, axial bin, mean
         <results_dir>/cavity_esp/esp_atoms_run<run>.txt       the atoms used and their charges
+        <results_dir>/cavity_esp/esp_run<run>.png             over time, distribution, axial profile
 """
 
 from pathlib import Path
@@ -260,7 +261,7 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
         for a_, qq, g in zip(atoms, q, groups):
             fh.write(f"{a_.resid:>6} {a_.resname:<5} {a_.name:<5} {qq:+.4f}  {g}\n")
     n = len(universe.trajectory)
-    stride = stride or max(1, int(round(0.75 / frame_duration)))
+    stride = stride or 1                      # default: every frame
     end = n - 1 if end_frame is None else min(end_frame, n - 1)
     frames = sorted(set(range(start_frame, end + 1, stride)) | {int(f) for f in extra_frames if 0 <= int(f) < n})
     extra = {int(f) for f in extra_frames}
@@ -281,3 +282,45 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
     pd.DataFrame(prof, columns=["run", "frame", "cylinder", "t_A", "mean"]).to_csv(f_prof, index=False,
                                                                                     float_format="%.3f")
     print(f"cavity_esp: wrote {f_rows} ({len(frames)} frames, cluster charge {q.sum():+.2f})")
+    plot_run(df, pd.DataFrame(prof, columns=["run", "frame", "cylinder", "t_A", "mean"]), od / f"esp_run{run}.png",
+             f"{channel_type} RUN{run}")
+
+
+def plot_run(df, prof, path, title):
+    """One run: the cylinder ESP over time, its distribution, and the axial profile."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    cols = ["#C0392B", "#D98A1C", "#13896B", "#3B7DD8"]
+    cyl = list(dict.fromkeys(df["cylinder"]))
+    four = df.groupby("frame")[["time_ns", "mean"]].mean()
+    fig, ax = plt.subplots(1, 3, figsize=(17, 4.6))
+    win = max(1, len(four) // 100)
+    for c, col in zip(cyl, cols):
+        g = df[df["cylinder"] == c].sort_values("frame")
+        ax[0].plot(g["time_ns"], g["mean"], color=col, lw=0.4, alpha=0.35)
+        ax[0].plot(g["time_ns"], g["mean"].rolling(win, center=True, min_periods=1).mean(), color=col, lw=1.8, label=c)
+        ax[1].hist(g["mean"], bins=60, histtype="step", lw=1.8, color=col, label=f"{c}: {g['mean'].mean():.1f} ± {g['mean'].std():.1f}")
+        p = prof[prof["cylinder"] == c].groupby("t_A")["mean"].agg(["mean", "std"])
+        ax[2].plot(p.index, p["mean"], color=col, lw=2, label=c)
+        ax[2].fill_between(p.index, p["mean"] - p["std"], p["mean"] + p["std"], color=col, alpha=0.15, lw=0)
+    ax[0].plot(four["time_ns"], four["mean"].rolling(win, center=True, min_periods=1).mean(), color="#1B2631", lw=2,
+               label=f"four-subunit mean ({four['mean'].mean():.1f})")
+    foi = df[df["frame_of_interest"]]
+    for f_, g in foi.groupby("frame"):
+        ax[0].axvline(g["time_ns"].iloc[0], color="#1B2631", ls=":", lw=1)
+        ax[0].text(g["time_ns"].iloc[0], ax[0].get_ylim()[1], f" frame {f_}", fontsize=8, va="top")
+    ax[0].set_xlabel("time (ns)"); ax[0].set_ylabel("cylinder ESP (kcal/mol per +1e)")
+    ax[0].set_title("over time (thin = every frame, thick = running mean)", fontsize=10)
+    ax[1].set_xlabel("cylinder ESP (kcal/mol per +1e)"); ax[1].set_ylabel("frames"); ax[1].set_title("distribution over frames", fontsize=10)
+    ax[2].axvline(0, color="#1B2631", ls="--", lw=1)
+    ax[2].set_xlabel("distance from the Glu CA along the cylinder (Å)"); ax[2].set_ylabel("ESP (kcal/mol per +1e)")
+    ax[2].set_title("axial profile (mean ± SD over frames)", fontsize=10)
+    for a_ in ax:
+        a_.legend(frameon=False, fontsize=8)
+        for sp in ("top", "right"):
+            a_.spines[sp].set_visible(False)
+    fig.suptitle(f"{title}: classical cavity ESP (all frames from 0; equilibration cut applied only when pooling)", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)

@@ -27,7 +27,8 @@ OUTPUTS (in --out)
                            over runs (all frames and inward frames)
   contributions.csv        per system and cylinder: the mean contribution of each ring residue and the caps
   profiles.csv             axial profile (distance from the Glu CA): mean over runs, SD between runs
-  cavity_esp.txt, per_run.png, profiles.png, frames_hist.png
+  cavity_esp.txt, per_run.png (each run), cylinders.png (each cylinder), profiles.png (axial profiles),
+  frames_hist.png (distribution over frames), timeseries.png (each run over time)
 """
 
 import argparse
@@ -309,6 +310,47 @@ def main():
         ax.spines[s_].set_visible(False)
     fig.tight_layout()
     fig.savefig(od / "frames_hist.png", dpi=180)
+    plt.close(fig)
+
+    # 8. each cylinder per system (distribution over frames, after equilibration), and the runs over time
+    fig, axes = plt.subplots(1, len(systems), figsize=(4.6 * len(systems), 4.6), squeeze=False, sharey=True)
+    for ax, sy in zip(axes[0], systems):
+        g = use[use["system"] == sy]
+        cy = [c for c in dict.fromkeys(g["cylinder"]) if c != FOUR] + [FOUR]
+        data = [g[g["cylinder"] == c]["mean"].dropna().values for c in cy]
+        bp = ax.boxplot(data, showfliers=False, patch_artist=True, widths=0.6)
+        for patch, c in zip(bp["boxes"], cy):
+            patch.set_facecolor("#C0392B" if c.startswith(("E141", "Q141")) else "#1B2631" if c == FOUR else "#D98A1C")
+            patch.set_alpha(0.55)
+        for m_ in bp["medians"]:
+            m_.set_color("#1B2631")
+        ax.set_xticks(range(1, len(cy) + 1))
+        ax.set_xticklabels([c.split("/")[0] if c != FOUR else "mean" for c in cy], rotation=30, ha="right")
+        ax.set_title(sy)
+        for s_ in ("top", "right"):
+            ax.spines[s_].set_visible(False)
+    axes[0][0].set_ylabel("cylinder ESP per frame (kcal/mol per +1e)")
+    fig.suptitle("each cylinder, all frames after equilibration (box = quartiles, whiskers = 1.5 IQR)", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(od / "cylinders.png", dpi=180)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(len(systems), 1, figsize=(10, 2.6 * len(systems)), squeeze=False, sharex=True, sharey=True)
+    for ax, sy, col in zip(axes[:, 0], systems, COLORS):
+        g = F[(F["system"] == sy) & (F["cylinder"] == FOUR)]
+        for run, gr in g.groupby("run"):
+            gr = gr.sort_values("time_ns")
+            w = max(1, len(gr) // 60)
+            ax.plot(gr["time_ns"], gr["mean"].rolling(w, center=True, min_periods=1).mean(), color=col, lw=0.9, alpha=0.6)
+            pre = gr[~gr["after_eq"]]
+            if len(pre):
+                ax.axvspan(pre["time_ns"].min(), pre["time_ns"].max(), color="#E6E6E6", alpha=0.25, lw=0)
+        ax.set_ylabel(f"{sy}\nfour-subunit ESP")
+        for s_ in ("top", "right"):
+            ax.spines[s_].set_visible(False)
+    axes[-1, 0].set_xlabel("time (ns); one line per run (running mean), grey = before equilibration")
+    fig.tight_layout()
+    fig.savefig(od / "timeseries.png", dpi=170)
     plt.close(fig)
 
     (od / "cavity_esp.txt").write_text("\n".join(lines) + "\n")
