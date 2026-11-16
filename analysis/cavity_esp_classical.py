@@ -16,7 +16,12 @@ CYLINDERS (as esp_cylinders.py, --axis ca-ca): one per subunit, axis from the Gl
 the same subunit (the lower-ring residue next in sequence), radius 3 A, extended 3 A beyond each CA. They
 are rebuilt in every frame from that frame's CA atoms, so they move with the protein.
 
-POINTS: Jaguar points exist only for the QM frames, so every frame gets a regular mesh inside each
+POINTS, two grids per cylinder:
+  regular mesh (columns mean, median, sd, n_points): even sampling, the fair grid between frames and systems;
+  Jaguar-like (columns jag_mean, jag_median, jag_sd, jag_n): spheres around every cluster atom at the radii of
+  the Jaguar ESP grid (JAG_RADII), points nearer than an element's minimum distance (JAG_RMIN) removed, as
+  measured from the frame-5606 .resp; comparable to the QM numbers of esp_cylinders.py.
+Regular mesh: Jaguar points exist only for the QM frames, so every frame gets a regular mesh inside each
 cylinder: every `step` A along the axis, rings at 0, step, 2 step ... radius, points on each ring every ~step
 A around it. Points closer than `exclude` A (1.4) to a cluster atom are dropped (the potential of a point
 charge diverges there); the number dropped is recorded.
@@ -42,6 +47,25 @@ import numpy as np
 import pandas as pd
 
 COULOMB = 332.0637
+# Jaguar-like ESP grid, measured from the .resp of the G12 frame-5606 single point (jaguar_grid_info.py):
+# spheres around every atom at these radii (A, the same for every element), points closer to any atom than
+# its element's minimum distance removed. Reproduces the Jaguar-point cylinder means within ~2 kcal/mol.
+JAG_RADII = (1.6184, 1.7185, 1.8282, 1.9493, 2.0841, 2.2355, 2.4078, 2.6069, 2.8419, 3.1270, 3.4878, 3.9758, 4.7242)
+JAG_NPTS = (302, 302, 302, 146, 146, 146, 146, 146, 110, 110, 110, 110, 110)
+JAG_RMIN = {"H": 1.60, "O": 1.71, "N": 1.85, "C": 1.94}
+
+
+def _fib(n):
+    i = np.arange(n) + 0.5
+    phi = np.arccos(1 - 2 * i / n)
+    th = np.pi * (1 + 5 ** 0.5) * i
+    return np.c_[np.cos(th) * np.sin(phi), np.sin(th) * np.sin(phi), np.cos(phi)]
+
+
+_JAG_DIRS = np.concatenate([r * _fib(n) for r, n in zip(JAG_RADII, JAG_NPTS)])
+
+
+
 CAP_BEFORE = ("C", "O", "CA", "HA", "HA2", "HA3")
 CAP_AFTER = ("N", "H", "CA", "HA", "HA2", "HA3")
 
@@ -142,10 +166,20 @@ def inward(universe, pairs):
     return out
 
 
+def cyl_mask(points, p0, p1, radius, extend):
+    u = (p1 - p0) / np.linalg.norm(p1 - p0)
+    rel = points - p0
+    t = rel @ u
+    rad = np.linalg.norm(rel - np.outer(t, u), axis=1)
+    return (rad <= radius) & (t >= -extend) & (t <= np.linalg.norm(p1 - p0) + extend)
+
+
 def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0, step=0.5, exclude=1.4,
               bin_w=0.5):
     """(rows, profile rows) for the current frame."""
     xyz = atoms.positions.astype(float)
+    rmin = np.array([JAG_RMIN.get(n[0].upper(), 1.94) for n in atoms.names])
+    jag_all = (xyz[:, None, :] + _JAG_DIRS[None, :, :]).reshape(-1, 3)
     names = [str(r) for p in pairs for r in p] + ["caps"]
     inw = inward(universe, pairs)
     max_r_o = float(np.nanmax([v[2] for v in inw.values()]))
@@ -166,6 +200,16 @@ def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0,
         for nmx in names:
             key = "caps" if nmx == "caps" else labels.get(int(nmx), nmx)
             row[f"contrib_{key}"] = parts[nmx][keep].mean()
+        # the Jaguar-like grid in the same cylinder
+        jp = jag_all[cyl_mask(jag_all, p0, p1, radius, extend)]
+        if len(jp):
+            dj = np.linalg.norm(jp[:, None, :] - xyz[None, :, :], axis=2)
+            jp, dj = jp[(dj >= rmin[None, :] - 1e-6).all(axis=1)], dj[(dj >= rmin[None, :] - 1e-6).all(axis=1)]
+        if len(jp):
+            vj = COULOMB * (q[None, :] / np.maximum(dj, 1e-6)).sum(axis=1)
+            row.update(jag_n=len(vj), jag_mean=vj.mean(), jag_median=np.median(vj), jag_sd=vj.std(ddof=1))
+        else:
+            row.update(jag_n=0, jag_mean=np.nan, jag_median=np.nan, jag_sd=np.nan)
         rows.append(row)
         b = np.floor((t[keep] + extend) / bin_w).astype(int)
         for k in np.unique(b):
@@ -214,7 +258,7 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
         prof += [(run, f, c, t, v) for c, t, v in p_]
     cols = ["run", "frame", "time_ns", "frame_of_interest", "cylinder", "upper", "lower", "length_A",
             "n_points", "n_excluded", "mean", "median", "sd", "q1", "q3", "r_ca_upper", "r_cd_upper", "r_o_upper",
-            "max_r_o_upper"]
+            "max_r_o_upper", "jag_n", "jag_mean", "jag_median", "jag_sd"]
     df = pd.DataFrame(rows)
     df = df[cols + [c for c in df.columns if c not in cols]]
     df.to_csv(f_rows, index=False, float_format="%.3f")

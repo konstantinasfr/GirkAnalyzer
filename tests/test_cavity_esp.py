@@ -75,4 +75,14 @@ uax = (p1 - p0) / np.linalg.norm(p1 - p0); rel = pts - p0; tt = rel @ uax
 chk("mesh inside radius 3 A", np.linalg.norm(rel - np.outer(tt, uax), axis=1).max() <= 3 + 1e-9)
 chk("mesh spans -3 .. L+3 A", tt.min() >= -3 - 1e-9 and tt.max() <= np.linalg.norm(p1 - p0) + 3 + 1e-9)
 chk("carboxylate distance from the axis recorded", rows[0]["r_o_upper"] < rows[0]["r_ca_upper"] and rows[0]["max_r_o_upper"] >= rows[0]["r_o_upper"])
+from analysis.cavity_esp_classical import _JAG_DIRS, JAG_RMIN
+X = atoms.positions.astype(float)
+jp = (X[:, None] + _JAG_DIRS[None]).reshape(-1, 3)
+rel = jp - p0; tt = rel @ uax; rad = np.linalg.norm(rel - np.outer(tt, uax), axis=1)
+jp = jp[(rad <= 3) & (tt >= -3) & (tt <= np.linalg.norm(p1 - p0) + 3)]
+rmin = np.array([JAG_RMIN.get(n[0], 1.94) for n in atoms.names])
+dj = np.linalg.norm(jp[:, None] - X[None], axis=2); okp = (dj >= rmin[None] - 1e-6).all(1)
+jm = (COULOMB * (q / dj[okp]).sum(1)).mean()
+chk(f"Jaguar-like grid mean = independent rebuild ({rows[0]['jag_mean']:.3f} vs {jm:.3f}, n {rows[0]['jag_n']} vs {okp.sum()})",
+    abs(rows[0]["jag_mean"] - jm) < 1e-6 and rows[0]["jag_n"] == okp.sum())
 print("\nALL OK" if ok else "\nSOME FAILED"); sys.exit(not ok)

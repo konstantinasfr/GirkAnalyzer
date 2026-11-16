@@ -40,13 +40,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 FOUR = "four-subunit mean"
+GRID = "mesh"
 COLORS = ["#1F4E79", "#D9784F", "#13896B", "#C0392B", "#6B6B6B", "#3B7DD8"]
 
 
 def load_one(base, use_eq=True):
     base = Path(base)
     fr = [pd.read_csv(f) for f in sorted(base.glob("RUN*/cavity_esp/esp_frames_run*.csv"))]
-    pr = [pd.read_csv(f) for f in sorted(base.glob("RUN*/cavity_esp/esp_profile_run*.csv.gz"))]
+    pr = [pd.read_csv(f) for f in sorted(base.glob("RUN*/cavity_esp/esp_profile_run*.csv.gz"))] if GRID == "mesh" else []
     if not fr:
         raise SystemExit(f"no RUN*/cavity_esp/esp_frames_run*.csv under {base}")
     frames = pd.concat(fr, ignore_index=True)
@@ -61,6 +62,12 @@ def load_one(base, use_eq=True):
         if not eq:
             print(f"  {base.name}: no equilibration.csv found, all frames used")
     frames["after_eq"] = frames["frame"] >= frames["run"].map(eq).fillna(0)
+    if GRID == "jaguar":
+        if "jag_mean" not in frames:
+            raise SystemExit(f"{base}: no Jaguar-like columns (run the newer cavity_esp_classical.py)")
+        frames["mean"], frames["median"], frames["sd"], frames["n_points"] = (
+            frames["jag_mean"], frames["jag_median"], frames["jag_sd"], frames["jag_n"])
+        frames = frames[[c for c in frames.columns if not c.startswith("contrib_")]]
     if len(prof):
         prof = prof[prof["frame"] >= prof["run"].map(eq).fillna(0)]
     return frames, prof
@@ -134,10 +141,15 @@ def main():
     ap.add_argument("--out", default="cavity_esp_summary")
     ap.add_argument("--no_eq", action="store_true", help="use all frames (no equilibration cut)")
     ap.add_argument("--boot", type=int, default=5000)
+    ap.add_argument("--grid", choices=["mesh", "jaguar"], default="mesh",
+                    help="mesh: the regular grid (default); jaguar: the Jaguar-like grid, comparable to the QM numbers "
+                         "(no per-residue contributions, no profiles)")
     ap.add_argument("--inward_max_r", type=float, default=None,
                     help="'all Glu pointing in' when all four carboxylates are within this distance (A) of the pore "
                          "axis; default: the largest value in that system's frames of interest (the QM frames) + 0.5 A")
     a = ap.parse_args()
+    global GRID
+    GRID = a.grid
     od = Path(a.out)
     od.mkdir(parents=True, exist_ok=True)
 
@@ -157,7 +169,7 @@ def main():
     F = pd.concat(allf, ignore_index=True)
     P = pd.concat(allp, ignore_index=True) if allp else pd.DataFrame()
     lines = ["CLASSICAL CAVITY ESP (kcal/mol per +1e), force-field charges of the QM cluster atoms, "
-             "regular mesh in the Glu -> Asn/Asp cylinders",
+             f"{'regular mesh' if GRID == 'mesh' else 'Jaguar-like grid'} in the Glu -> Asn/Asp cylinders",
              "'all Glu pointing in' thresholds (largest carboxylate distance from the pore axis, A): "
              + ", ".join(f"{k} {v:.2f}" for k, v in inward_thr.items())]
 
@@ -231,9 +243,10 @@ def main():
     # 5. contributions
     cc = [c for c in use.columns if c.startswith("contrib_")]
     C = (use[use["cylinder"] != FOUR].groupby(["system", "run", "cylinder"])[cc].mean()
-         .groupby(["system", "cylinder"]).mean().reset_index())
-    C.to_csv(od / "contributions.csv", index=False, float_format="%.2f")
-    lines.append("\nWHERE EACH CYLINDER'S POTENTIAL COMES FROM (mean contribution, kcal/mol per +1e)")
+         .groupby(["system", "cylinder"]).mean().reset_index()) if cc else pd.DataFrame()
+    if len(C):
+        C.to_csv(od / "contributions.csv", index=False, float_format="%.2f")
+        lines.append("\nWHERE EACH CYLINDER'S POTENTIAL COMES FROM (mean contribution, kcal/mol per +1e)")
     for r in C.to_dict("records"):
         parts = sorted(((k[8:], v) for k, v in r.items() if k.startswith("contrib_") and v == v), key=lambda x: x[1])
         lines.append(f"  {r['system']:<7} {r['cylinder']:<20} " + ", ".join(f"{k} {v:.1f}" for k, v in parts[:5]))
