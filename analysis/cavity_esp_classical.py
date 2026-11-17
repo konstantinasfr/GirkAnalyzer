@@ -315,8 +315,7 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
     np.savez_compressed(f_ax, ax_edges=AX_EDGES, esp_edges=HIST_EDGES, block=np.array(blocks), block_size=BLOCK,
                         cylinder=np.array(cyl), counts=A, length=np.array([lengths[c] for c in cyl]))
     plot_axial({c: A[:, i].sum(axis=0) for i, c in enumerate(cyl)}, {c: lengths[c] for c in cyl},
-               od / f"esp_axial_run{run}.png", f"{channel_type} RUN{run}  |  axial ESP profile, median and IQR over all "
-               f"points of all frames (r = 3.0 Å cylinder)")
+               od / f"esp_axial_run{run}.png", f"{channel_type} RUN{run}\naxial ESP profile, median and IQR, all frames")
     plot_run(df, pd.DataFrame(prof, columns=["run", "frame", "cylinder", "t_A", "mean"]), od / f"esp_run{run}.png",
              f"{channel_type} RUN{run}")
 
@@ -332,6 +331,14 @@ def hist_stats(counts, edges):
     lo = cum[k - 1] if k else 0.0
     med = edges[k] + (0.5 - lo) / max(cum[k] - lo, 1e-12) * (edges[k + 1] - edges[k])
     return float((mid * c).sum() / c.sum()), float(med)
+
+
+def big_fonts():
+    """Large text in every plot (the figures get shrunk into panels)."""
+    import matplotlib
+    matplotlib.rcParams.update({"font.size": 15, "axes.titlesize": "large", "axes.labelsize": "large",
+                                "xtick.labelsize": "medium", "ytick.labelsize": "medium",
+                                "legend.fontsize": "medium", "figure.titlesize": "x-large"})
 
 
 def _auto_xlim(cyl_counts, edges, tail=0.0005, step=25):
@@ -351,6 +358,7 @@ def plot_hist_panels(cyl_counts, edges, path, title, overlay=None, xlim=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    big_fonts()
     names = list(cyl_counts)
     if xlim is None:
         xlim = _auto_xlim(cyl_counts, edges)
@@ -365,15 +373,15 @@ def plot_hist_panels(cyl_counts, edges, path, title, overlay=None, xlim=None):
         if overlay and c in overlay:
             o = overlay[c].astype(float)
             ax.step(edges[:-1], 100 * o / max(o.sum(), 1), where="post", color="#1B2631", lw=1.2, label="frame of interest")
-        ax.set_title(c, fontsize=11)
+        ax.set_title(c)
         ax.set_xlim(*xlim)
         ax.set_xlabel("ESP (kcal/mol per +1e)")
         ax.set_ylabel("% of points")
         ax.grid(alpha=0.25)
-        ax.legend(fontsize=8, loc="upper left")
+        ax.legend(loc="best")
     for ax in axes.ravel()[len(names):]:
         ax.axis("off")
-    fig.suptitle(title, fontsize=12)
+    fig.suptitle(title)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -382,7 +390,7 @@ def plot_hist_panels(cyl_counts, edges, path, title, overlay=None, xlim=None):
 def plot_hist(df, hists, path, title):
     cyl = list(dict.fromkeys(df["cylinder"]))
     allc = {c: hists[(df["cylinder"] == c).to_numpy()].sum(axis=0) for c in cyl}
-    plot_hist_panels(allc, HIST_EDGES, path, f"{title}: ESP over the cylinder points, all frames (5 kcal/mol bins)")
+    plot_hist_panels(allc, HIST_EDGES, path, f"{title}\nESP over the cylinder points, all frames")
 
 
 def hist_quantiles(counts, edges, ps=(0.25, 0.5, 0.75)):
@@ -423,6 +431,7 @@ def plot_axial(h2_by_cyl, length_by_cyl, path, title, ylim=(-280, -60), min_poin
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    big_fonts()
     mid = 0.5 * (AX_EDGES[:-1] + AX_EDGES[1:])
     fig, ax = plt.subplots(figsize=(10, 5.6))
     for i, c in enumerate(cyl_order(h2_by_cyl)):
@@ -436,12 +445,12 @@ def plot_axial(h2_by_cyl, length_by_cyl, path, title, ylim=(-280, -60), min_poin
         ax.axvline(L, color=col, ls=":", lw=1, alpha=0.7)
     ax.axvline(0, color="black", ls="--", lw=1.2)
     ax.set_ylim(*ylim)
-    ax.text(0, ylim[1], " Glu CA", va="top", fontsize=10)
-    ax.text(np.mean(list(length_by_cyl.values())), ylim[1], " Asn/Asp CA", va="top", fontsize=10)
+    ax.text(0, ylim[1], " Glu CA", va="top", fontsize="medium")
+    ax.text(np.mean(list(length_by_cyl.values())), ylim[1], " Asn/Asp CA", va="top", fontsize="medium")
     ax.set_xlabel("position along Glu-CA → Asn/Asp-CA axis (Å)")
     ax.set_ylabel("ESP (kcal/mol per +1e)")
-    ax.set_title(title, fontsize=11)
-    ax.legend(fontsize=9)
+    ax.set_title(title)
+    ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
     fig.savefig(path, dpi=170)
@@ -453,6 +462,7 @@ def plot_run(df, prof, path, title):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    big_fonts()
     cols = ["#C0392B", "#D98A1C", "#13896B", "#3B7DD8"]
     cyl = list(dict.fromkeys(df["cylinder"]))
     four = df.groupby("frame")[["time_ns", "mean"]].mean()
@@ -471,18 +481,18 @@ def plot_run(df, prof, path, title):
     foi = df[df["frame_of_interest"]]
     for f_, g in foi.groupby("frame"):
         ax[0].axvline(g["time_ns"].iloc[0], color="#1B2631", ls=":", lw=1)
-        ax[0].text(g["time_ns"].iloc[0], ax[0].get_ylim()[1], f" frame {f_}", fontsize=8, va="top")
+        ax[0].text(g["time_ns"].iloc[0], ax[0].get_ylim()[1], f" frame {f_}", fontsize="medium", va="top")
     ax[0].set_xlabel("time (ns)"); ax[0].set_ylabel("cylinder ESP (kcal/mol per +1e)")
-    ax[0].set_title("over time (thin = every frame, thick = running mean)", fontsize=10)
-    ax[1].set_xlabel("cylinder ESP (kcal/mol per +1e)"); ax[1].set_ylabel("frames"); ax[1].set_title("distribution over frames", fontsize=10)
+    ax[0].set_title("over time\n(thin = every frame, thick = running mean)")
+    ax[1].set_xlabel("cylinder ESP (kcal/mol per +1e)"); ax[1].set_ylabel("frames"); ax[1].set_title("distribution over frames")
     ax[2].axvline(0, color="#1B2631", ls="--", lw=1)
     ax[2].set_xlabel("distance from the Glu CA along the cylinder (Å)"); ax[2].set_ylabel("ESP (kcal/mol per +1e)")
-    ax[2].set_title("axial profile (mean ± SD over frames)", fontsize=10)
+    ax[2].set_title("axial profile\n(mean ± SD over frames)")
     for a_ in ax:
-        a_.legend(frameon=False, fontsize=8)
+        a_.legend(frameon=False)
         for sp in ("top", "right"):
             a_.spines[sp].set_visible(False)
-    fig.suptitle(f"{title}: classical cavity ESP (all frames from 0; equilibration cut applied only when pooling)", fontsize=11)
+    fig.suptitle(f"{title}\nclassical cavity ESP, all frames from 0 (equilibration cut only when pooling)")
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)

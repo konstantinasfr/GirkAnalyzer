@@ -42,6 +42,8 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from analysis.cavity_esp_classical import big_fonts
+big_fonts()
 
 FOUR = "four-subunit mean"
 HIST = {}
@@ -327,7 +329,7 @@ def main():
             ax.axvline(0, color="#1B2631", ls="--", lw=1)
             ax.set_title(sy)
             ax.set_xlabel("distance from the Glu CA along the cylinder (Å)")
-            ax.legend(frameon=False, fontsize=8)
+            ax.legend(frameon=False)
         axes[0][0].set_ylabel("ESP (kcal/mol per +1e)")
         fig.tight_layout()
         fig.savefig(od / "profiles.png", dpi=180)
@@ -348,7 +350,7 @@ def main():
     ax.set_xticks(range(len(systems)))
     ax.set_xticklabels(systems)
     ax.set_ylabel("four-subunit mean ESP (kcal/mol per +1e)")
-    ax.set_title("each dot = one run; black = mean ± 95% CI; star = frame of interest", fontsize=10)
+    ax.set_title("each dot = one run; black = mean ± 95% CI\nstar = frame of interest")
     for s_ in ("top", "right"):
         ax.spines[s_].set_visible(False)
     fig.tight_layout()
@@ -386,7 +388,7 @@ def main():
         for s_ in ("top", "right"):
             ax.spines[s_].set_visible(False)
     axes[0][0].set_ylabel("cylinder ESP per frame (kcal/mol per +1e)")
-    fig.suptitle("each cylinder, all frames after equilibration (box = quartiles, whiskers = 1.5 IQR)", fontsize=11)
+    fig.suptitle("each cylinder, all frames after equilibration\n(box = quartiles, whiskers = 1.5 IQR)")
     fig.tight_layout()
     fig.savefig(od / "cylinders.png", dpi=180)
     plt.close(fig)
@@ -425,12 +427,11 @@ def main():
                     hl.setdefault(c, []).extend(v)
             if hc:
                 plot_hist_panels(hc, HIST["edges"], od / f"hist_{lab}.png",
-                                 f"{lab}: ESP over the cylinder points, all runs, all frames after equilibration (5 kcal/mol bins)")
+                                 f"{lab}\nESP over the cylinder points, all runs, all frames after equilibration")
             if ha:
                 from analysis.cavity_esp_classical import plot_axial
                 plot_axial(ha, {c: float(np.mean(v)) for c, v in hl.items()}, od / f"axial_{lab}.png",
-                           f"{lab}  |  axial ESP profile, median and IQR over all points of all runs and frames after "
-                           f"equilibration (r = 3.0 Å)")
+                           f"{lab}\naxial ESP profile, median and IQR, all runs, all frames after equilibration")
                 lines.append(f"\nPOINT HISTOGRAM {lab} (all points, all frames after equilibration): " + ", ".join(
                     f"{c.split('/')[0]} mean {hist_stats(v, HIST['edges'])[0]:.1f} median {hist_stats(v, HIST['edges'])[1]:.1f}"
                     for c, v in hc.items()))
