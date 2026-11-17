@@ -336,7 +336,7 @@ def hist_stats(counts, edges):
 def big_fonts():
     """Large text in every plot (the figures get shrunk into panels)."""
     import matplotlib
-    matplotlib.rcParams.update({"font.size": 15, "axes.titlesize": "large", "axes.labelsize": "large",
+    matplotlib.rcParams.update({"font.size": 13, "axes.titlesize": "large", "axes.labelsize": "large",
                                 "xtick.labelsize": "medium", "ytick.labelsize": "medium",
                                 "legend.fontsize": "medium", "figure.titlesize": "x-large"})
 
