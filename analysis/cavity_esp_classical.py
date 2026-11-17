@@ -334,13 +334,26 @@ def hist_stats(counts, edges):
     return float((mid * c).sum() / c.sum()), float(med)
 
 
-def plot_hist_panels(cyl_counts, edges, path, title, overlay=None, xlim=(-300, -50)):
+def _auto_xlim(cyl_counts, edges, tail=0.0005, step=25):
+    """Range that keeps all but `tail` of the points on each side, over all panels, rounded to `step`."""
+    tot = sum(np.asarray(c, float) for c in cyl_counts.values())
+    if tot.sum() == 0:
+        return (-300, -50)
+    cum = np.cumsum(tot) / tot.sum()
+    lo = edges[int(np.searchsorted(cum, tail))]
+    hi = edges[min(int(np.searchsorted(cum, 1 - tail)) + 1, len(edges) - 1)]
+    return (np.floor(lo / step) * step, np.ceil(hi / step) * step)
+
+
+def plot_hist_panels(cyl_counts, edges, path, title, overlay=None, xlim=None):
     """2 x 2 panels like esp_cylinders.py: % of points per 5 kcal/mol bin, mean and median lines.
     cyl_counts: {cylinder: counts}; overlay: {cylinder: counts} drawn as a black step line (e.g. a QM frame)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     names = list(cyl_counts)
+    if xlim is None:
+        xlim = _auto_xlim(cyl_counts, edges)
     fig, axes = plt.subplots(int(np.ceil(len(names) / 2)), 2, figsize=(11, 3.9 * int(np.ceil(len(names) / 2))), squeeze=False)
     for ax, c in zip(axes.ravel(), names):
         cnt = cyl_counts[c].astype(float)
