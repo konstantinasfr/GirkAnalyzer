@@ -328,9 +328,9 @@ def main():
                 ax.fill_between(g["t_A"], g["mean"] - g["std"], g["mean"] + g["std"], color=col, alpha=0.15, lw=0)
             ax.axvline(0, color="#1B2631", ls="--", lw=1)
             ax.set_title(sy)
-            ax.set_xlabel("distance from the Glu CA along the cylinder (Å)")
             ax.legend(frameon=False)
         axes[0][0].set_ylabel("ESP (kcal/mol per +1e)")
+        fig.supxlabel("distance from the Glu CA along the cylinder (Å)")
         fig.tight_layout()
         fig.savefig(od / "profiles.png", dpi=180)
         plt.close(fig)
@@ -349,7 +349,7 @@ def main():
         ax.scatter(i - 0.3, r["mean"], marker="*", s=120, color="#F4D03F", edgecolors="#1B2631", zorder=5)
     ax.set_xticks(range(len(systems)))
     ax.set_xticklabels(systems)
-    ax.set_ylabel("four-subunit mean ESP (kcal/mol per +1e)")
+    ax.set_ylabel("four-subunit mean ESP\n(kcal/mol per +1e)")
     ax.set_title("each dot = one run; black = mean ± 95% CI\nstar = frame of interest")
     for s_ in ("top", "right"):
         ax.spines[s_].set_visible(False)
@@ -374,7 +374,8 @@ def main():
     fig, axes = plt.subplots(1, len(systems), figsize=(4.6 * len(systems), 4.6), squeeze=False, sharey=True)
     for ax, sy in zip(axes[0], systems):
         g = use[use["system"] == sy]
-        cy = [c for c in dict.fromkeys(g["cylinder"]) if c != FOUR] + [FOUR]
+        from analysis.cavity_esp_classical import cyl_order
+        cy = cyl_order([c for c in dict.fromkeys(g["cylinder"]) if c != FOUR]) + [FOUR]
         data = [g[g["cylinder"] == c]["mean"].dropna().values for c in cy]
         bp = ax.boxplot(data, showfliers=False, patch_artist=True, widths=0.6)
         for patch, c in zip(bp["boxes"], cy):
@@ -387,7 +388,7 @@ def main():
         ax.set_title(sy)
         for s_ in ("top", "right"):
             ax.spines[s_].set_visible(False)
-    axes[0][0].set_ylabel("cylinder ESP per frame (kcal/mol per +1e)")
+    axes[0][0].set_ylabel("cylinder ESP per frame\n(kcal/mol per +1e)")
     fig.suptitle("each cylinder, all frames after equilibration\n(box = quartiles, whiskers = 1.5 IQR)")
     fig.tight_layout()
     fig.savefig(od / "cylinders.png", dpi=180)
@@ -406,7 +407,7 @@ def main():
         ax.set_ylabel(f"{sy}\nfour-subunit ESP")
         for s_ in ("top", "right"):
             ax.spines[s_].set_visible(False)
-    axes[-1, 0].set_xlabel("time (ns); one line per run (running mean), grey = before equilibration")
+    axes[-1, 0].set_xlabel("time (ns); one line per run (running mean)\ngrey = before equilibration")
     fig.tight_layout()
     fig.savefig(od / "timeseries.png", dpi=170)
     plt.close(fig)

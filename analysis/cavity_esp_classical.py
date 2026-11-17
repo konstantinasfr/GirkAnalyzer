@@ -359,7 +359,7 @@ def plot_hist_panels(cyl_counts, edges, path, title, overlay=None, xlim=None):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     big_fonts()
-    names = list(cyl_counts)
+    names = cyl_order(list(cyl_counts))
     if xlim is None:
         xlim = _auto_xlim(cyl_counts, edges)
     fig, axes = plt.subplots(int(np.ceil(len(names) / 2)), 2, figsize=(11, 3.9 * int(np.ceil(len(names) / 2))), squeeze=False)
