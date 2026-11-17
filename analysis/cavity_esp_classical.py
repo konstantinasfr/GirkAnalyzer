@@ -365,7 +365,7 @@ def plot_hist_panels(cyl_counts, edges, path, title, overlay=None, xlim=None):
         if overlay and c in overlay:
             o = overlay[c].astype(float)
             ax.step(edges[:-1], 100 * o / max(o.sum(), 1), where="post", color="#1B2631", lw=1.2, label="frame of interest")
-        ax.set_title(f"{c}   ({int(cnt.sum()):,} points)", fontsize=11)
+        ax.set_title(c, fontsize=11)
         ax.set_xlim(*xlim)
         ax.set_xlabel("ESP (kcal/mol per +1e)")
         ax.set_ylabel("% of points")
@@ -431,7 +431,7 @@ def plot_axial(h2_by_cyl, length_by_cyl, path, title, ylim=(-280, -60), min_poin
                       for i in range(len(mid))])
         L = length_by_cyl[c]
         keep = mid <= L + 3.0 + 1e-9
-        ax.plot(mid[keep], q[keep, 1], color=col, lw=2, label=f"{c}  ({int(h.sum()):,} points)")
+        ax.plot(mid[keep], q[keep, 1], color=col, lw=2, label=c)
         ax.fill_between(mid[keep], q[keep, 0], q[keep, 2], color=col, alpha=0.18, lw=0)
         ax.axvline(L, color=col, ls=":", lw=1, alpha=0.7)
     ax.axvline(0, color="black", ls="--", lw=1.2)
