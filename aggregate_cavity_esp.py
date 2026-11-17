@@ -456,4 +456,14 @@ python3 aggregate_cavity_esp.py \
   --system E141Q=$R/G12_E141Q,$R/G12_E141Q_4fs \
   --out $R/cavity_esp_comparison
 python3 aggregate_cavity_esp.py --system G2=$R/G2 --out $R/G2/cavity_esp_summary
+
+
+cd /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyzer
+git pull origin main
+R=/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results
+python3 aggregate_cavity_esp.py \
+  --system G12=$R/G12 --system G2=$R/G2 \
+  --system D173N=$R/G12_D173N_4fs \
+  --system E141Q=$R/G12_E141Q_4fs \
+  --out $R/cavity_esp_comparison_4fs
 '''
