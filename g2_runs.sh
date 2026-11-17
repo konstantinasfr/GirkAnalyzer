@@ -14,7 +14,7 @@ python3 main.py --channel_type G2 --run_number 12
 python3 main.py --channel_type G2 --run_number 13
 python3 main.py --channel_type G2 --run_number 14
 python3 main.py --channel_type G2 --run_number 15
-python3 main.py --channel_type G2 --run_number 16
-python3 main.py --channel_type G2 --run_number 17
-python3 main.py --channel_type G2 --run_number 18
-python3 main.py --channel_type G2 --run_number 19
+python3 main.py --channel_type G2 --run_number 16 --skip_pip_check
+python3 main.py --channel_type G2 --run_number 17 --skip_pip_check
+python3 main.py --channel_type G2 --run_number 18 --skip_pip_check
+python3 main.py --channel_type G2 --run_number 19 --skip_pip_check
