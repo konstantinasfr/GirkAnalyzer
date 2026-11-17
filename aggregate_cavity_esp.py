@@ -194,6 +194,10 @@ def main():
     ap.add_argument("--system", action="append", required=True, help="LABEL=PATH[,PATH2...] (folders holding RUN*/; several folders = one system, runs kept apart)")
     ap.add_argument("--out", default="cavity_esp_summary")
     ap.add_argument("--no_eq", action="store_true", help="use all frames (no equilibration cut)")
+    ap.add_argument("--hist_xlim", nargs=2, type=float, default=[-350.0, -25.0], metavar=("LO", "HI"),
+                    help="Same x-range for the point histograms of every system (default -350 -25)")
+    ap.add_argument("--hist_ylim", type=float, default=6.0,
+                    help="Same y ceiling, in %% of points, for the point histograms of every system (default 6)")
     ap.add_argument("--min_time_ns", type=float, default=0.0,
                     help="also leave out every frame before this time (ns), e.g. 250 = only the last part of each run; "
                          "a check that slow relaxation does not change the result")
@@ -428,7 +432,8 @@ def main():
                     hl.setdefault(c, []).extend(v)
             if hc:
                 plot_hist_panels(hc, HIST["edges"], od / f"hist_{lab}.png",
-                                 f"{lab}\nESP over the cylinder points, all runs, all frames after equilibration")
+                                 f"{lab}\nESP over the cylinder points, all runs, all frames after equilibration",
+                                 xlim=tuple(a.hist_xlim), ylim=a.hist_ylim)
             if ha:
                 from analysis.cavity_esp_classical import plot_axial
                 plot_axial(ha, {c: float(np.mean(v)) for c, v in hl.items()}, od / f"axial_{lab}.png",

@@ -352,7 +352,7 @@ def _auto_xlim(cyl_counts, edges, tail=0.0005, step=25):
     return (np.floor(lo / step) * step, np.ceil(hi / step) * step)
 
 
-def plot_hist_panels(cyl_counts, edges, path, title, overlay=None, xlim=None):
+def plot_hist_panels(cyl_counts, edges, path, title, overlay=None, xlim=None, ylim=None):
     """2 x 2 panels like esp_cylinders.py: % of points per 5 kcal/mol bin, mean and median lines.
     cyl_counts: {cylinder: counts}; overlay: {cylinder: counts} drawn as a black step line (e.g. a QM frame)."""
     import matplotlib
@@ -375,6 +375,8 @@ def plot_hist_panels(cyl_counts, edges, path, title, overlay=None, xlim=None):
             ax.step(edges[:-1], 100 * o / max(o.sum(), 1), where="post", color="#1B2631", lw=1.2, label="frame of interest")
         ax.set_title(c)
         ax.set_xlim(*xlim)
+        if ylim is not None:
+            ax.set_ylim(0, ylim)
         ax.set_xlabel("ESP (kcal/mol per +1e)")
         ax.set_ylabel("% of points")
         ax.grid(alpha=0.25)
