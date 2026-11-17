@@ -400,16 +400,33 @@ def hist_quantiles(counts, edges, ps=(0.25, 0.5, 0.75)):
     return out
 
 
+SUBUNIT_COLORS = {"a": "#3b6ea5", "b": "#D98A1C", "c": "#2E8B57", "d": "#8E6BB0"}
+GIRK1_COLOR = "#C0392B"
+
+
+def cyl_color(name, i=0):
+    """Same colour for the same cylinder in every plot: the GIRK1 cylinder (".G1") red, E152 cylinders by subunit letter."""
+    head = name.split("/")[0]
+    if head.endswith(".G1"):
+        return GIRK1_COLOR
+    return SUBUNIT_COLORS.get(head[-1:], ["#555555", "#999999"][i % 2])
+
+
+def cyl_order(names):
+    """GIRK1 cylinder first, then the E152 cylinders by subunit letter."""
+    return sorted(names, key=lambda n: (not n.split("/")[0].endswith(".G1"), n.split("/")[0][-1:]))
+
+
 def plot_axial(h2_by_cyl, length_by_cyl, path, title, ylim=(-280, -60), min_points=50):
     """esp_maps.py-style axial profile: median and IQR of all points in each 0.5 A slice, one line per cylinder,
     dashed line at the Glu CA (0), dotted lines at each cylinder's mean Asn/Asp CA position."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    cols = ["#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd", "#d62728"]
     mid = 0.5 * (AX_EDGES[:-1] + AX_EDGES[1:])
     fig, ax = plt.subplots(figsize=(10, 5.6))
-    for (c, h), col in zip(h2_by_cyl.items(), cols):
+    for i, c in enumerate(cyl_order(h2_by_cyl)):
+        h, col = h2_by_cyl[c], cyl_color(c, i)
         q = np.array([hist_quantiles(h[i], HIST_EDGES) if h[i].sum() >= min_points else [np.nan] * 3
                       for i in range(len(mid))])
         L = length_by_cyl[c]

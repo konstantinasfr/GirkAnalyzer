@@ -315,10 +315,12 @@ def main():
         pr = (P.groupby(["system", "run", "cylinder", "t_A"])["mean"].mean().reset_index()
               .groupby(["system", "cylinder", "t_A"])["mean"].agg(["mean", "std", "count"]).reset_index())
         pr.to_csv(od / "profiles.csv", index=False, float_format="%.3f")
-        cyls = {sy: list(dict.fromkeys(pr[pr["system"] == sy]["cylinder"])) for sy in systems}
+        from analysis.cavity_esp_classical import cyl_color, cyl_order
+        cyls = {sy: cyl_order(list(dict.fromkeys(pr[pr["system"] == sy]["cylinder"]))) for sy in systems}
         fig, axes = plt.subplots(1, len(systems), figsize=(5.2 * len(systems), 4.4), squeeze=False, sharey=True)
         for ax, sy in zip(axes[0], systems):
-            for c, col in zip(cyls[sy], COLORS):
+            for i, c in enumerate(cyls[sy]):
+                col = cyl_color(c, i)
                 g = pr[(pr["system"] == sy) & (pr["cylinder"] == c)]
                 ax.plot(g["t_A"], g["mean"], color=col, lw=2, label=c)
                 ax.fill_between(g["t_A"], g["mean"] - g["std"], g["mean"] + g["std"], color=col, alpha=0.15, lw=0)
