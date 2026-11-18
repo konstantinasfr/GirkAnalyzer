@@ -85,4 +85,12 @@ dj = np.linalg.norm(jp[:, None] - X[None], axis=2); okp = (dj >= rmin[None] - 1e
 jm = (COULOMB * (q / dj[okp]).sum(1)).mean()
 chk(f"Jaguar-like grid mean = independent rebuild ({rows[0]['jag_mean']:.3f} vs {jm:.3f}, n {rows[0]['jag_n']} vs {okp.sum()})",
     abs(rows[0]["jag_mean"] - jm) < 1e-6 and rows[0]["jag_n"] == okp.sum())
+# variants: the potential without one residue's charges = brute force with those charges set to zero
+rv, _ = frame_esp(u, pairs, atoms, q, groups, labels, drop={"noD": [131], "noE": [99]})
+for var, rid in (("noD", 131), ("noE", 99)):
+    q0 = q.copy(); q0[np.array([a_.resid == rid for a_ in atoms]) & (groups != "caps")] = 0
+    bv = (COULOMB * (q0 / np.maximum(d, 1e-6)).sum(1))[keep].mean()
+    chk(f"variant {var} = brute force without resid {rid} ({rv[0]['mean_' + var]:.3f} vs {bv:.3f})", abs(rv[0]["mean_" + var] - bv) < 1e-6)
+    chk(f"variant {var} = mean minus that contribution", abs(rv[0]["mean_" + var] - (rv[0]["mean"] - rv[0]["contrib_" + str(rid)])) < 1e-6)
+chk("variant histograms hold every kept point", int(rv[0]["_hist_noD"].sum()) == rv[0]["n_points"])
 print("\nALL OK" if ok else "\nSOME FAILED"); sys.exit(not ok)
