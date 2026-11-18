@@ -183,4 +183,5 @@ if __name__ == "__main__":
 
 '''
 python3 aggregate_glu_ion_hbond.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12
+python3 aggregate_glu_ion_hbond.py /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G2
 '''
