@@ -91,6 +91,10 @@ def main():
                         help='H-bond of residue pairs split by the number of K+ in the Glu-Asn cavity, '
                              'every frame (analysis/hbond_by_cavity_ions.py), then exit. Raw resid pairs '
                              '"144-148,472-476" or "glu" (each Glu of glu_residues with the residue 4 before it)')
+    parser.add_argument("--glu_ion_hbond", action="store_true",
+                        help="per frame and glutamate: side chain-side chain H-bonds with its 4 partners "
+                             "and the K+ next to it (analysis/glu_ion_hbond.py), then exit. Reuses "
+                             "hbond_by_cavity_ions/ H-bond results where they exist")
     parser.add_argument("--skip_pip_check", action="store_true",
                         help="leave the PIP2 part out of the subunit check (subunit order and "
                              "GIRK1 placement are still checked). Use only for analyses that do "
@@ -871,6 +875,15 @@ def main():
             hbond_dist=3.5, hbond_angle=120.0,
         )
         raise SystemExit("--hbond_cavity_pairs: done.")
+
+    if args.glu_ion_hbond:
+        from analysis.glu_ion_hbond import run_glu_ion_hbond
+        run_glu_ion_hbond(
+            u=u, results_dir=results_dir, channel_type=args.channel_type,
+            glu_residues=glu_residues, channel1=ch1, channel2=ch2,
+            start_frame=start_frame, end_frame=end_frame,
+        )
+        raise SystemExit("--glu_ion_hbond: done.")
 
  # ========== TRY TO LOAD SAVED STATE ==========
     # --force_pkl_generation: redo the trajectory pass even if analyzer_state.pkl exists

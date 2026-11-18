@@ -203,16 +203,16 @@ def combined_tables(frames_by_pair, out_dir, title, max_k=MAX_K, by_partner=True
     print(f"  combined tables -> {out_dir}")
 
 
-def _table_png(tab, cols, title, out_path):
+def _table_png(tab, cols, title, out_path, corner="K+ in cavity →", first_w=1.0):
+    """first_w: width of the row-label column in cell units (1 = one data column)."""
     from matplotlib.colors import to_rgb
     navy, light, accent = "#1f3b5c", "#ffffff", np.array(to_rgb("#e8a35c"))
-    nr, nc = len(tab) + 1, len(cols) + 1
-    fig_w, fig_h = 1.6 + 1.25 * len(cols), 0.9 + 0.62 * nr
+    nr, nc = len(tab) + 1, len(cols) + first_w
+    fig_w, fig_h = max(1.25 * nc + 0.35, 6.5), 0.9 + 0.62 * nr
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.set_xlim(0, nc)
     ax.set_ylim(nr, 0)
     ax.axis("off")
-    first_w = 1.0
 
     def cell(x, y, w, text, fc, color="#1b2233", weight="normal", size=11):
         ax.add_patch(plt.Rectangle((x, y), w, 1, facecolor=fc, edgecolor="#d9d6cf", lw=0.8))
@@ -222,7 +222,7 @@ def _table_png(tab, cols, title, out_path):
     # the frame count goes under the K+ number in the header when it is the same for every pair
     # (same runs); otherwise it stays in each cell
     same_n = all(tab[f"{b}_n_frames"].nunique() == 1 for b in cols)
-    cell(0, 0, first_w, "K+ in cavity →" + ("\n(frames)" if same_n else ""), navy, "#ffffff", "bold", 10)
+    cell(0, 0, first_w, corner + ("\n(frames)" if same_n else ""), navy, "#ffffff", "bold", 10)
     for j, b in enumerate(cols):
         ax.add_patch(plt.Rectangle((first_w + j, 0), 1, 1, facecolor=navy, edgecolor="#d9d6cf", lw=0.8))
         ax.text(first_w + j + 0.5, 0.36 if same_n else 0.5, b, ha="center", va="center",
