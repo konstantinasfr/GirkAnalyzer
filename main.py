@@ -91,10 +91,6 @@ def main():
                         help='H-bond of residue pairs split by the number of K+ in the Glu-Asn cavity, '
                              'every frame (analysis/hbond_by_cavity_ions.py), then exit. Raw resid pairs '
                              '"144-148,472-476" or "glu" (each Glu of glu_residues with the residue 4 before it)')
-    parser.add_argument("--glu_ion_hbond", action="store_true",
-                        help="per frame and glutamate: side chain-side chain H-bonds with its 4 partners "
-                             "and the K+ next to it (analysis/glu_ion_hbond.py), then exit. Reuses "
-                             "hbond_by_cavity_ions/ H-bond results where they exist")
     parser.add_argument("--skip_pip_check", action="store_true",
                         help="leave the PIP2 part out of the subunit check (subunit order and "
                              "GIRK1 placement are still checked). Use only for analyses that do "
@@ -875,15 +871,6 @@ def main():
             hbond_dist=3.5, hbond_angle=120.0,
         )
         raise SystemExit("--hbond_cavity_pairs: done.")
-
-    if args.glu_ion_hbond:
-        from analysis.glu_ion_hbond import run_glu_ion_hbond
-        run_glu_ion_hbond(
-            u=u, results_dir=results_dir, channel_type=args.channel_type,
-            glu_residues=glu_residues, channel1=ch1, channel2=ch2,
-            start_frame=start_frame, end_frame=end_frame,
-        )
-        raise SystemExit("--glu_ion_hbond: done.")
 
  # ========== TRY TO LOAD SAVED STATE ==========
     # --force_pkl_generation: redo the trajectory pass even if analyzer_state.pkl exists
@@ -2038,14 +2025,28 @@ def main():
     # no ions), on a regular mesh, every frame + the frames of interest (the QM frames). Validated against
     # the QM with esp_classical_check.py. One pass per run -> cavity_esp/ (cached); pool with
     # aggregate_cavity_esp.py.
-    from analysis.cavity_esp_classical import run_cavity_esp
-    ESP_FRAMES = {("G12", 3): [5606], ("G2", 14): [814], ("G12_E141Q", 5): [6220]}
-    run_cavity_esp(
-        u, glu_residues, asn_residues, results_dir=results_dir, run=run_number,
-        channel_type=args.channel_type, frame_duration=frame_duration,
-        extra_frames=ESP_FRAMES.get((args.channel_type, int(run_number)), []),
-        stride=1,                                 # every frame
-        force_rerun=args.force_pkl_generation
+    # from analysis.cavity_esp_classical import run_cavity_esp
+    # ESP_FRAMES = {("G12", 3): [5606], ("G2", 14): [814], ("G12_E141Q", 5): [6220]}
+    # run_cavity_esp(
+    #     u, glu_residues, asn_residues, results_dir=results_dir, run=run_number,
+    #     channel_type=args.channel_type, frame_duration=frame_duration,
+    #     extra_frames=ESP_FRAMES.get((args.channel_type, int(run_number)), []),
+    #     stride=1,                                 # every frame
+    #     force_rerun=args.force_pkl_generation
+    # )
+
+    # GLU IONS + H-BONDS: per frame and cavity Glu (glu_residues), its side chain-side chain H-bonds
+    # with the 4 partners (GIRK2 S148 W106 Q176 N184, GIRK1 F137 W95 Q165 D173) and the K+ within
+    # 3.5 A of any Glu atom / of its carboxylate O. The H-bonds are READ from hbond_by_cavity_ions/
+    # (run main.py --hbond_cavity_pairs first; it stops and prints the command if any are missing).
+    # -> glu_ion_hbond/<GLU>/ (cached; --force_pkl_generation redoes it); pool with
+    # aggregate_glu_ion_hbond.py.
+    from analysis.glu_ion_hbond import run_glu_ion_hbond
+    run_glu_ion_hbond(
+        u=u, results_dir=results_dir, channel_type=args.channel_type,
+        glu_residues=glu_residues, channel1=ch1, channel2=ch2,
+        start_frame=start_frame, end_frame=end_frame,
+        run_number=run_number, force_rerun=args.force_pkl_generation,
     )
 
     # # SITE-TO-SITE CHAIN: every permeating ion as visits to the GLU / ASN-ASP residues,

@@ -14,9 +14,10 @@ same position in a mutant, e.g. Gln141 in E141Q):
     n_k_carbox K+ within 3.5 A of its side-chain oxygens (OE1/OE2; OD1/OD2 for Asp)
     n_k_cavity K+ in the Glu-Asn cavity (channel 2, not the SF), as hbond_by_cavity_ions.py
 
-H-bonds are NOT recomputed when RUN*/hbond_by_cavity_ions/<PARTNER>_<GLU>/per_frame.csv exists
-(main.py --hbond_cavity_pairs); only missing pairs or frames are computed here (same criteria:
-H...A <= 3.5 A, D-H...A >= 120 deg).
+H-bonds are READ from RUN*/hbond_by_cavity_ions/<PARTNER>_<GLU>/per_frame.csv (main.py
+--hbond_cavity_pairs), never computed here. If a pair's file is missing, or does not cover the
+frames analysed, the run stops before reading the trajectory and prints the command that makes
+the missing pairs. Already done (every Glu's per_frame.csv present) -> skipped, unless force_rerun.
 
 Output  results_dir/glu_ion_hbond/<GLU><pdb>/   (e.g. GLU152_2a)
     per_frame.csv   frame, n_k_cavity, n_k_any, n_k_carbox, <PARTNER> 0/1 ..., n_partners
@@ -24,7 +25,7 @@ Output  results_dir/glu_ion_hbond/<GLU><pdb>/   (e.g. GLU152_2a)
                     a K+ at the Glu (any atom and carboxylate), mean K+ near the Glu
 Pool the runs with aggregate_glu_ion_hbond.py.
 
-main.py:  python3 main.py --channel_type G12 --run_number 1 --glu_ion_hbond
+Called from main.py's analysis section (uncommented block), e.g. via ./g12_runs.sh.
 """
 
 from pathlib import Path
@@ -34,8 +35,6 @@ import pandas as pd
 from MDAnalysis.lib.distances import distance_array
 from tqdm import tqdm
 
-from analysis.hbond_pair_analysis import _find_hbonds
-from analysis.hbond_by_cavity_ions import _flags
 from analysis.stay_chain import PoreFrames
 
 PARTNER_OFFSETS = (-4, -46, 24, 32)       # GIRK2: S148 W106 Q176 N184 from E152; GIRK1: F137 W95 Q165 D173 from E141
@@ -57,14 +56,14 @@ def _load_existing(results_dir, folder):
 
 
 def run_glu_ion_hbond(u, results_dir, channel_type, glu_residues, channel1, channel2,
-                      start_frame=0, end_frame=None, cutoff=CUTOFF,
-                      hbond_dist=3.5, hbond_angle=120.0):
+                      start_frame=0, end_frame=None, cutoff=CUTOFF, run_number=None,
+                      force_rerun=False):
     results_dir = Path(results_dir)
     end_frame = len(u.trajectory) - 1 if end_frame is None else end_frame
-    pore = PoreFrames(u, channel1, channel2)
-    ions = pore.ions
+    base = results_dir / "glu_ion_hbond"
+    print("\n" + "=" * 70 + "\nGLU IONS + H-BONDS\n" + "=" * 70)
 
-    sites = []
+    sites, missing = [], []
     for g in glu_residues:
         g = int(g)
         glu = u.select_atoms(f"resid {g}")
@@ -83,14 +82,36 @@ def run_glu_ion_hbond(u, results_dir, channel_type, glu_residues, channel1, chan
             pl = _label(u, p, channel_type)
             folder = f"{pl}_{gl}".replace(".", "_")
             cache = _load_existing(results_dir, folder)
+            if cache is None:
+                missing.append((p, g, folder, "no file"))
+            else:
+                lack = [f for f in range(start_frame, end_frame + 1) if f not in cache]
+                if lack:
+                    missing.append((p, g, folder, f"{len(lack)} frames missing"))
             partners.append(dict(resid=p, atoms=pa, label=pl, col=pl.split(".")[0], cache=cache or {}))
-        src = ", ".join(f"{d['label']} ({'existing' if d['cache'] else 'computed here'})" for d in partners)
-        print(f"  {gl} (resid {g}): carboxylate O = {list(carbox.names)}; partners: {src}")
+        print(f"  {gl} (resid {g}): carboxylate O = {list(carbox.names)}; "
+              f"partners: {', '.join(d['label'] for d in partners)}")
         sites.append(dict(resid=g, atoms=glu, carbox=carbox, label=gl, partners=partners, rows=[]))
     if not sites:
         return
 
-    n_computed = 0
+    if missing:
+        print("\n  H-bond results missing for:")
+        for p, g, folder, why in missing:
+            print(f"    {folder}  (resid {p}-{g}): {why}")
+        spec = ",".join(f"{p}-{g}" for p, g, _, _ in missing)
+        run = run_number if run_number is not None else "<run>"
+        raise SystemExit(
+            "\nglu_ion_hbond: run the H-bond analysis for these pairs first, then rerun:\n"
+            f'    python3 main.py --channel_type {channel_type} --run_number {run} '
+            f'--hbond_cavity_pairs "{spec}"')
+
+    if not force_rerun and all((base / s["label"].replace(".", "_") / "per_frame.csv").is_file() for s in sites):
+        print(f"  already done ({base}) -- skipped (--force_pkl_generation to redo)")
+        return
+
+    pore = PoreFrames(u, channel1, channel2)
+    ions = pore.ions
     for ts in tqdm(u.trajectory[start_frame:end_frame + 1], desc="Glu ions + H-bonds"):
         f = ts.frame
         _, in_cav, _ = pore.get(f)
@@ -108,17 +129,12 @@ def run_glu_ion_hbond(u, results_dir, channel_type, glu_residues, channel1, chan
             row = {"frame": f, "n_k_cavity": n_cav, "n_k_any": n_any, "n_k_carbox": n_cx}
             n_p = 0
             for p in s["partners"]:
-                v = p["cache"].get(f)
-                if v is None:
-                    bonds = _find_hbonds(p["atoms"], p["label"], s["atoms"], s["label"], hbond_dist, hbond_angle)
-                    v = _flags(bonds)[2]
-                    n_computed += 1
-                row[p["col"]] = int(v)
-                n_p += int(v)
+                v = int(p["cache"][f])
+                row[p["col"]] = v
+                n_p += v
             row["n_partners"] = n_p
             s["rows"].append(row)
 
-    base = results_dir / "glu_ion_hbond"
     for s in sites:
         od = base / s["label"].replace(".", "_")
         od.mkdir(parents=True, exist_ok=True)
@@ -128,8 +144,6 @@ def run_glu_ion_hbond(u, results_dir, channel_type, glu_residues, channel1, chan
         summ.to_csv(od / "summary.csv", index=False, float_format="%.2f")
         print(f"\n  {s['label']} -> {od}")
         print(summ.to_string(index=False, float_format=lambda v: f"{v:.1f}"))
-    if n_computed:
-        print(f"\n  ({n_computed} frame-pair H-bond checks computed here; the rest read from hbond_by_cavity_ions/)")
 
 
 def summarize_partners(df, partner_cols):
