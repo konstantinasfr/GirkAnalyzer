@@ -2032,7 +2032,8 @@ def main():
     #     channel_type=args.channel_type, frame_duration=frame_duration,
     #     extra_frames=ESP_FRAMES.get((args.channel_type, int(run_number)), []),
     #     stride=1,                                 # every frame
-    #     force_rerun=args.force_pkl_generation
+    #     force_rerun=args.force_pkl_generation,
+    #     drop_girk1=(args.channel_type == "G12")   # also the potential without E141 and without D173
     # )
 
     # GLU IONS + H-BONDS: per frame and cavity Glu (glu_residues), its side chain-side chain H-bonds
