@@ -91,6 +91,10 @@ def main():
                         help='H-bond of residue pairs split by the number of K+ in the Glu-Asn cavity, '
                              'every frame (analysis/hbond_by_cavity_ions.py), then exit. Raw resid pairs '
                              '"144-148,472-476" or "glu" (each Glu of glu_residues with the residue 4 before it)')
+    parser.add_argument("--esp_only", action="store_true",
+                        help="Run only the classical cavity ESP (cavity_esp_classical) for this run and stop; for G12 "
+                             "it also computes the potential without E141 and without D173. Skips the ion tracking "
+                             "and every other analysis.")
     parser.add_argument("--skip_pip_check", action="store_true",
                         help="leave the PIP2 part out of the subunit check (subunit order and "
                              "GIRK1 placement are still checked). Use only for analyses that do "
@@ -797,6 +801,19 @@ def main():
     # # start_frame = 6799
 
     end_frame = len(u.trajectory) - 1
+
+    if args.esp_only:
+        from analysis.cavity_esp_classical import run_cavity_esp
+        ESP_FRAMES = {("G12", 3): [5606], ("G2", 14): [814], ("G12_E141Q", 5): [6220]}
+        run_cavity_esp(
+            u, glu_residues, asn_residues, results_dir=results_dir, run=run_number,
+            channel_type=args.channel_type, frame_duration=frame_duration,
+            extra_frames=ESP_FRAMES.get((args.channel_type, int(run_number)), []),
+            stride=1,                                 # every frame
+            force_rerun=args.force_pkl_generation,
+            drop_girk1=(args.channel_type == "G12"),  # also the potential without E141 and without D173
+        )
+        raise SystemExit("--esp_only: done.")
     # end_frame = 3000
     print(f"Using end_frame = {end_frame} (last frame of trajectory)")
 
@@ -2032,7 +2049,8 @@ def main():
     #     channel_type=args.channel_type, frame_duration=frame_duration,
     #     extra_frames=ESP_FRAMES.get((args.channel_type, int(run_number)), []),
     #     stride=1,                                 # every frame
-    #     force_rerun=args.force_pkl_generation
+    #     force_rerun=args.force_pkl_generation,
+    #     drop_girk1=(args.channel_type == "G12")   # also the potential without E141 and without D173
     # )
 
     # GLU IONS + H-BONDS: per frame and cavity Glu (glu_residues), its side chain-side chain H-bonds

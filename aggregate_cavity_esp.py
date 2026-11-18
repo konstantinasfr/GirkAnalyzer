@@ -46,10 +46,37 @@ from analysis.cavity_esp_classical import big_fonts
 big_fonts()
 
 FOUR = "four-subunit mean"
+COLORS = ["#1F4E79", "#D9784F", "#13896B", "#C0392B", "#6B6B6B", "#3B7DD8"]
 HIST = {}
 GRID = "mesh"
 MIN_T = 0.0          # --min_time_ns: also drop every frame before this time
-COLORS = ["#1F4E79", "#D9784F", "#13896B", "#C0392B", "#6B6B6B", "#3B7DD8"]
+VAR = None           # --variant: e.g. noD173, the potential without the charges of that residue
+NOTES = []
+FULL = set()         # systems shown with their full potential under --variant
+
+
+def _npz(base, stem):
+    """[(file, run)] of RUN*/cavity_esp/<stem><run>.npz, or of <stem><run>_<VAR>.npz with --variant. A system
+    without variant files (no GIRK1, e.g. G2) falls back to its full potential, and this is noted."""
+    import re
+    full, var = {}, {}
+    for f in sorted(base.glob(f"RUN*/cavity_esp/{stem}*.npz")):
+        m = re.fullmatch(re.escape(stem) + r"(\d+)(?:_(\w+))?", f.stem)
+        if not m:
+            continue
+        if m.group(2) is None:
+            full[int(m.group(1))] = f
+        elif m.group(2) == VAR:
+            var[int(m.group(1))] = f
+    if VAR and var:
+        miss = sorted(set(full) - set(var))
+        if miss:
+            NOTES.append(f"{base.name}: no '{VAR}' {stem} files for RUN {miss}; those runs are left out")
+        return sorted(((f, r) for r, f in var.items()), key=lambda x: x[1])
+    if VAR:
+        FULL.add(str(base))
+        NOTES.append(f"{base.name}: no '{VAR}' files ({stem}); its full potential is shown")
+    return sorted(((f, r) for r, f in full.items()), key=lambda x: x[1])
 
 
 def load_one(base, use_eq=True):
@@ -92,8 +119,7 @@ def load_one(base, use_eq=True):
     hist, hist_foi = {}, {}
     if GRID == "mesh":
         foi_set = set(zip(frames.loc[frames["frame_of_interest"], "run"], frames.loc[frames["frame_of_interest"], "frame"]))
-        for f in sorted(base.glob("RUN*/cavity_esp/esp_hist_run*.npz")):
-            run = int(f.stem.replace("esp_hist_run", ""))
+        for f, run in _npz(base, "esp_hist_run"):
             z = np.load(f, allow_pickle=False)
             ok = z["frame"] >= eq.get(run, 0)
             isf = np.array([(run, int(fr)) in foi_set for fr in z["frame"]])
@@ -106,14 +132,21 @@ def load_one(base, use_eq=True):
     # axial 2D histograms (blocks of frames after equilibration)
     axial, lengths = {}, {}
     if GRID == "mesh":
-        for f in sorted(base.glob("RUN*/cavity_esp/esp_axial_run*.npz")):
-            run = int(f.stem.replace("esp_axial_run", ""))
+        for f, run in _npz(base, "esp_axial_run"):
             z = np.load(f, allow_pickle=False)
             ok = z["block"] * int(z["block_size"]) >= eq.get(run, 0)
             for i, c in enumerate(z["cylinder"]):
                 axial[c] = axial.get(c, 0) + z["counts"][ok, i].sum(axis=0).astype(np.int64)
                 lengths.setdefault(c, []).append(float(z["length"][i]))
     HIST[str(base)] = (hist, hist_foi, axial, lengths)
+    if VAR:
+        col = f"mean_{VAR}"
+        if col in frames:
+            frames["mean"], frames["median"], frames["sd"] = frames[col], frames[f"median_{VAR}"], frames[f"sd_{VAR}"]
+            frames = frames[[c for c in frames.columns if not c.startswith("contrib_")]]
+            prof = prof.iloc[0:0] if len(prof) else prof        # the per-frame profile is of the full potential
+        else:
+            NOTES.append(f"{base.name}: no '{VAR}' columns; its full potential is used in the tables")
     if GRID == "jaguar":
         if "jag_mean" not in frames:
             raise SystemExit(f"{base}: no Jaguar-like columns (run the newer cavity_esp_classical.py)")
@@ -198,6 +231,9 @@ def main():
                     help="Same x-range for the point histograms of every system (default -350 -25)")
     ap.add_argument("--hist_ylim", type=float, default=6.0,
                     help="Same y ceiling, in %% of points, for the point histograms of every system (default 6)")
+    ap.add_argument("--variant", default=None,
+                    help="Use the potential without one residue's charges, e.g. noD173 or noE141 (computed by "
+                         "cavity_esp with drop_girk1=True). Systems without those files keep their full potential.")
     ap.add_argument("--min_time_ns", type=float, default=0.0,
                     help="also leave out every frame before this time (ns), e.g. 250 = only the last part of each run; "
                          "a check that slow relaxation does not change the result")
@@ -213,6 +249,8 @@ def main():
     GRID = a.grid
     global MIN_T
     MIN_T = a.min_time_ns
+    global VAR
+    VAR = a.variant
     od = Path(a.out)
     od.mkdir(parents=True, exist_ok=True)
 
@@ -431,17 +469,22 @@ def main():
                 for c, v in ln_.items():
                     hl.setdefault(c, []).extend(v)
             if hc:
+                vt = (f"{lab} without {VAR[2:]} charges" if VAR and not all(str(Path(p)) in FULL for p in paths.split(","))
+                      else lab)
                 plot_hist_panels(hc, HIST["edges"], od / f"hist_{lab}.png",
-                                 f"{lab}\nESP over the cylinder points, all runs, all frames after equilibration",
+                                 f"{vt}\nESP over the cylinder points, all runs, all frames after equilibration",
                                  xlim=tuple(a.hist_xlim), ylim=a.hist_ylim)
             if ha:
                 from analysis.cavity_esp_classical import plot_axial
                 plot_axial(ha, {c: float(np.mean(v)) for c, v in hl.items()}, od / f"axial_{lab}.png",
-                           f"{lab}\naxial ESP profile, median and IQR, all runs, all frames after equilibration")
+                           f"{vt if hc else lab}\naxial ESP profile, median and IQR, all runs, all frames after equilibration")
                 lines.append(f"\nPOINT HISTOGRAM {lab} (all points, all frames after equilibration): " + ", ".join(
                     f"{c.split('/')[0]} mean {hist_stats(v, HIST['edges'])[0]:.1f} median {hist_stats(v, HIST['edges'])[1]:.1f}"
                     for c, v in hc.items()))
 
+    if VAR:
+        lines.insert(0, f"VARIANT {VAR}: potential WITHOUT the charges of {VAR[2:]} (same frames, same points)")
+        lines += ["", "NOTES"] + [f"  {n}" for n in dict.fromkeys(NOTES)]
     (od / "cavity_esp.txt").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
     print(f"\ncavity_esp: results in {od}")

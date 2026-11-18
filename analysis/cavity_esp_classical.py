@@ -197,8 +197,10 @@ def cyl_mask(points, p0, p1, radius, extend):
 
 
 def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0, step=0.5, exclude=1.4,
-              bin_w=0.5, jaguar=True):
-    """(rows, profile rows) for the current frame."""
+              bin_w=0.5, jaguar=True, drop=None):
+    """(rows, profile rows) for the current frame.
+    drop: {variant name: [resid, ...]}; for each variant the potential is recomputed without the charges of those
+    residues (V minus their contribution, on the same kept points) and its histograms and mean are stored too."""
     xyz = atoms.positions.astype(float)
     rmin = np.array([JAG_RMIN.get(n[0].upper(), 1.94) for n in atoms.names])
 
@@ -238,6 +240,12 @@ def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0,
             row.update(jag_n=len(vj), jag_mean=vj.mean(), jag_median=np.median(vj), jag_sd=vj.std(ddof=1))
         else:
             row.update(jag_n=0, jag_mean=np.nan, jag_median=np.nan, jag_sd=np.nan)
+        for var, rids in (drop or {}).items():
+            vv = (V - sum(parts[str(rr)] for rr in rids))[keep]
+            row[f"mean_{var}"], row[f"median_{var}"], row[f"sd_{var}"] = vv.mean(), np.median(vv), vv.std(ddof=1)
+            row[f"_hist_{var}"] = np.histogram(np.clip(vv, HIST_EDGES[0], HIST_EDGES[-1] - 1e-6), HIST_EDGES)[0].astype(np.uint16)
+            row[f"_h2_{var}"] = np.histogram2d(np.clip(t[keep], AX_EDGES[0], AX_EDGES[-1] - 1e-6),
+                                               np.clip(vv, HIST_EDGES[0], HIST_EDGES[-1] - 1e-6), [AX_EDGES, HIST_EDGES])[0]
         row["_hist"] = np.histogram(np.clip(v, HIST_EDGES[0], HIST_EDGES[-1] - 1e-6), HIST_EDGES)[0].astype(np.uint16)
         row["_h2"] = np.histogram2d(np.clip(t[keep], AX_EDGES[0], AX_EDGES[-1] - 1e-6),
                                     np.clip(v, HIST_EDGES[0], HIST_EDGES[-1] - 1e-6), [AX_EDGES, HIST_EDGES])[0]
@@ -250,8 +258,11 @@ def frame_esp(universe, pairs, atoms, q, groups, labels, radius=3.0, extend=3.0,
 
 def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, channel_type="G12",
                    frame_duration=0.075, stride=None, extra_frames=(), start_frame=0, end_frame=None,
-                   force_rerun=False):
-    """One pass over the trajectory -> <results_dir>/cavity_esp/ (cached)."""
+                   force_rerun=False, drop_girk1=False):
+    """One pass over the trajectory -> <results_dir>/cavity_esp/ (cached).
+    drop_girk1: also compute the potential without the GIRK1 upper-ring residue (variant 'noE141') and without
+    the GIRK1 lower-ring residue ('noD173'), same frames and points; written as esp_hist_run<n>_<variant>.npz and
+    esp_axial_run<n>_<variant>.npz plus mean_<variant> columns in esp_frames_run<n>.csv."""
     from tqdm import tqdm
     from analysis.converter import convert_to_pdb_numbering
     from analysis.closest_residue_analysis import residue_names_from_topology
@@ -259,12 +270,20 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
     od = Path(results_dir) / "cavity_esp"
     od.mkdir(parents=True, exist_ok=True)
     f_rows, f_prof = od / f"esp_frames_run{run}.csv", od / f"esp_profile_run{run}.csv.gz"
-    if f_rows.exists() and f_prof.exists() and not force_rerun:
-        print(f"cavity_esp: using {f_rows}")
-        return
     pairs = pair_rings(glu_residues, asn_residues)
     resn = residue_names_from_topology(universe, [r for p in pairs for r in p])
     lab1 = {r: site_label(convert_to_pdb_numbering(r, channel_type), resn.get(r, "")) for p in pairs for r in p}
+    drop = {}
+    if drop_girk1:
+        for g, l in pairs:
+            if lab1[g].endswith(".G1"):
+                drop = {"no" + lab1[g].split(".")[0]: [g], "no" + lab1[l].split(".")[0]: [l]}
+        if not drop:
+            print("cavity_esp: drop_girk1 asked but no GIRK1 cylinder found; no variants computed")
+    need_var = any(not (od / f"esp_hist_run{run}_{v}.npz").exists() for v in drop)
+    if f_rows.exists() and f_prof.exists() and not force_rerun and not need_var:
+        print(f"cavity_esp: using {f_rows}")
+        return
     labels = dict(lab1)
     labels.update({(g, l): f"{lab1[g]}/{lab1[l]}" for g, l in pairs})
     atoms, q, groups = cluster_atoms(universe, pairs)
@@ -283,15 +302,20 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
     f_ax = od / f"esp_axial_run{run}.npz"
     rows, prof, hists = [], [], []
     ax_blocks = {}                                   # (block, cylinder) -> summed 2D histogram
+    v_hists = {v: [] for v in drop}
+    v_blocks = {v: {} for v in drop}
     for f in tqdm(frames, desc=f"cavity_esp RUN{run}", unit="frame"):
         universe.trajectory[f]
-        r_, p_ = frame_esp(universe, pairs, atoms, q, groups, labels, jaguar=f in extra)
+        r_, p_ = frame_esp(universe, pairs, atoms, q, groups, labels, jaguar=f in extra, drop=drop)
         for r in r_:
             r.update(run=run, frame=f, time_ns=f * frame_duration, frame_of_interest=f in extra)
             hists.append(r.pop("_hist"))
             h2 = r.pop("_h2")
             k = (f // BLOCK, r["cylinder"])
             ax_blocks[k] = ax_blocks.get(k, 0) + h2
+            for v in drop:
+                v_hists[v].append(r.pop(f"_hist_{v}"))
+                v_blocks[v][k] = v_blocks[v].get(k, 0) + r.pop(f"_h2_{v}")
         rows += r_
         prof += [(run, f, c, t, v) for c, t, v in p_]
     cols = ["run", "frame", "time_ns", "frame_of_interest", "cylinder", "upper", "lower", "length_A",
@@ -316,6 +340,16 @@ def run_cavity_esp(universe, glu_residues, asn_residues, results_dir, run, chann
                         cylinder=np.array(cyl), counts=A, length=np.array([lengths[c] for c in cyl]))
     plot_axial({c: A[:, i].sum(axis=0) for i, c in enumerate(cyl)}, {c: lengths[c] for c in cyl},
                od / f"esp_axial_run{run}.png", f"{channel_type} RUN{run}\naxial ESP profile, median and IQR, all frames")
+    for v in drop:
+        np.savez_compressed(od / f"esp_hist_run{run}_{v}.npz", edges=HIST_EDGES, frame=df["frame"].to_numpy(),
+                            cylinder=df["cylinder"].to_numpy().astype(str), counts=np.array(v_hists[v]))
+        Av = np.zeros_like(A)
+        for (b, c), h in v_blocks[v].items():
+            Av[blocks.index(b), cyl.index(c)] = h
+        np.savez_compressed(od / f"esp_axial_run{run}_{v}.npz", ax_edges=AX_EDGES, esp_edges=HIST_EDGES,
+                            block=np.array(blocks), block_size=BLOCK, cylinder=np.array(cyl), counts=Av,
+                            length=np.array([lengths[c] for c in cyl]))
+        print(f"cavity_esp: wrote the '{v}' variant (charges of {drop[v]} left out)")
     plot_run(df, pd.DataFrame(prof, columns=["run", "frame", "cylinder", "t_A", "mean"]), od / f"esp_run{run}.png",
              f"{channel_type} RUN{run}")
 
