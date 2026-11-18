@@ -19,6 +19,8 @@ OUTPUT  <system>/glu_ion_hbond_summary/[HIGH|TYPICAL|LOW/]
     table_partner_<any|carbox>.csv/.png               every Glu: % frames with K+ at the Glu,
                                                       bond formed vs broken, per partner
     table_npartners_<any|carbox>.csv/.png             every Glu: % with K+ by number of partners
+    fig_occupancy / fig_partners / fig_effect _<any|carbox>.png   slide figures (per-run mean +- SD;
+                                                      see analysis/glu_ion_plots.py), fig_values_*.csv
 """
 
 import argparse
@@ -30,6 +32,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from aggregate_hbond_by_cavity_ions import _table_png, natural_key, CATEGORY_FILE, AA1
+from analysis.glu_ion_plots import make_figures
 
 NONPARTNER = {"frame", "n_k_cavity", "n_k_any", "n_k_carbox", "n_partners"}
 KDEF = {"any": ("n_k_any", "a K+ ≤3.5 Å from any Glu atom"),
@@ -141,6 +144,7 @@ def run_group(data, out_dir, title, min_frames):
                   "run_mean_pct_carbox", "run_sd_pct_carbox"]]
         print(f"\n{title} — {glu}  ({len(runs)} runs)\n" + show.to_string(index=False, float_format=lambda v: f"{v:.1f}"))
     tables(per_glu, out_dir, title)
+    make_figures(data, out_dir, title, min_frames)
     print(f"  -> {out_dir}")
 
 
