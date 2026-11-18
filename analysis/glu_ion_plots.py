@@ -123,7 +123,9 @@ def make_figures(data, out_dir, title, min_frames=50):
         _fig_effect(glus, part, f"{title}: which H-bonds keep K+ away from the Glu",
                     f"formed − broken, percentage points of frames with {KDESC[k]} · per run, mean ± SD",
                     out_dir / f"fig_effect_{k}.png")
-    print(f"  slide figures -> {out_dir}/fig_*.png")
+    for k in KCOL:
+        table_matrix(data, out_dir, title, k)
+    print(f"  slide figures -> {out_dir}/fig_*.png, table_glu_partner_*.png")
 
 
 def _finish(fig, title, sub, path, top_in=1.25):
@@ -257,3 +259,100 @@ def _fig_effect(glus, part, title, sub, path):
               bbox_to_anchor=(0, 1.0), ncol=len(glus), frameon=False, fontsize=11)
     fig.tight_layout()
     _finish(fig, title, sub, path, top_in=1.6)
+
+
+# -----------------------------------------------------------------------------
+# Compact table: rows = partner position, columns = Glu
+# -----------------------------------------------------------------------------
+
+def table_matrix(data, out_dir, title, k):
+    """table_glu_partner_<k>.png/.csv: rows = the 4 partner positions (GIRK2 / GIRK1 residue),
+    columns = the Glus; each cell = % of frames with K+ at the Glu when that H-bond is formed ->
+    broken (all runs pooled), and how often the bond is there. Colour = formed - broken
+    (blue: the bond keeps K+ away, orange: it goes with K+). Top row: K+ at the Glu, all frames."""
+    from matplotlib.colors import to_rgb
+    _style()
+    kcol = KCOL[k]
+    glus = sorted(data, key=lambda g: (0 if is_girk1(g) else 1, g))
+    allf = {g: pd.concat(data[g].values(), ignore_index=True) for g in glus}
+    rows, cells = [], {}
+    for g in glus:
+        df = allf[g]
+        occ = 100.0 * (df[kcol] > 0).mean()
+        cells[(g, "occ")] = occ
+        rows.append(dict(glu=g, partner="all frames", pct_k_formed=np.nan, pct_k_broken=np.nan,
+                         pct_k_all=occ, pct_frames_bonded=np.nan, n_frames=len(df)))
+        for i, c in enumerate(partners_of(df)):
+            if c is None:
+                cells[(g, i)] = None
+                continue
+            f, b = df[df[c] == 1], df[df[c] == 0]
+            v = dict(col=c, formed=100.0 * (f[kcol] > 0).mean() if len(f) else np.nan,
+                     broken=100.0 * (b[kcol] > 0).mean() if len(b) else np.nan,
+                     bonded=100.0 * len(f) / len(df), n_formed=len(f))
+            cells[(g, i)] = v
+            rows.append(dict(glu=g, partner=c, pct_k_formed=v["formed"], pct_k_broken=v["broken"],
+                             pct_k_all=np.nan, pct_frames_bonded=v["bonded"], n_frames=len(df)))
+    pd.DataFrame(rows).to_csv(out_dir / f"table_glu_partner_{k}.csv", index=False, float_format="%.2f")
+
+    neg, pos, white = np.array(to_rgb("#2f5d9e")), np.array(to_rgb("#c8651b")), np.array([1.0, 1.0, 1.0])
+    first_w, cw = 1.9, 1.35
+    ncol, nrow = len(glus), 6                                   # header, occupancy, 4 partners
+    heights = [0.9, 0.8, 1.15, 1.15, 1.15, 1.15]
+    W, Htot = first_w + cw * ncol, sum(heights)
+    fig, ax = plt.subplots(figsize=(W * 1.55, Htot * 1.0 + 1.6))
+    ax.set_xlim(0, W)
+    ax.set_ylim(Htot, 0)
+    ax.axis("off")
+    ys = np.cumsum([0] + heights)
+
+    def box(x, y, w, h, fc, ec="#d9d6cf"):
+        ax.add_patch(plt.Rectangle((x, y), w, h, facecolor=fc, edgecolor=ec, lw=0.8))
+
+    navy = "#1f3b5c"
+    box(0, ys[0], first_w, heights[0], navy)
+    ax.text(first_w / 2, ys[0] + heights[0] / 2, "H-bond partner\n(GIRK2 / GIRK1)", ha="center", va="center",
+            color="white", fontsize=11, fontweight="bold")
+    for j, g in enumerate(glus):
+        x = first_w + j * cw
+        box(x, ys[0], cw, heights[0], GIRK1_C if is_girk1(g) else navy)
+        ax.text(x + cw / 2, ys[0] + heights[0] / 2, glu_title(g).replace(" · ", "\n"), ha="center", va="center",
+                color="white", fontsize=12, fontweight="bold")
+    # occupancy row
+    box(0, ys[1], first_w, heights[1], "#f4f2ec")
+    ax.text(0.12, ys[1] + heights[1] / 2, "K+ at the Glu\n(all frames)", ha="left", va="center",
+            fontsize=11, fontweight="bold", color=INK)
+    for j, g in enumerate(glus):
+        x = first_w + j * cw
+        box(x, ys[1], cw, heights[1], "#f4f2ec")
+        ax.text(x + cw / 2, ys[1] + heights[1] / 2, f"{cells[(g, 'occ')]:.1f}%", ha="center", va="center",
+                fontsize=15, fontweight="bold", color=INK)
+    # partner rows
+    for i in range(4):
+        y, h = ys[2 + i], heights[2 + i]
+        box(0, y, first_w, h, "white")
+        ax.text(0.12, y + h / 2, POS_NAME[i], ha="left", va="center", fontsize=12, fontweight="bold", color=INK)
+        for j, g in enumerate(glus):
+            x = first_w + j * cw
+            v = cells[(g, i)]
+            if v is None or v["n_formed"] == 0:
+                box(x, y, cw, h, "white")
+                ax.text(x + cw / 2, y + h / 2, "never bonded", ha="center", va="center", fontsize=10, color=MUTED)
+                continue
+            d = v["formed"] - v["broken"]
+            t = min(abs(d) / 60.0, 1.0) * 0.55
+            fc = tuple(white - t * (white - (neg if d < 0 else pos)))
+            box(x, y, cw, h, fc)
+            ax.text(x + cw / 2, y + h * 0.36, f"{v['formed']:.1f} → {v['broken']:.1f}%", ha="center", va="center",
+                    fontsize=13, fontweight="bold", color=INK)
+            ax.text(x + cw / 2, y + h * 0.72, f"bond present {v['bonded']:.0f}% of frames", ha="center",
+                    va="center", fontsize=9, color=MUTED)
+    fig.text(0.01, 0.985, f"{title}: K+ at each Glu with and without each H-bond", ha="left", va="top",
+             fontsize=15, fontweight="bold", color=INK)
+    fig.text(0.01, 0.935, f"% of frames with {KDESC[k]}, H-bond formed → broken · all runs pooled",
+             ha="left", va="top", fontsize=11, color=MUTED)
+    fig.text(0.01, 0.025, "Blue: the H-bond keeps K+ away from the Glu.  Orange: the H-bond goes with K+ at the Glu.  "
+             "Side chain–side chain H-bonds.", ha="left", va="bottom", fontsize=10, color=MUTED)
+    fig.subplots_adjust(left=0.01, right=0.99, top=0.88, bottom=0.08)
+    fig.savefig(out_dir / f"table_glu_partner_{k}.png", dpi=200, facecolor="white")
+    plt.close(fig)
