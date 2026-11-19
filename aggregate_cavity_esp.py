@@ -144,6 +144,8 @@ def load_one(base, use_eq=True):
         if col in frames:
             frames["mean"], frames["median"], frames["sd"] = frames[col], frames[f"median_{VAR}"], frames[f"sd_{VAR}"]
             frames = frames[[c for c in frames.columns if not c.startswith("contrib_")]]
+            for c in [c for c in frames.columns if c.startswith("jag_")]:
+                frames[c] = np.nan                               # the Jaguar-like grid holds the full potential only
             prof = prof.iloc[0:0] if len(prof) else prof        # the per-frame profile is of the full potential
         else:
             NOTES.append(f"{base.name}: no '{VAR}' columns; its full potential is used in the tables")
@@ -352,10 +354,12 @@ def main():
         lines.append("\nWHERE EACH CYLINDER'S POTENTIAL COMES FROM (mean contribution, kcal/mol per +1e)")
     for r in C.to_dict("records"):
         parts = sorted(((k[8:], v) for k, v in r.items() if k.startswith("contrib_") and v == v), key=lambda x: x[1])
+        if not parts:
+            continue
         lines.append(f"  {r['system']:<7} {r['cylinder']:<20} " + ", ".join(f"{k} {v:.1f}" for k, v in parts[:5]))
 
-    # 6. profiles
-    if len(P):
+    # 6. profiles (of the full potential only; with --variant the axial_<system>.png plots are the profiles)
+    if len(P) and not VAR:
         pr = (P.groupby(["system", "run", "cylinder", "t_A"])["mean"].mean().reset_index()
               .groupby(["system", "cylinder", "t_A"])["mean"].agg(["mean", "std", "count"]).reset_index())
         pr.to_csv(od / "profiles.csv", index=False, float_format="%.3f")
