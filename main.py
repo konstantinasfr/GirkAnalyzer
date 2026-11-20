@@ -101,6 +101,12 @@ def main():
     parser.add_argument("--hbc_windows", default=None,
                         help='with --hbc_open_closed_only: set the windows by hand instead of automatically, '
                              'e.g. "open:2780-3750;closed:0-2700,3800-6799" (frames not listed are excluded)')
+    parser.add_argument("--hbc_open_above", type=float, default=4.5,
+                        help="with --hbc_open_closed_only: smoothed B_D distance (A) above which a closed "
+                             "stretch becomes open (default 4.5)")
+    parser.add_argument("--hbc_close_below", type=float, default=4.0,
+                        help="with --hbc_open_closed_only: smoothed B_D distance (A) below which an open "
+                             "stretch becomes closed (default 4.0)")
     parser.add_argument("--skip_pip_check", action="store_true",
                         help="leave the PIP2 part out of the subunit check (subunit order and "
                              "GIRK1 placement are still checked). Use only for analyses that do "
@@ -824,7 +830,11 @@ def main():
     if args.hbc_open_closed_only:
         from analysis.hbc_open_closed import run_hbc_open_closed
         run_hbc_open_closed(u, hbc_residues, hbc_diagonal_pairs, results_dir,
-                            manual_windows=args.hbc_windows)
+                            manual_windows=args.hbc_windows,
+                            subunit_groups=_cfg.get("subunit_groups"),
+                            asn_residues=_cfg.get("asn_residues"),
+                            open_above=args.hbc_open_above,
+                            close_below=args.hbc_close_below)
         raise SystemExit("--hbc_open_closed_only: done.")
     # end_frame = 3000
     print(f"Using end_frame = {end_frame} (last frame of trajectory)")

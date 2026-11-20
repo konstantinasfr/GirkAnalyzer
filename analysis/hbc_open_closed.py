@@ -11,8 +11,10 @@ calls run_hbc_open_closed(...) and stops. Results go to
 
 STEPS (each step writes its own subfolder)
 ------------------------------------------
-step1_windows/   which frames is the HBC open, which closed      <- done
-(step 2, Phe chi1/chi2 and Calpha-Calpha per state, comes next)
+step1_windows/        which frames is the HBC open, which closed
+step2_gate_geometry/  what changes at the gate: Phe side chains (chi1,
+                      chi2, ring position) and backbone (Calpha-Calpha),
+                      open vs closed
 
 
 STEP 1 -- OPEN / CLOSED WINDOWS
@@ -36,7 +38,12 @@ How the frames are labelled:
 
 4.5 / 4.0 A separate the two conformations seen in E141Q (closed ~3 A,
 open ~5 A). They are NOT the 5.69 A conduction criterion (Li et al. 2019);
-the window table reports % frames > 5.69 A for each window.
+the window table reports % frames > 5.69 A for each window. In the first
+E141Q run checked, the smoothed B_D distance never stays above 5.69 A for
+100 frames, so 5.69 A as the switch gives no open window at all (only 229
+scattered frames are > 5.69 A, nearly all inside the 4.5/4.0 open window).
+Change the thresholds with
+    python3 main.py ... --hbc_open_closed_only --hbc_open_above 5.0 --hbc_close_below 4.5
 
 Manual windows instead of automatic (frames not listed = "excluded"):
     python3 main.py ... --hbc_open_closed_only \
@@ -57,6 +64,48 @@ Output, step1_windows/:
 Later steps / other scripts get the frames with
     from analysis.hbc_open_closed import load_state_frames
     open_frames = load_state_frames(results_dir, "open")
+
+
+STEP 2 -- GATE GEOMETRY, OPEN vs CLOSED
+=======================================
+Question: when the HBC opens, does a Phe side chain swing out of the pore
+(rotamer flip), or do the helices move apart (backbone), or both? And which
+subunit does it?
+
+Per frame, for each of the 4 HBC Phe:
+    chi1        N-CA-CB-CG dihedral (deg). Phe rotamers: g+ ~ +60,
+                t ~ 180, g- ~ -60 (bins: 0..120 g+, 120..240 t, 240..360 g-,
+                angles taken 0..360)
+    chi2        CA-CB-CG-CD1 (deg), folded to 0..180 because the ring is
+                symmetric (a 180 deg ring flip is the same conformation)
+    ring_center distance (A) from the Phe ring centre (CG CD1 CD2 CE1 CE2
+                CZ) to the pore centre at the gate (= mean position of the
+                4 HBC Calpha). Smaller = ring further into the pore.
+and per diagonal:
+    ca_ca       Calpha-Calpha distance (A) across the pore. If it hardly
+                changes between states while the minimum distance does, the
+                opening is a side-chain motion; if it grows, the backbone
+                (helices) moved apart.
+
+Residues are labelled "<subunit>:F<resid>", e.g. "B:F462", subunit letters
+from subunit_groups of the main.py config (as in the subunit check), and
+"(GIRK1)" for the subunit whose cavity residue in asn_residues is ASP.
+Without subunit_groups the label is the diagonal column (A_C / B_D).
+
+Output, step2_gate_geometry/:
+    gate_geometry_per_frame.csv   frame, state, every measure above
+    gate_geometry_by_state.csv    per measure and state: n_frames, median,
+                                  25-75 % range, mean, sd; and the
+                                  open - closed difference of the medians
+                                  (chi1/chi2: circular, see below)
+    chi1_rotamers_by_state.csv    % of frames in g+ / t / g- per Phe and state
+    gate_geometry_timeseries.png  the measures vs frame, windows shaded
+    gate_geometry_distributions.png  histograms, open vs closed
+
+No p-values: consecutive frames are strongly correlated and one run has
+only one or a few open windows, so frame-level tests would be meaningless.
+Compare runs (and WT) once more runs are done. For chi1/chi2 the "median"
+is the circular mean direction and the spread the circular sd.
 """
 
 import json
@@ -70,6 +119,9 @@ CONDUCTION_THRESHOLD = 5.69   # A, Li et al. 2019 J Biol Chem, PMID 31659119
 STATES = ("open", "closed")
 OUT_DIRNAME = "hbc_open_closed"
 STEP1_DIRNAME = "step1_windows"
+STEP2_DIRNAME = "step2_gate_geometry"
+STATE_COLORS = {"open": "#2a9d8f", "closed": "#e76f51"}
+RING_ATOMS = ("CG", "CD1", "CD2", "CE1", "CE2", "CZ")
 
 DEFAULTS = dict(column="B_D", smooth=50, open_above=4.5, close_below=4.0,
                 min_dwell=100, buffer=25)
@@ -79,18 +131,23 @@ DEFAULTS = dict(column="B_D", smooth=50, open_above=4.5, close_below=4.0,
 # main entry point (called from main.py)
 # --------------------------------------------------------------------------
 def run_hbc_open_closed(u, hbc_residues, hbc_diagonal_pairs, results_dir,
-                        manual_windows=None, **settings):
+                        manual_windows=None, subunit_groups=None, asn_residues=None,
+                        **settings):
     """Run all steps for one run. `settings` may override DEFAULTS."""
     cfg = {**DEFAULTS, **settings}
     out_dir = Path(results_dir) / OUT_DIRNAME
     out_dir.mkdir(parents=True, exist_ok=True)
+    run_name = Path(results_dir).name
     print(f"\n{'=' * 60}\nHBC OPEN / CLOSED ANALYSIS -> {out_dir}\n{'=' * 60}")
 
     df = load_or_compute_hbc_distances(u, hbc_residues, hbc_diagonal_pairs,
                                        results_dir, out_dir)
     perm_frames = load_permeation_frames(results_dir)
-    step1_windows(df, out_dir / STEP1_DIRNAME, cfg, manual_windows, perm_frames,
-                  title=f"HBC open / closed -- {Path(results_dir).name}")
+    per_frame, segs = step1_windows(df, out_dir / STEP1_DIRNAME, cfg, manual_windows,
+                                    perm_frames, title=f"HBC open / closed -- {run_name}")
+    step2_gate_geometry(u, hbc_diagonal_pairs, per_frame, segs, out_dir / STEP2_DIRNAME,
+                        subunit_groups, asn_residues, perm_frames,
+                        title=f"HBC gate geometry -- {run_name}")
 
 
 # --------------------------------------------------------------------------
@@ -304,6 +361,253 @@ def plot_states(per_frame, segs, cfg, manual, perm_frames, out_png, title):
     ax.set_title(title)
     fig.tight_layout()
     fig.savefig(out_png, dpi=200)
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------
+# step 2: gate geometry
+# --------------------------------------------------------------------------
+def dihedral(p0, p1, p2, p3):
+    """Dihedral angles (deg, -180..180) for arrays of points, shape (n, 3)."""
+    b0, b1, b2 = p0 - p1, p2 - p1, p3 - p2
+    b1n = b1 / np.linalg.norm(b1, axis=1, keepdims=True)
+    v = b0 - np.sum(b0 * b1n, axis=1, keepdims=True) * b1n
+    w = b2 - np.sum(b2 * b1n, axis=1, keepdims=True) * b1n
+    x = np.sum(v * w, axis=1)
+    y = np.sum(np.cross(b1n, v) * w, axis=1)
+    return np.degrees(np.arctan2(y, x))
+
+
+def chi1_rotamer(chi1):
+    a = np.mod(chi1, 360)
+    return np.where(a < 120, "g+", np.where(a < 240, "t", "g-"))
+
+
+def circ_stats(deg):
+    """Circular mean (deg, -180..180) and circular sd (deg)."""
+    r = np.radians(deg)
+    C, S = np.mean(np.cos(r)), np.mean(np.sin(r))
+    R = min(np.hypot(C, S), 1.0)
+    sd = np.degrees(np.sqrt(-2 * np.log(R))) if R > 0 else np.inf
+    return float(np.degrees(np.arctan2(S, C))), float(sd)
+
+
+def residue_labels(u, hbc_diagonal_pairs, subunit_groups=None, asn_residues=None):
+    """{resid: label}, e.g. {462: 'B:F462 (GIRK1)'}."""
+    def chain(resid):
+        return int(u.select_atoms(f"resid {resid}").atoms[0].fragindex)
+
+    try:
+        chain(hbc_diagonal_pairs[0][0])
+    except Exception:          # no bonds in the topology -> no chains
+        print("  no chain information in the topology -> labels use the diagonal column")
+        return {r: f"{col}:F{r}" for col, pair in zip(("A_C", "B_D"), hbc_diagonal_pairs)
+                for r in pair}
+
+    chain_to_sub = {}
+    for letter, resids in (subunit_groups or {}).items():
+        for r in resids:
+            chain_to_sub[chain(r)] = letter
+    girk1_chains = set()
+    for r in asn_residues or []:
+        if u.select_atoms(f"resid {r}").residues[0].resname in ("ASP", "ASH"):
+            girk1_chains.add(chain(r))
+
+    labels = {}
+    for col, pair in zip(("A_C", "B_D"), hbc_diagonal_pairs):
+        for r in pair:
+            c = chain(r)
+            lab = f"{chain_to_sub.get(c, col)}:F{r}"
+            if c in girk1_chains:
+                lab += " (GIRK1)"
+            labels[r] = lab
+    return labels
+
+
+def compute_gate_geometry(u, hbc_diagonal_pairs, labels):
+    """Per-frame chi1, chi2, ring-centre distance per Phe and Calpha-Calpha
+    per diagonal. Returns a DataFrame indexed like the trajectory."""
+    resids = [r for pair in hbc_diagonal_pairs for r in pair]
+    sel = {}
+    for r in resids:
+        res = u.select_atoms(f"resid {r}")
+        sel[r] = {n: res.select_atoms(f"name {n}") for n in ("N", "CA", "CB", "CG", "CD1")}
+        sel[r]["ring"] = res.select_atoms("name " + " ".join(RING_ATOMS))
+        for n, ag in sel[r].items():
+            if len(ag) == 0:
+                raise ValueError(f"resid {r}: no atom(s) {n} -- is it a PHE?")
+    nf = len(u.trajectory)
+    pos = {r: {k: np.empty((nf, 3)) for k in ("N", "CA", "CB", "CG", "CD1", "ring")}
+           for r in resids}
+    frames = np.empty(nf, int)
+    for i, ts in enumerate(u.trajectory):
+        frames[i] = ts.frame
+        for r in resids:
+            for k in ("N", "CA", "CB", "CG", "CD1"):
+                pos[r][k][i] = sel[r][k].positions[0]
+            pos[r]["ring"][i] = sel[r]["ring"].positions.mean(axis=0)
+
+    center = np.mean([pos[r]["CA"] for r in resids], axis=0)
+    out = {"frame": frames}
+    for r in resids:
+        p, lab = pos[r], labels[r]
+        out[f"chi1 {lab}"] = dihedral(p["N"], p["CA"], p["CB"], p["CG"])
+        out[f"chi2 {lab}"] = np.mod(dihedral(p["CA"], p["CB"], p["CG"], p["CD1"]), 180)
+        out[f"ring_center {lab}"] = np.linalg.norm(p["ring"] - center, axis=1)
+    for col, (r1, r2) in zip(("A_C", "B_D"), hbc_diagonal_pairs):
+        out[f"ca_ca {col}"] = np.linalg.norm(pos[r1]["CA"] - pos[r2]["CA"], axis=1)
+    return pd.DataFrame(out)
+
+
+def summarize_by_state(geo):
+    measures = [c for c in geo.columns if c not in ("frame", "state")]
+    rows = []
+    for m in measures:
+        is_angle = m.startswith(("chi1", "chi2"))
+        stats = {}
+        for st in STATES:
+            v = geo.loc[geo.state == st, m].to_numpy(float)
+            if len(v) == 0:
+                continue
+            if m.startswith("chi1"):
+                c, sd = circ_stats(v)
+                stats[st] = dict(n_frames=len(v), median=c, q25=np.nan, q75=np.nan,
+                                 mean=c, sd=sd)
+            elif m.startswith("chi2"):   # 0..180 period: double, average, halve
+                c, sd = circ_stats(2 * v)
+                stats[st] = dict(n_frames=len(v), median=np.mod(c / 2, 180), q25=np.nan,
+                                 q75=np.nan, mean=np.mod(c / 2, 180), sd=sd / 2)
+            else:
+                stats[st] = dict(n_frames=len(v), median=np.median(v),
+                                 q25=np.percentile(v, 25), q75=np.percentile(v, 75),
+                                 mean=v.mean(), sd=v.std())
+        for st, s in stats.items():
+            rows.append(dict(measure=m, state=st, **{k: round(float(x), 3) if k != "n_frames"
+                                                      else x for k, x in s.items()}))
+        if len(stats) == 2:
+            d = stats["open"]["median"] - stats["closed"]["median"]
+            if is_angle:
+                period = 360 if m.startswith("chi1") else 180
+                d = (d + period / 2) % period - period / 2
+            rows.append(dict(measure=m, state="open-closed", median=round(float(d), 3)))
+    return pd.DataFrame(rows, columns=["measure", "state", "n_frames", "median",
+                                       "q25", "q75", "mean", "sd"])
+
+
+def rotamer_table(geo):
+    rows = []
+    for m in [c for c in geo.columns if c.startswith("chi1")]:
+        for st in STATES:
+            v = geo.loc[geo.state == st, m].to_numpy(float)
+            if len(v) == 0:
+                continue
+            rot = chi1_rotamer(v)
+            rows.append(dict(residue=m[len("chi1 "):], state=st, n_frames=len(v),
+                             **{f"pct_{k}": round(100 * float(np.mean(rot == k)), 1)
+                                for k in ("g+", "t", "g-")}))
+    return pd.DataFrame(rows)
+
+
+def step2_gate_geometry(u, hbc_diagonal_pairs, per_frame, segs, out_dir,
+                        subunit_groups=None, asn_residues=None, perm_frames=(), title=""):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print("\n  step 2: gate geometry (chi1, chi2, ring position, Calpha-Calpha) ...")
+    labels = residue_labels(u, hbc_diagonal_pairs, subunit_groups, asn_residues)
+    geo = compute_gate_geometry(u, hbc_diagonal_pairs, labels)
+    geo = geo.merge(per_frame[["frame", "state"]], on="frame", how="left")
+    geo.insert(1, "state", geo.pop("state"))
+
+    geo.to_csv(out_dir / "gate_geometry_per_frame.csv", index=False, float_format="%.3f")
+    summary = summarize_by_state(geo)
+    summary.to_csv(out_dir / "gate_geometry_by_state.csv", index=False)
+    rot = rotamer_table(geo)
+    rot.to_csv(out_dir / "chi1_rotamers_by_state.csv", index=False)
+    plot_geometry_timeseries(geo, segs, labels, perm_frames,
+                             out_dir / "gate_geometry_timeseries.png", title)
+    plot_geometry_distributions(geo, out_dir / "gate_geometry_distributions.png", title)
+
+    diff = summary[summary.state == "open-closed"][["measure", "median"]]
+    print("  open - closed (median; circular for chi):")
+    print(diff.rename(columns={"median": "open-closed"}).to_string(index=False))
+    print("  chi1 rotamers (% frames):")
+    print(rot.to_string(index=False))
+    print(f"  -> {out_dir}")
+    return geo, summary, rot
+
+
+def _shade(ax, segs):
+    for _, r in segs.iterrows():
+        ax.axvspan(r.start_frame, r.end_frame + 1, color=STATE_COLORS[r.state],
+                   alpha=0.15, lw=0)
+
+
+def plot_geometry_timeseries(geo, segs, labels, perm_frames, out_png, title):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    groups = [("chi1", "χ1 (deg)"), ("chi2", "χ2 (deg, 0–180)"),
+              ("ring_center", "ring – pore centre (Å)"), ("ca_ca", "Cα–Cα (Å)")]
+    fig, axes = plt.subplots(len(groups), 1, figsize=(11, 10), sharex=True)
+    for ax, (key, ylab) in zip(axes, groups):
+        _shade(ax, segs)
+        cols = [c for c in geo.columns if c.startswith(key + " ")]
+        for c in cols:
+            y = geo[c].to_numpy(float)
+            if key == "chi1":
+                y = np.mod(y, 360)   # 0..360 so g+ / t / g- are separate bands
+                ax.plot(geo.frame, y, ".", ms=0.6, alpha=0.5, label=c[len(key) + 1:])
+            else:
+                sm = pd.Series(y).rolling(50, center=True, min_periods=1).median()
+                ax.plot(geo.frame, y, lw=0.3, alpha=0.3)
+                ax.plot(geo.frame, sm, lw=1.3, color=ax.lines[-1].get_color(),
+                        label=c[len(key) + 1:])
+        if key == "chi1":
+            ax.set_yticks([0, 60, 120, 180, 240, 300, 360])
+            for b in (120, 240):
+                ax.axhline(b, color="0.5", lw=0.6, ls=":")
+            ax.set_ylim(0, 360)
+        for f in perm_frames:
+            ax.axvline(f, color="purple", lw=1)
+        ax.set_ylabel(ylab)
+        ax.legend(fontsize=7, loc="upper right", ncol=4, markerscale=10)
+    axes[0].set_title(title + "   (χ1 bands: 0–120 g+, 120–240 t, 240–360 g−)")
+    axes[-1].set_xlabel("Frame")
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=200)
+    plt.close(fig)
+
+
+def plot_geometry_distributions(geo, out_png, title):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    measures = [c for c in geo.columns if c not in ("frame", "state")]
+    ncol = 4
+    nrow = int(np.ceil(len(measures) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(3.2 * ncol, 2.6 * nrow))
+    for ax, m in zip(axes.flat, measures):
+        vals = {st: geo.loc[geo.state == st, m].to_numpy(float) for st in STATES}
+        if m.startswith("chi1"):
+            vals = {k: np.mod(v, 360) for k, v in vals.items()}
+            bins = np.linspace(0, 360, 61)
+        else:
+            allv = np.concatenate([v for v in vals.values() if len(v)])
+            bins = np.linspace(allv.min(), allv.max(), 50) if len(allv) else 10
+        for st in STATES:
+            if len(vals[st]):
+                ax.hist(vals[st], bins=bins, density=True, alpha=0.5,
+                        color=STATE_COLORS[st], label=f"{st} ({len(vals[st])})")
+        ax.set_title(m, fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.legend(fontsize=6)
+    for ax in list(axes.flat)[len(measures):]:
+        ax.axis("off")
+    fig.suptitle(title + "  — open vs closed (density)", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=160)
     plt.close(fig)
 
 
