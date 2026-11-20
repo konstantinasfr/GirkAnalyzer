@@ -367,15 +367,14 @@ def plot_states(per_frame, segs, cfg, manual, perm_frames, out_png, title):
     one_threshold = cfg["open_above"] == cfg["close_below"]
     if not manual and one_threshold:
         ax.axhline(cfg["open_above"], color="0.2", ls="--", lw=1.2,
-                   label=f"open / closed at {cfg['open_above']} Å"
-                         + (" (Li 2019)" if cfg["open_above"] == CONDUCTION_THRESHOLD else ""))
+                   label=f"open / closed at {cfg['open_above']} Å")
     elif not manual:
         ax.axhline(cfg["open_above"], color=colors["open"], ls="--", lw=1,
                    label=f"open above {cfg['open_above']} Å")
         ax.axhline(cfg["close_below"], color=colors["closed"], ls="--", lw=1,
                    label=f"close below {cfg['close_below']} Å")
     if manual or not (one_threshold and cfg["open_above"] == CONDUCTION_THRESHOLD):
-        ax.axhline(CONDUCTION_THRESHOLD, color="0.3", ls=":", lw=1, label="5.69 Å (Li 2019)")
+        ax.axhline(CONDUCTION_THRESHOLD, color="0.3", ls=":", lw=1, label="5.69 Å")
     for i, f in enumerate(perm_frames):
         ax.axvline(f, color="purple", lw=1.2, label="permeation" if i == 0 else None)
     handles, labels = ax.get_legend_handles_labels()
