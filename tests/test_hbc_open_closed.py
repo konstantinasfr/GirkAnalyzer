@@ -83,3 +83,51 @@ assert abs(abs(s.loc[("chi1 B:F12", "open-closed"), "median"]) - 120) < 1e-2
 assert abs(s.loc[("chi1 A:F11", "open-closed"), "median"]) < 1e-2
 assert abs(s.loc[("ca_ca B_D", "open-closed"), "median"]) < 1e-6
 print("test_hbc_open_closed step 2: OK")
+
+# ---- step 2b: backbone vs side chain on known motions ----
+# open frames: Phe 12 (B) only reorients its side chain (Calpha fixed);
+#              Phe 14 (D) moves 1 A straight out as a rigid whole (backbone)
+from analysis.hbc_open_closed import (compute_decomposition, decomposition_by_state,
+                                      decomposition_by_switch, correlation_table, _units,
+                                      segment_table)
+X3 = X.copy()
+X3[is_open, 27:36, 1] -= 1.0            # residue index 3 (resid 14) sits at y = -5: push to -6
+# resid 12 (atoms 9-17, CA = 10): swing its side chain (CB..CZ) 50 deg around the
+# z axis through its own CA -> pure reorientation, CA stays where it is
+R = np.array([[np.cos(np.radians(50)), -np.sin(np.radians(50)), 0],
+              [np.sin(np.radians(50)), np.cos(np.radians(50)), 0], [0, 0, 1]])
+ca12 = X3[:, 10:11, :]
+X3[is_open, 11:18] = ((X3[is_open, 11:18] - ca12[is_open]) @ R.T + ca12[is_open])
+u.load_new(X3, format=MemoryReader)
+geo3, pos3 = compute_gate_geometry(u, pairs, labels, keep_positions=True)
+# the 4 test Phe are the whole "protein", so their centroid moves with D; real
+# channels have ~1000 CA. Use the true pore centre (origin) as the reference:
+pos3["_ref_center"] = np.zeros((nf, 3))
+dec = compute_decomposition(pos3, pairs, labels)
+dec.insert(0, "frame", np.arange(nf)); dec.insert(1, "state", np.where(is_open, "open", "closed"))
+units = _units(pairs, labels)
+bs = decomposition_by_state(dec, units).set_index("unit")
+# D: rigid -> all backbone, no side-chain part
+assert abs(bs.loc["D:F14", "d_backbone"] - 1.0) < 0.02 and abs(bs.loc["D:F14", "d_sidechain"]) < 0.02
+assert abs(bs.loc["D:F14", "pct_backbone"] - 100) < 2
+# B: chi1 flip -> no backbone part, all side chain
+assert abs(bs.loc["B:F12", "d_backbone"]) < 0.02 and abs(bs.loc["B:F12", "d_sidechain"]) > 0.1
+assert abs(bs.loc["B:F12", "pct_sidechain"] - 100) < 2
+# A, C untouched
+assert abs(bs.loc["A:F11", "d_total"]) < 0.02 and abs(bs.loc["C:F13", "d_total"]) < 0.02
+# parts add up exactly
+assert np.allclose(bs.d_backbone + bs.d_sidechain, bs.d_total, atol=2e-3)
+# the axis-based radial distance equals the in-plane distance (pore axis = z here)
+assert np.allclose(dec["ca_r A:F11"], 5) and np.allclose(dec.loc[is_open, "ca_r D:F14"], 6)
+segs3 = segment_table(np.arange(nf), np.zeros(nf), dec.state.to_numpy())
+sw = decomposition_by_switch(dec, segs3, units, smooth=1).set_index(["switch", "unit"])
+assert list(sw.index.get_level_values(0).unique()) == ["closed->open", "open->closed"]
+assert abs(sw.loc[("closed->open", "D:F14"), "d_backbone"] - 1) < 0.02
+assert sw.loc[("closed->open", "D:F14"), "t_half_backbone"] == 100
+assert abs(sw.loc[("open->closed", "D:F14"), "d_backbone"] + 1) < 0.02
+assert sw.loc[("open->closed", "D:F14"), "t_half_backbone"] == 200
+assert sw.loc[("open->closed", "B:F12"), "t_half_sidechain"] == 200
+hbc = pd.DataFrame(dict(frame=np.arange(nf), A_C=dec["radial_gap A_C"], B_D=dec["radial_gap B_D"]))
+c = correlation_table(dec, hbc).set_index("diagonal")
+assert abs(c.loc["B_D", "R2_both"] - 1) < 1e-6
+print("test_hbc_open_closed step 2b: OK")
