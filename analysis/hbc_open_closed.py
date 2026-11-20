@@ -19,31 +19,41 @@ step2_gate_geometry/  what changes at the gate: Phe side chains (chi1,
 
 STEP 1 -- OPEN / CLOSED WINDOWS
 ===============================
-Distance used: B_D column of hbc_distances.csv (the diagonal with GIRK1 by
-the repo convention), i.e. the minimum atom-atom distance between the two
-HBC Phe residues of that diagonal. If hbc_distances.csv is not in the
-results folder, it is computed here from the trajectory with the same
-definition (analysis/ion_analysis.py, compute_constriction_point_diameters).
+DEFAULT DEFINITION (Li, Jin, Gazgalis, Cui & Logothetis 2019, J Biol Chem,
+PMID 31659119): the HBC is open when the gate distance is above 5.69 A.
+Distance used: the `mean` column of hbc_distances.csv = the average of the
+two diagonals (A_C + B_D) / 2. Each diagonal is the minimum atom-atom
+distance between the two HBC Phe residues of that diagonal. If
+hbc_distances.csv is not in the results folder, it is computed here from the
+trajectory with the same definition (analysis/ion_analysis.py,
+compute_constriction_point_diameters).
 
 How the frames are labelled:
-1. Smooth: centred rolling median over 50 frames (ignores single-frame
-   spikes, no artefact at the start/end of the run).
-2. Two thresholds: a closed stretch becomes OPEN when the smoothed distance
-   rises above 4.5 A; an open stretch becomes CLOSED when it falls below
-   4.0 A. Two thresholds stop the label flickering near one value.
+1. Smooth: centred rolling median over 50 frames. The raw distance jumps a
+   lot from frame to frame (in the first E141Q run checked it never stays
+   above 5.69 A for more than 33 frames in a row), so the threshold is
+   applied to the smoothed value. No artefact at the start/end of the run.
+2. Threshold: the smoothed distance above 5.69 A = OPEN, below = CLOSED.
+   (Two different thresholds can be given, open_above > close_below; the
+   state then only switches when the distance crosses the far one, which
+   stops flickering near a single value. Default: both 5.69 A.)
 3. Minimum length: a window shorter than 100 frames is merged into its
    neighbours (a short excursion is not a state).
 4. Transition: 25 frames on each side of every switch are labelled
    "transition" and belong to neither state.
 
-4.5 / 4.0 A separate the two conformations seen in E141Q (closed ~3 A,
-open ~5 A). They are NOT the 5.69 A conduction criterion (Li et al. 2019);
-the window table reports % frames > 5.69 A for each window. In the first
-E141Q run checked, the smoothed B_D distance never stays above 5.69 A for
-100 frames, so 5.69 A as the switch gives no open window at all (only 229
-scattered frames are > 5.69 A, nearly all inside the 4.5/4.0 open window).
-Change the thresholds with
-    python3 main.py ... --hbc_open_closed_only --hbc_open_above 5.0 --hbc_close_below 4.5
+The window table also gives the median of each diagonal (A_C, B_D) per
+window: the mean can hide one pinched diagonal (e.g. A_C ~7 A and B_D ~3 A
+average to ~5 A), and the diagonals show which one actually closes.
+
+Other definitions (main.py options):
+    --hbc_column B_D|A_C|mean|min     min = narrowest diagonal in each frame
+    --hbc_open_above X --hbc_close_below Y
+e.g. the earlier E141Q split on the GIRK1 diagonal alone:
+    python3 main.py ... --hbc_open_closed_only --hbc_column B_D \
+        --hbc_open_above 4.5 --hbc_close_below 4.0
+(in the first E141Q run both definitions give the same open window,
+frames ~2810-3700).
 
 Manual windows instead of automatic (frames not listed = "excluded"):
     python3 main.py ... --hbc_open_closed_only \
@@ -54,7 +64,8 @@ Output, step1_windows/:
                              (open / closed / transition / excluded)
     hbc_state_segments.csv   one row per window: state, start_frame,
                              end_frame (inclusive), n_frames, median and IQR
-                             of the distance, % frames > 5.69 A
+                             of the distance used, % frames > 5.69 A, and
+                             the median of A_C and of B_D
     hbc_states.json          settings used + {"open": [[start, end], ...],
                              "closed": [...]}
     hbc_states.png           distance vs frame, windows shaded, permeation
@@ -123,7 +134,8 @@ STEP2_DIRNAME = "step2_gate_geometry"
 STATE_COLORS = {"open": "#2a9d8f", "closed": "#e76f51"}
 RING_ATOMS = ("CG", "CD1", "CD2", "CE1", "CE2", "CZ")
 
-DEFAULTS = dict(column="B_D", smooth=50, open_above=4.5, close_below=4.0,
+DEFAULTS = dict(column="mean", smooth=50, open_above=CONDUCTION_THRESHOLD,
+                close_below=CONDUCTION_THRESHOLD,
                 min_dwell=100, buffer=25)
 
 
@@ -225,8 +237,8 @@ def step1_windows(df, out_dir, cfg, manual_windows=None, perm_frames=(), title="
     return per_frame, segs
 
 
-def find_states(df, column="B_D", smooth=50, open_above=4.5, close_below=4.0,
-                min_dwell=100, buffer=25, manual=None):
+def find_states(df, column="mean", smooth=50, open_above=CONDUCTION_THRESHOLD,
+                close_below=CONDUCTION_THRESHOLD, min_dwell=100, buffer=25, manual=None):
     """Returns (per-frame DataFrame, window DataFrame)."""
     frames = df["frame"].to_numpy(int)
     dist = (df[["A_C", "B_D"]].min(axis=1) if column == "min" else df[column]).to_numpy(float)
@@ -239,7 +251,8 @@ def find_states(df, column="B_D", smooth=50, open_above=4.5, close_below=4.0,
         is_open = apply_min_dwell(hysteresis(s, open_above, close_below), min_dwell)
         labels = label_states(is_open, buffer)
     per_frame = pd.DataFrame(dict(frame=frames, distance=dist, smoothed=s, state=labels))
-    return per_frame, segment_table(frames, dist, labels)
+    diagonals = {c: df[c].to_numpy(float) for c in ("A_C", "B_D") if c in df}
+    return per_frame, segment_table(frames, dist, labels, diagonals)
 
 
 def smooth_median(x, window):
@@ -313,21 +326,28 @@ def parse_manual(text, n):
     return labels
 
 
-def segment_table(frames, dist, labels):
+def segment_table(frames, dist, labels, diagonals=None):
+    """One row per window. `diagonals` {name: per-frame array}: their median
+    per window is added as median_<name>."""
+    diagonals = diagonals or {}
     rows = []
     for state, s, e in runs_of(list(labels)):
         if state not in STATES:
             continue
         d = dist[s:e + 1]
-        rows.append(dict(state=state, start_frame=int(frames[s]), end_frame=int(frames[e]),
-                         n_frames=int(e - s + 1),
-                         median_dist=round(float(np.median(d)), 3),
-                         q25_dist=round(float(np.percentile(d, 25)), 3),
-                         q75_dist=round(float(np.percentile(d, 75)), 3),
-                         pct_above_5p69=round(100 * float(np.mean(d > CONDUCTION_THRESHOLD)), 1)))
+        row = dict(state=state, start_frame=int(frames[s]), end_frame=int(frames[e]),
+                   n_frames=int(e - s + 1),
+                   median_dist=round(float(np.median(d)), 3),
+                   q25_dist=round(float(np.percentile(d, 25)), 3),
+                   q75_dist=round(float(np.percentile(d, 75)), 3),
+                   pct_above_5p69=round(100 * float(np.mean(d > CONDUCTION_THRESHOLD)), 1))
+        for name, v in diagonals.items():
+            row[f"median_{name}"] = round(float(np.median(v[s:e + 1])), 3)
+        rows.append(row)
     return pd.DataFrame(rows, columns=["state", "start_frame", "end_frame", "n_frames",
                                        "median_dist", "q25_dist", "q75_dist",
-                                       "pct_above_5p69"])
+                                       "pct_above_5p69"]
+                        + [f"median_{n}" for n in diagonals])
 
 
 def plot_states(per_frame, segs, cfg, manual, perm_frames, out_png, title):
@@ -344,12 +364,18 @@ def plot_states(per_frame, segs, cfg, manual, perm_frames, out_png, title):
             label=f"{cfg['column']} (raw)")
     ax.plot(per_frame.frame, per_frame.smoothed, color="black", lw=1.4,
             label=f"rolling median ({cfg['smooth']} frames)")
-    if not manual:
+    one_threshold = cfg["open_above"] == cfg["close_below"]
+    if not manual and one_threshold:
+        ax.axhline(cfg["open_above"], color="0.2", ls="--", lw=1.2,
+                   label=f"open / closed at {cfg['open_above']} Å"
+                         + (" (Li 2019)" if cfg["open_above"] == CONDUCTION_THRESHOLD else ""))
+    elif not manual:
         ax.axhline(cfg["open_above"], color=colors["open"], ls="--", lw=1,
                    label=f"open above {cfg['open_above']} Å")
         ax.axhline(cfg["close_below"], color=colors["closed"], ls="--", lw=1,
                    label=f"close below {cfg['close_below']} Å")
-    ax.axhline(CONDUCTION_THRESHOLD, color="0.3", ls=":", lw=1, label="5.69 Å (Li 2019)")
+    if manual or not (one_threshold and cfg["open_above"] == CONDUCTION_THRESHOLD):
+        ax.axhline(CONDUCTION_THRESHOLD, color="0.3", ls=":", lw=1, label="5.69 Å (Li 2019)")
     for i, f in enumerate(perm_frames):
         ax.axvline(f, color="purple", lw=1.2, label="permeation" if i == 0 else None)
     handles, labels = ax.get_legend_handles_labels()
