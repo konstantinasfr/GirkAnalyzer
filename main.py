@@ -95,6 +95,12 @@ def main():
                         help="Run only the classical cavity ESP (cavity_esp_classical) for this run and stop; for G12 "
                              "it also computes the potential without E141 and without D173. Skips the ion tracking "
                              "and every other analysis.")
+    parser.add_argument("--hbc_open_closed_only", action="store_true",
+                        help="Run only the HBC open vs closed analysis (analysis/hbc_open_closed.py) for "
+                             "this run and stop. Results in results_dir/hbc_open_closed/.")
+    parser.add_argument("--hbc_windows", default=None,
+                        help='with --hbc_open_closed_only: set the windows by hand instead of automatically, '
+                             'e.g. "open:2780-3750;closed:0-2700,3800-6799" (frames not listed are excluded)')
     parser.add_argument("--skip_pip_check", action="store_true",
                         help="leave the PIP2 part out of the subunit check (subunit order and "
                              "GIRK1 placement are still checked). Use only for analyses that do "
@@ -814,6 +820,12 @@ def main():
             drop_girk1=(args.channel_type == "G12"),  # also the potential without E141 and without D173
         )
         raise SystemExit("--esp_only: done.")
+
+    if args.hbc_open_closed_only:
+        from analysis.hbc_open_closed import run_hbc_open_closed
+        run_hbc_open_closed(u, hbc_residues, hbc_diagonal_pairs, results_dir,
+                            manual_windows=args.hbc_windows)
+        raise SystemExit("--hbc_open_closed_only: done.")
     # end_frame = 3000
     print(f"Using end_frame = {end_frame} (last frame of trajectory)")
 

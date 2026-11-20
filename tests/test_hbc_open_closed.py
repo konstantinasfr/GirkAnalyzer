@@ -1,8 +1,8 @@
-"""Synthetic check for hbc_state_windows: closed (3 A) / open (5 A) / closed trace with
-noise, a short spike and a short dip. Run from the repo root: python3 tests/test_hbc_state_windows.py"""
+"""Synthetic check for analysis/hbc_open_closed.py (step 1): closed (3 A) / open (5 A) / closed trace with
+noise, a short spike and a short dip. Run from the repo root: python3 tests/test_hbc_open_closed.py"""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np, pandas as pd
-from hbc_state_windows import find_states, parse_manual
+from analysis.hbc_open_closed import find_states, parse_manual
 
 rng = np.random.default_rng(0)
 x = np.full(3000, 3.0); x[1000:2000] = 5.0
@@ -22,4 +22,4 @@ lab = parse_manual("open:10-19;closed:0-4,30-39", 50)
 assert (lab[10:20] == "open").all() and (lab[30:40] == "closed").all() and lab[5] == "excluded"
 try: parse_manual("open:0-10;closed:5-20", 50); raise SystemExit("overlap not caught")
 except ValueError: pass
-print("test_hbc_state_windows: OK")
+print("test_hbc_open_closed: OK")
