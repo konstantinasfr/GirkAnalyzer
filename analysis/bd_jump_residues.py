@@ -120,8 +120,8 @@ OUTPUT, bd_jump_residues/minjump_<X>/
                                          under it = after - before (percentage points)
                                          Selected per gate: within 8 A, >= 5 % contact
                                          before or after, not same subunit within +-2
-                                         ('present') / +-1 ('change'); 'change' also
-                                         >= 5 points change. 'present' = which pocket
+                                         ('present') / +-1 ('change'); both plots also
+                                         >= 10 points change. 'present' = which pocket
                                          each gate Phe sits in
         contacts/event<k>_frame<F>_contacts_<change|present>.csv
                                          the numbers of that plot: one row per gate
@@ -152,7 +152,8 @@ DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=(300, 500), seg
                 min_frames=100, pore_helix=12, ratio_moved=3.0,
                 tm_range=(-50, 15), gate_flank=3, neighbour_cutoff=8.0, contact_cutoff=4.5,
                 contact_sets=(("heavy", 4.5), ("all", 3.5)),
-                top_n=10, top_exclude_ends=15, contact_top_n=0, contact_min_pct=5.0)
+                top_n=10, top_exclude_ends=15, contact_top_n=0, contact_min_pct=5.0,
+                contact_min_change=10.0)
 BACKBONE = ("N", "CA", "C", "O", "OXT")
 GATE_SHOW = ["event", "direction", "resid", "resname", "pdb", "subunit", "girk1", "pos", "disp",
              "d_radial", "d_axial", "d_around", "sc_disp", "noise", "ratio", "r_before"]
@@ -252,7 +253,8 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
                 neighbours[cs].append(nb_cs)
                 ctitle = f"{title}\ncontact = {atoms} atoms closer than {ccut:g} Å"
                 for kind in ("change", "present"):
-                    sel = select_contacts(nb_cs, kind, cfg["contact_top_n"], cfg["contact_min_pct"])
+                    sel = select_contacts(nb_cs, kind, cfg["contact_top_n"], cfg["contact_min_pct"],
+                                          cfg["contact_min_change"])
                     tab = contacts_table(fill_union(nb_cs, sel, kind))
                     tab.to_csv(sd / f"{tag}_contacts_{kind}.csv", index=False,
                                float_format="%.3f")
@@ -260,7 +262,8 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
                     for lab in ("pdb", "raw"):
                         plot_contacts(nb_cs, sd / f"{tag}_contacts_{kind}_{lab}.png", ctitle,
                                       kind=kind, label=lab, n=cfg["contact_top_n"],
-                                      min_pct=cfg["contact_min_pct"], cutoff=ccut)
+                                      min_pct=cfg["contact_min_pct"], cutoff=ccut,
+                                      min_change=cfg["contact_min_change"])
                 if cs == contact_sets[0]:
                     nb = nb_cs
             mover = gate.loc[gate.pos == 0].sort_values("disp", ascending=False).iloc[0]
@@ -709,7 +712,7 @@ def plot_trace(frames, bd, ac, bounds, out_png, title):
 HBC_GIRK2 = 192        # GIRK2 numbering of the HBC Phe: position label = 192 + pos
 
 
-def select_contacts(nb, kind="present", n=0, min_pct=5.0):
+def select_contacts(nb, kind="present", n=0, min_pct=5.0, min_change=10.0):
     """The neighbour rows shown in a contact plot (see plot_contacts), with the
     position columns added: pos (from the HBC Phe of the neighbour's own
     subunit), position_girk2 (192 + pos), change_pct (after - before)."""
@@ -720,8 +723,8 @@ def select_contacts(nb, kind="present", n=0, min_pct=5.0):
     skip = 1 if kind == "change" else 2
     helix = d.same_subunit.astype(bool) & (d.seq_distance <= skip)
     d = d[~helix & ((d.contact_before_pct >= min_pct) | (d.contact_after_pct >= min_pct))]
+    d = d[d.chg.abs() >= min_change]          # both plots: only residues whose contact changes
     if kind == "change":
-        d = d[d.chg.abs() >= min_pct]
         d["key"] = d.chg.abs()
     else:
         d["key"] = d[["contact_before_pct", "contact_after_pct"]].max(axis=1)
@@ -780,7 +783,7 @@ def contacts_table(d):
 
 
 def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5.0,
-                  cutoff=4.5):
+                  cutoff=4.5, min_change=10.0):
     """2 x 2 grid, one panel per gate Phe. x axis = residue POSITIONS, the same
     in every panel: pos = resid - HBC Phe resid of the residue's own subunit,
     labelled in GIRK2 numbering (192 + pos, so GIRK1 A174 = 185) for label
@@ -791,14 +794,14 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
     its subunit (and raw resid for 'raw') and the change in percentage points.
     If two subunits touch the same gate at the same position, both are drawn.
     Selected per gate: neighbours within 8 A with >= min_pct contact before or
-    after, not in the same subunit within +-1 ('change') / +-2 ('present'); for
-    'change' also a change of >= min_pct points; n > 0 keeps only the top n."""
+    after, not in the same subunit within +-1 ('change') / +-2 ('present');
+    both plots also need a change of >= min_change points (default 10); n > 0 keeps only the top n."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
 
-    d = fill_union(nb, select_contacts(nb, kind, n, min_pct), kind)
+    d = fill_union(nb, select_contacts(nb, kind, n, min_pct, min_change), kind)
     if d.empty:
         return
     skip = 1 if kind == "change" else 2
@@ -822,7 +825,7 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
 
     kmax = int(d.groupby(["gate", "pos"]).size().max())   # most residues in one column
     slot = 0.8 / kmax                                      # same width for every residue
-    fig, axes = plt.subplots(2, 2, figsize=(max(12, 0.55 * kmax * len(positions) * 2 + 3), 10.5),
+    fig, axes = plt.subplots(2, 2, figsize=(max(14, 0.9 * kmax * len(positions) * 2 + 3), 12),
                              sharey=True)
     for ax, (_, g) in zip(axes.flat, gates.iterrows()):
         s = d[d.gate == g.gate].sort_values(["pos", "sub"])
@@ -837,18 +840,19 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
                        color="#2a9d8f" if r.chg >= 0 else "#e76f51")
                 name = (f"{ONE_LETTER.get(r.resname, 'X')}{HBC_GIRK2 + int(r.pos)}.{r['sub']}"
                         if label == "pdb" else f"{r.resname}{int(r.resid)}")
-                ax.text(xc, -3, name, ha="center", va="top", fontsize=7.5, clip_on=False,
+                ax.text(xc, -3, name, ha="center", va="top", fontsize=12, clip_on=False,
                         color="0.1" if r.passes_filter else "0.5",
                         style="normal" if r.passes_filter else "italic")
                 c = round(float(r.chg)) + 0          # no "-0 %"
-                ax.text(xc, -10, f"{c:+d} %", ha="center", va="top", fontsize=7.5,
+                ax.text(xc, -12, f"{c:+d} %", ha="center", va="top", fontsize=12,
                         clip_on=False, fontweight="bold",
                         color="#1f7a6f" if c > 0 else "#c0503a" if c < 0 else "0.45")
         ax.set_xticks(np.arange(len(positions)))
         ax.set_xticklabels([""] * len(positions))
         ax.tick_params(axis="x", length=0)
         gname = g.gate if label == "pdb" else f"resid {int(g.gate_resid)}"
-        ax.set_title(f"gate {gname}  ({g.gate_subunit})", fontsize=10)
+        ax.set_title(f"gate {gname}  ({g.gate_subunit})", fontsize=15, fontweight="bold")
+        ax.tick_params(axis="y", labelsize=12)
         ax.set_ylim(0, 105)
         ax.set_xlim(-0.6, len(positions) - 0.4)
         for i in range(1, len(positions)):
@@ -856,15 +860,12 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
         ax.grid(axis="y", color="0.9", lw=0.6)
         ax.set_axisbelow(True)
     for ax in axes[:, 0]:
-        ax.set_ylabel(f"% frames in contact (< {cutoff:g} Å)")
+        ax.set_ylabel(f"% frames in contact (< {cutoff:g} Å)", fontsize=13)
     fig.legend(handles=[Patch(color="#9aa5b1", label="before the jump"),
                         Patch(color="#2a9d8f", label="after: contact gained"),
                         Patch(color="#e76f51", label="after: contact lost")],
-               loc="lower center", ncol=3, frameon=False, fontsize=9)
-    if kind == "change":
-        rule = f"contact changes by ≥ {min_pct:g} points"
-    else:
-        rule = f"≥ {min_pct:g} % contact before or after"
+               loc="lower center", ncol=3, frameon=False, fontsize=13)
+    rule = f"≥ {min_pct:g} % contact before or after and a change of ≥ {min_change:g} points"
     if n:
         rule += f", top {n} per gate"
     rule += ("; grey italic name = shown only so every panel has the same positions "
@@ -875,8 +876,8 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
               "F83.G1)" if label == "pdb" else "raw resid")
     fig.suptitle(f"{title}\nfor every neighbouring residue: % frames in contact before (grey) and after "
                  f"the jump; under it the residue and the change (after - before)"
-                 f"\n{naming}; neighbours within 8 Å, {rule}, not same subunit ±{skip}", fontsize=9)
-    fig.tight_layout(rect=(0, 0.04, 1, 0.91), h_pad=2.5)
+                 f"\n{naming}; neighbours within 8 Å, {rule}, not same subunit ±{skip}", fontsize=12)
+    fig.tight_layout(rect=(0, 0.05, 1, 0.89), h_pad=4)
     fig.savefig(out_png, dpi=170)
     plt.close(fig)
 
