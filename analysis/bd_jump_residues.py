@@ -762,7 +762,7 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
     subs = sorted(d["sub"].unique(), key=lambda x: (x.startswith("G"), x))
     scol = {s_: palette[i % len(palette)] for i, s_ in enumerate(subs)}
 
-    fig, axes = plt.subplots(2, 2, figsize=(max(12, 0.75 * len(positions) * 2 + 3), 10),
+    fig, axes = plt.subplots(2, 2, figsize=(max(12, 1.0 * len(positions) * 2 + 3), 10.5),
                              sharey=True)
     for ax, (_, g) in zip(axes.flat, gates.iterrows()):
         s = d[d.gate == g.gate].sort_values(["pos", "sub"])
@@ -774,12 +774,14 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
                 ax.bar(xc, r.contact_after_pct, w * 0.9, color=scol[r["sub"]])
                 ax.hlines(r.contact_before_pct, xc - 0.45 * w, xc + 0.45 * w, color="black",
                           lw=2)
-                ax.text(xc, -4, f"{r.chg:+.0f}", ha="center", va="top", fontsize=8,
-                        clip_on=False,
+                name = str(r.neighbour) if label == "pdb" else f"{r.resname}{int(r.resid)}"
+                ax.text(xc, -3, name, ha="center", va="top", fontsize=7, clip_on=False)
+                ax.text(xc, -9.5, f"{r.chg:+.0f}", ha="center", va="top", fontsize=7.5,
+                        clip_on=False, fontweight="bold",
                         color="#1f7a6f" if r.chg > 0 else "#c0503a" if r.chg < 0 else "0.45")
         ax.set_xticks(np.arange(len(positions)))
-        ax.set_xticklabels(xl, fontsize=9)
-        ax.tick_params(axis="x", pad=16)
+        ax.set_xticklabels([f"pos {x_}" for x_ in xl], fontsize=8, color="0.45")
+        ax.tick_params(axis="x", pad=30, length=0)
         gname = g.gate if label == "pdb" else f"resid {int(g.gate_resid)}"
         ax.set_title(f"gate {gname}  ({g.gate_subunit})", fontsize=10)
         ax.set_ylim(0, 105)
@@ -802,10 +804,10 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
         rule += f", top {n} per gate"
     xinfo = ("position in GIRK2 numbering (GIRK1 shifted +11: A174.G1 = 185)" if label == "pdb"
              else "position from the HBC Phe of the residue's own subunit (gate = 0)")
-    fig.suptitle(f"{title}\nbar = % contact AFTER the jump, black line = BEFORE, number = after - "
-                 f"before (percentage points); one bar per neighbouring residue, coloured by its "
-                 f"subunit\nx axis = {xinfo}; neighbours within 8 Å, {rule}, not same subunit ±{skip}",
-                 fontsize=9)
+    fig.suptitle(f"{title}\none bar per neighbouring residue (name under the bar), coloured by its "
+                 f"subunit: bar = % contact AFTER the jump, black line = BEFORE, number = after - "
+                 f"before (percentage points)\ngrey 'pos' = {xinfo}; neighbours within 8 Å, {rule}, "
+                 f"not same subunit ±{skip}", fontsize=9)
     fig.tight_layout(rect=(0, 0.04, 1, 0.91), h_pad=2.5)
     fig.savefig(out_png, dpi=170)
     plt.close(fig)
