@@ -104,6 +104,7 @@ with tempfile.TemporaryDirectory() as tmp:
         assert np.all(np.abs(B.loc[-5:9, "d_axial"]) < 0.15)          # outward, not up/down
         assert r.loc[r.resname == "PHE", "pos"].eq(0).all()
         assert list(d.glob("event1_frame*_TM.png"))
+        assert all(list(d.glob(f"event1_frame*_top10_{k}.png")) for k in ("pdb", "raw", "TM_pdb", "TM_raw"))
         g = pd.read_csv(next(d.glob("event1_frame*_gate.csv")))
         assert sorted(g.pos.unique()) == list(range(-3, 4)) and len(g) == 4 * 7
         gB = g[(g.subunit == "B") & (g.pos == 0)].iloc[0]

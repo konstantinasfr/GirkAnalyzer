@@ -70,6 +70,16 @@ OUTPUT, bd_jump_residues/minjump_<X>/
                                          part (pos -50 .. +15) with its own
                                          y-scale; the gate (pos 0) is outlined
                                          and labelled in every subunit
+        event<k>_frame<F>_top10_pdb.png  one panel per subunit: the 10 residues
+        event<k>_frame<F>_top10_raw.png  with the biggest Calpha displacement
+        event<k>_frame<F>_top10_TM_*.png (the _TM versions rank only the
+                                         transmembrane part, pos -50 .. +15)
+                                         (bar; green = out, red = in; faded =
+                                         under 3 x noise), side-chain displacement
+                                         (dot) and 3 x noise (grey tick); labels in
+                                         PDB numbering or raw resid. The first and
+                                         last `top_exclude_ends` (15) residues of
+                                         each subunit are left out (floppy ends)
         event<k>_frame<F>_gate.csv       gate table: the four HBC Phe and the 3
                                          residues on each side (pos -3 .. +3)
         event<k>_frame<F>_ranked_raw.csv every residue, sorted by Calpha
@@ -115,7 +125,8 @@ import pandas as pd
 OUT_DIRNAME = "bd_jump_residues"
 DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=300, segment_max=0,
                 min_frames=100, pore_helix=12, ratio_moved=3.0,
-                tm_range=(-50, 15), gate_flank=3, neighbour_cutoff=8.0, contact_cutoff=4.5)
+                tm_range=(-50, 15), gate_flank=3, neighbour_cutoff=8.0, contact_cutoff=4.5,
+                top_n=10, top_exclude_ends=15)
 BACKBONE = ("N", "CA", "C", "O", "OXT")
 GATE_SHOW = ["event", "direction", "resid", "resname", "pdb", "subunit", "girk1", "pos", "disp",
              "d_radial", "d_axial", "d_around", "sc_disp", "noise", "ratio", "r_before"]
@@ -187,6 +198,13 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
             plot_event(res, mdir / f"{tag}.png", title)
             plot_event(res, mdir / f"{tag}_TM.png", title + "  — transmembrane part",
                        pos_range=cfg["tm_range"])
+            for lab in ("pdb", "raw"):
+                plot_top_residues(res, mdir / f"{tag}_top{cfg['top_n']}_{lab}.png", title,
+                                  label=lab, n=cfg["top_n"],
+                                  exclude_ends=cfg["top_exclude_ends"])
+                plot_top_residues(res, mdir / f"{tag}_top{cfg['top_n']}_TM_{lab}.png",
+                                  title + "  — transmembrane part", label=lab, n=cfg["top_n"],
+                                  exclude_ends=0, pos_range=cfg["tm_range"])
             gate = gate_table(res, cfg["gate_flank"])
             gate.to_csv(mdir / f"{tag}_gate.csv", index=False, float_format="%.3f")
             nb = neighbour_table(traj, info, res, b, a, cfg)
@@ -611,6 +629,58 @@ def plot_trace(frames, bd, ac, bounds, out_png, title):
     ax.legend(fontsize=8, loc="best")
     fig.tight_layout()
     fig.savefig(out_png, dpi=200)
+    plt.close(fig)
+
+
+def plot_top_residues(res, out_png, title, label="pdb", n=10, exclude_ends=15, pos_range=None):
+    """One horizontal-bar panel per subunit with its n residues of biggest Calpha
+    displacement (chain ends left out). label = 'pdb' or 'raw'. With pos_range
+    (lo, hi) only residues at those positions from the HBC Phe are ranked."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+
+    subs = sorted(res.subunit.unique())
+    fig, axes = plt.subplots(1, len(subs), figsize=(4.2 * len(subs), 4.6), sharex=True)
+    axes = np.atleast_1d(axes)
+    xmax = 0.0
+    for ax, s in zip(axes, subs):
+        r = res[res.subunit == s].sort_values("resid")
+        if exclude_ends and len(r) > 2 * exclude_ends + n:
+            r = r.iloc[exclude_ends:len(r) - exclude_ends]
+        if pos_range is not None:
+            r = r[(r.pos >= pos_range[0]) & (r.pos <= pos_range[1])]
+        top = r.nlargest(n, "disp").iloc[::-1]          # biggest at the top
+        y = np.arange(len(top))
+        real = top.ratio >= 3
+        colors = np.where(top.d_radial > 0, "#2a9d8f", "#e76f51")
+        ax.barh(y, top.disp, color=colors, alpha=0.35, edgecolor="none")
+        ax.barh(y[real.values], top.disp[real.values], color=colors[real.values], edgecolor="black",
+                lw=0.6)
+        ax.scatter(top.sc_disp, y, color="#6a4c93", s=14, zorder=3)
+        ax.scatter(3 * top.noise, y, marker="|", color="0.4", s=120, zorder=3)
+        labels = (top.pdb if label == "pdb" else top.resname + top.resid.astype(str)).tolist()
+        labels = [f"{l}  ({int(p):+d})" if np.isfinite(p) else l for l, p in zip(labels, top.pos)]
+        ax.set_yticks(y)
+        ax.set_yticklabels(labels, fontsize=8)
+        name = s + ("  (GIRK1)" if r.girk1.any() else "")
+        ax.set_title(name, fontsize=10)
+        ax.set_xlabel("displacement (Å)")
+        xmax = max(xmax, top.disp.max(), np.nanmax(top.sc_disp.values), 3 * top.noise.max())
+    for ax in axes:
+        ax.set_xlim(0, xmax * 1.08)
+    handles = [Patch(color="#2a9d8f", label="Cα moved out"), Patch(color="#e76f51", label="Cα moved in"),
+               Patch(facecolor="white", edgecolor="black", label="solid + outline = real move (≥ 3× noise)"),
+               Line2D([], [], marker="o", ls="", color="#6a4c93", label="side-chain displacement"),
+               Line2D([], [], marker="|", ls="", color="0.4", markersize=10, label="3 × noise")]
+    fig.legend(handles=handles, loc="lower center", ncol=5, fontsize=8, frameon=False)
+    numbering = "PDB numbering" if label == "pdb" else "raw resid"
+    fig.suptitle(f"{title}\ntop {n} residues by Cα displacement per subunit ({numbering}; "
+                 f"(+n) = position from the HBC Phe; chain ends left out)", fontsize=9)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.92))
+    fig.savefig(out_png, dpi=180)
     plt.close(fig)
 
 
