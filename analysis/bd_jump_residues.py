@@ -116,10 +116,13 @@ OUTPUT, bd_jump_residues/minjump_<X>/
                                          frames in contact (< 4.5 A) before (grey) and
                                          after (green = gained, red = lost); under each
                                          pair the change in percentage points.
-                                         'change': per gate the 10 contacts that change
-                                         most (>= 5 points); 'present': per gate the 10
-                                         most frequent contacts = which pocket each
-                                         gate Phe sits in. Same-subunit neighbours
+                                         Selected per gate (no top-N limit, setting
+                                         contact_top_n = 0): every neighbour within 8 A
+                                         with >= 5 % contact before or after, not in
+                                         the same subunit within +-2 ('present') / +-1
+                                         ('change'); for 'change' also a change of >= 5
+                                         percentage points. 'present' = which pocket
+                                         each gate Phe sits in. Same-subunit neighbours
                                          within +-1 ('change') / +-2 ('present') are not
                                          selected and drawn as 'helix'; neighbours
                                          < 5 % before and after are not selected
@@ -142,7 +145,7 @@ OUT_DIRNAME = "bd_jump_residues"
 DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=(300, 500), segment_max=0,
                 min_frames=100, pore_helix=12, ratio_moved=3.0,
                 tm_range=(-50, 15), gate_flank=3, neighbour_cutoff=8.0, contact_cutoff=4.5,
-                top_n=10, top_exclude_ends=15, contact_top_n=10, contact_min_pct=5.0)
+                top_n=10, top_exclude_ends=15, contact_top_n=0, contact_min_pct=5.0)
 BACKBONE = ("N", "CA", "C", "O", "OXT")
 GATE_SHOW = ["event", "direction", "resid", "resname", "pdb", "subunit", "girk1", "pos", "disp",
              "d_radial", "d_axial", "d_around", "sc_disp", "noise", "ratio", "r_before"]
@@ -692,7 +695,8 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=10, min_pct=
             key = s.chg.abs()
         else:
             key = s[["contact_before_pct", "contact_after_pct"]].max(axis=1)
-        chosen |= set(s.loc[key.sort_values(ascending=False).index].head(n).resid)
+        ranked = s.loc[key.sort_values(ascending=False).index]
+        chosen |= set((ranked.head(n) if n else ranked).resid)
     if not chosen:
         return
     names = d.drop_duplicates("resid").set_index("resid")
@@ -737,12 +741,16 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=10, min_pct=
                         Patch(color="#2a9d8f", label="after: contact gained"),
                         Patch(color="#e76f51", label="after: contact lost")],
                loc="lower center", ncol=3, frameon=False, fontsize=9)
-    what = ("neighbours whose contact changes most (>= 5 points)" if kind == "change"
-            else "neighbours most often in contact")
     numbering = "PDB numbering" if label == "pdb" else "raw resid"
-    fig.suptitle(f"{title}\nresidues = union over the four gates of the up to {n} {what} "
-                 f"({numbering}); number under the bars = after - before (percentage points); "
-                 f"'helix' = same subunit within ±{skip}", fontsize=9)
+    if kind == "change":
+        rule = (f"contact changes by ≥ {min_pct:g} points" + (f", top {n} per gate" if n else ""))
+    else:
+        rule = (f"≥ {min_pct:g} % contact before or after" + (f", top {n} per gate" if n else ""))
+    fig.suptitle(f"{title}\nresidues = union over the four gate Phe of all neighbours within 8 Å, "
+                 f"{rule}, not same subunit ±{skip} ({numbering})\n"
+                 f"number under the bars = after - before (percentage points); "
+                 f"'helix' = same subunit within ±{skip}; blank = not within 8 Å of that gate",
+                 fontsize=9)
     fig.tight_layout(rect=(0, 0.04, 1, 0.93))
     fig.savefig(out_png, dpi=170)
     plt.close(fig)
