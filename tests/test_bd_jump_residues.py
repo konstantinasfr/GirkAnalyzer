@@ -115,4 +115,17 @@ with tempfile.TemporaryDirectory() as tmp:
         assert set(raw.head(27).subunit) <= {"B", "D"}          # the 27 moved residues come first
         assert (raw.resid == raw.resid).all() and "residue" in pdb and len(pdb) == len(raw)
         assert (raw.head(15).real_move == "yes").all()
+        nb = pd.read_csv(next(d.glob("event1_frame*_neighbours.csv")))
+        nbB = nb[nb.gate_resid == 71]
+        assert 71 not in set(nbB.resid) and {70, 72} <= set(nbB.resid)
+        assert (nbB.dist_before.le(8) | nbB.dist_after.le(8)).all()
+        # brute force: median over the "before" frames of the min heavy-atom distance F71 - A74
+        row = nbB[nbB.resid == 74].iloc[0]
+        lo, hi = map(int, str(row_frames := r.before_frames.iloc[0]).split("-"))
+        g71 = u.select_atoms("resid 71"); a74 = u.select_atoms("resid 74")
+        dmins = []
+        for ts in u.trajectory[lo:hi + 1]:
+            dmins.append(np.linalg.norm(g71.positions[:, None] - a74.positions[None], axis=2).min())
+        assert abs(np.median(dmins) - row.dist_before) < 1e-3, (np.median(dmins), row.dist_before)
+        assert (d / "all_events_neighbours.csv").exists()
     print("test_bd_jump_residues: OK")

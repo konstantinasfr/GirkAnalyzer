@@ -85,7 +85,20 @@ OUTPUT, bd_jump_residues/minjump_<X>/
         event<k>_frame<F>_disp.pdb       frame-0 structure with the Calpha
                                          displacement in the B-factor column
                                          (colour by B-factor in PyMOL / VMD)
+        event<k>_frame<F>_neighbours.csv residues near each of the four HBC gate
+                                         Phe IN 3D (not by sequence): every residue
+                                         with a heavy atom within `neighbour_cutoff`
+                                         (8 A) of the gate Phe in the before or the
+                                         after frames, from any subunit. Per
+                                         neighbour: distance to the gate Phe before
+                                         and after (median of the per-frame minimum
+                                         heavy-atom distance), the change, % of
+                                         frames in contact (< 4.5 A) before / after,
+                                         its own displacement at the jump and
+                                         real_move. Sorted per gate by how much the
+                                         distance changes (biggest first)
         all_events_residues.csv          all events, long format
+        all_events_neighbours.csv        the neighbour lists of all events
         all_events_gate.csv              the gate tables of all events
         consistent_residues.csv          per residue over all events of the
                                          run: mean disp, mean d_radial with the
@@ -102,7 +115,7 @@ import pandas as pd
 OUT_DIRNAME = "bd_jump_residues"
 DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=300, segment_max=0,
                 min_frames=100, pore_helix=12, ratio_moved=3.0,
-                tm_range=(-50, 15), gate_flank=3)
+                tm_range=(-50, 15), gate_flank=3, neighbour_cutoff=8.0, contact_cutoff=4.5)
 BACKBONE = ("N", "CA", "C", "O", "OXT")
 GATE_SHOW = ["event", "direction", "resid", "resname", "pdb", "subunit", "girk1", "pos", "disp",
              "d_radial", "d_axial", "d_around", "sc_disp", "noise", "ratio", "r_before"]
@@ -120,7 +133,8 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
     run_name = Path(results_dir).name
     print(f"\n{'=' * 60}\nB_D JUMP RESIDUE ANALYSIS -> {out}\n{'=' * 60}")
 
-    traj = collect_aligned_positions(u, sf_lower, sf_upper, cfg["pore_helix"])
+    gate_resids = [r for pair in hbc_diagonal_pairs for r in pair]
+    traj = collect_aligned_positions(u, sf_lower, sf_upper, cfg["pore_helix"], gate_resids)
     info = residue_table(u, traj["residues"], hbc_diagonal_pairs, subunit_groups, asn_residues,
                          channel_type)
     pd.DataFrame(dict(frame=traj["frames"], fit_rmsd=traj["fit_rmsd"])).to_csv(
@@ -152,7 +166,7 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
                 else f"segment_{'all' if not cfg['segment_max'] else 'max%d' % cfg['segment_max']}")
         mdir = out / name
         mdir.mkdir(exist_ok=True)
-        rows, gates = [], []
+        rows, gates, neighbours = [], [], []
         for k, j in jumps.iterrows():
             b, a = event_windows(bounds, k + 1, mode, cfg)
             if len(b) < cfg["min_frames"] or len(a) < cfg["min_frames"]:
@@ -175,6 +189,16 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
                        pos_range=cfg["tm_range"])
             gate = gate_table(res, cfg["gate_flank"])
             gate.to_csv(mdir / f"{tag}_gate.csv", index=False, float_format="%.3f")
+            nb = neighbour_table(traj, info, res, b, a, cfg)
+            nb.to_csv(mdir / f"{tag}_neighbours.csv", index=False, float_format="%.3f")
+            neighbours.append(nb)
+            mover = gate.loc[gate.pos == 0].sort_values("disp", ascending=False).iloc[0]
+            near = nb[nb.gate == mover.pdb]
+            print(f"\n  [{name}] jump at {int(j.frame)}: 3D neighbours of the gate Phe that moved "
+                  f"most, {mover.pdb} ({mover.disp:.2f} A), biggest distance change first:")
+            print(near.head(15)[["neighbour", "subunit", "dist_before", "dist_after", "d_dist",
+                                 "contact_before_pct", "contact_after_pct", "disp",
+                                 "real_move"]].round(2).to_string(index=False))
             raw, pdb = ranked_lists(res, cfg["ratio_moved"])
             raw.to_csv(mdir / f"{tag}_ranked_raw.csv", index=False, float_format="%.3f")
             pdb.to_csv(mdir / f"{tag}_ranked_pdb.csv", index=False, float_format="%.3f")
@@ -192,6 +216,8 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
         allev.to_csv(mdir / "all_events_residues.csv", index=False, float_format="%.3f")
         allgate = pd.concat(gates, ignore_index=True)
         allgate.to_csv(mdir / "all_events_gate.csv", index=False, float_format="%.3f")
+        pd.concat(neighbours, ignore_index=True).to_csv(
+            mdir / "all_events_neighbours.csv", index=False, float_format="%.3f")
         print(f"\n  [{name}] the four HBC gate Phe at every jump:")
         print(allgate[allgate.pos == 0][GATE_SHOW].round(2).to_string(index=False))
         cons = consistent_residues(allev, cfg["ratio_moved"])
@@ -221,11 +247,13 @@ def alignment_selection(u, sf_lower, sf_upper, pore_helix):
     return sel
 
 
-def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12):
+def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12, gate_resids=()):
     """One pass over the trajectory. Returns frames, fit_rmsd, residues
     (MDAnalysis ResidueGroup of the protein), ca (nf, nres, 3) and sc
     (nf, nres, 3; NaN where a residue has no side chain), all in the frame-0
-    coordinate system of the alignment selection."""
+    coordinate system of the alignment selection. With gate_resids also
+    gate_dist (nf, n_gates, nres): per frame the minimum heavy-atom distance
+    from each gate residue to every residue (NaN for the gate itself)."""
     prot = u.select_atoms("protein")
     residues = prot.residues
     ca_ag = residues.atoms.select_atoms("name CA")
@@ -242,6 +270,23 @@ def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12):
 
     align = alignment_selection(u, sf_lower, sf_upper, pore_helix)
     nf = len(u.trajectory)
+
+    # heavy atoms of every residue, grouped by residue, for the gate distances
+    heavy = residues.atoms.select_atoms("not name H*")
+    h_res = np.array([resmap[a.resindex] for a in heavy], int)
+    order = np.argsort(h_res, kind="stable")
+    heavy, h_res = heavy[order], h_res[order]
+    starts = np.r_[0, np.flatnonzero(np.diff(h_res)) + 1]
+    present = h_res[starts]                   # residue index of each group
+    gate_ag, gate_idx = [], []
+    for g in gate_resids:
+        ag = residues.atoms.select_atoms(f"resid {g} and not name H*")
+        if len(ag):
+            gate_ag.append(ag)
+            gate_idx.append(resmap[ag[0].resindex])
+    gate_dist = np.full((nf, len(gate_ag), nres), np.nan, np.float32) if gate_ag else None
+    if gate_ag:
+        from MDAnalysis.lib.distances import distance_array
     frames = np.empty(nf, int)
     rmsd = np.empty(nf)
     ca = np.empty((nf, nres, 3), np.float32)
@@ -258,13 +303,20 @@ def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12):
         move = lambda X: (X - Pc) @ R + ref_c
         rmsd[i] = np.sqrt(np.mean(np.sum((move(P) - ref) ** 2, axis=1)))
         ca[i] = move(ca_ag.positions.astype(float))
+        if gate_ag:
+            H = heavy.positions
+            for k, ag in enumerate(gate_ag):
+                dmin = distance_array(ag.positions, H).min(axis=0)
+                gate_dist[i, k, present] = np.minimum.reduceat(dmin, starts)
+                gate_dist[i, k, gate_idx[k]] = np.nan
         if len(sc_ag):
             X = move(sc_ag.positions.astype(float))
             with np.errstate(invalid="ignore", divide="ignore"):
                 sc[i] = np.stack([np.bincount(sc_res, X[:, d], nres) for d in range(3)], 1) \
                         / sc_count[:, None]
     sc[:, sc_count == 0] = np.nan
-    return dict(frames=frames, fit_rmsd=rmsd, residues=residues, ca=ca, sc=sc)
+    return dict(frames=frames, fit_rmsd=rmsd, residues=residues, ca=ca, sc=sc,
+                gate_dist=gate_dist, gate_idx=gate_idx)
 
 
 ONE_LETTER = dict(ALA="A", ARG="R", ASN="N", ASP="D", ASH="D", CYS="C", CYX="C", CYM="C",
@@ -446,6 +498,46 @@ def gate_table(res, flank=3):
     cols = ["event", "jump_frame", "direction", "before_frames", "after_frames"] + GATE_SHOW[2:] \
         + ["rmsf_before", "rmsf_after"]
     return g.sort_values(["subunit", "pos"])[cols].reset_index(drop=True)
+
+
+def neighbour_table(traj, info, res, b, a, cfg):
+    """3D neighbours of each gate Phe for one jump (rows b = before, a = after)."""
+    gd = traj.get("gate_dist")
+    if gd is None:
+        return pd.DataFrame()
+    cut, ccut = cfg["neighbour_cutoff"], cfg["contact_cutoff"]
+    rows = []
+    for k, gi in enumerate(traj["gate_idx"]):
+        db, da = gd[b, k, :], gd[a, k, :]
+        with np.errstate(invalid="ignore"):
+            med_b, med_a = np.nanmedian(db, 0), np.nanmedian(da, 0)
+            cb, ca_ = 100 * np.mean(db < ccut, 0), 100 * np.mean(da < ccut, 0)
+        near = np.flatnonzero((med_b <= cut) | (med_a <= cut))
+        g = info.iloc[gi]
+        for j in near:
+            n, r = info.iloc[j], res.iloc[j]
+            same = n.chain == g.chain
+            rows.append(dict(gate=g.pdb, gate_resid=int(g.resid), gate_subunit=g.subunit,
+                             neighbour=n.pdb, resid=int(n.resid), resname=n.resname,
+                             subunit=n.subunit, girk1=bool(n.girk1), pos=n.pos,
+                             same_subunit=bool(same),
+                             seq_distance=int(abs(n.resid - g.resid)) if same else np.nan,
+                             dist_before=med_b[j], dist_after=med_a[j],
+                             d_dist=med_a[j] - med_b[j],
+                             contact_before_pct=cb[j], contact_after_pct=ca_[j],
+                             disp=r.disp, d_radial=r.d_radial, sc_disp=r.sc_disp,
+                             noise=r.noise, ratio=r.ratio,
+                             real_move="yes" if r.ratio >= cfg["ratio_moved"] else "no"))
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df["abs_d_dist"] = df.d_dist.abs()
+    df = df.sort_values(["gate_subunit", "abs_d_dist"], ascending=[True, False])
+    head = res.iloc[0]
+    df.insert(0, "event", head.event)
+    df.insert(1, "jump_frame", head.jump_frame)
+    df.insert(2, "direction", head.direction)
+    return df.drop(columns="abs_d_dist").reset_index(drop=True)
 
 
 def ranked_lists(res, ratio_moved=3.0):
