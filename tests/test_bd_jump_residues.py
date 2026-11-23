@@ -7,9 +7,15 @@ B_D diagonal widens by ~2.5 A. Run from the repo root:
 import sys, tempfile; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np, pandas as pd, MDAnalysis as mda
 from MDAnalysis.coordinates.memory import MemoryReader
-from analysis.bd_jump_residues import (run_bd_jump_residues, flat_stretches, kabsch, OUT_DIRNAME)
+from analysis.bd_jump_residues import (run_bd_jump_residues, flat_stretches, kabsch, OUT_DIRNAME,
+                                      pdb_label)
 
 rng = np.random.default_rng(1)
+
+# PDB numbering through analysis/converter.py (G12 WT: resid 99 = GIRK1 E141, 464 = F192 of 2b)
+assert pdb_label(99, "GLU", "G12") == "E141.G1" and pdb_label(464, "PHE", "G12") == "F192.2b"
+assert pdb_label(1073, "GLU", "G12_E141Q") == "E141.G1"
+assert pdb_label(5, "ALA", None) == "A5"
 
 # kabsch recovers a known rotation
 P = rng.normal(size=(20, 3)); t = 0.7
@@ -83,7 +89,7 @@ with tempfile.TemporaryDirectory() as tmp:
     rm = pd.read_csv(out / "alignment_rmsd.csv")
     # 0.25 A noise per coordinate in the frame and in the reference -> RMSD ~ 0.25*sqrt(3)*sqrt(2) = 0.61
     assert rm.fit_rmsd.median() < 0.75, rm.fit_rmsd.median()          # rotation undone (else ~20 A)
-    for mode in ("window500", "segment_all"):
+    for mode in ("window300", "segment_all"):
         d = out / mode
         r = pd.read_csv(next(d.glob("event1_frame*_residues.csv")))
         assert (d / "consistent_residues.csv").exists() and list(d.glob("*_disp.pdb"))
@@ -103,4 +109,10 @@ with tempfile.TemporaryDirectory() as tmp:
         gB = g[(g.subunit == "B") & (g.pos == 0)].iloc[0]
         assert abs(gB.d_radial - 1.5) < 0.15 and gB.resid == 71
         assert (d / "all_events_gate.csv").exists()
+        raw = pd.read_csv(next(d.glob("event1_frame*_ranked_raw.csv")))
+        pdb = pd.read_csv(next(d.glob("event1_frame*_ranked_pdb.csv")))
+        assert raw.disp.is_monotonic_decreasing and len(raw) == NCH * NRES
+        assert set(raw.head(27).subunit) <= {"B", "D"}          # the 27 moved residues come first
+        assert (raw.resid == raw.resid).all() and "residue" in pdb and len(pdb) == len(raw)
+        assert (raw.head(15).real_move == "yes").all()
     print("test_bd_jump_residues: OK")

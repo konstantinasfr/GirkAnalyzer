@@ -119,9 +119,9 @@ def main():
     parser.add_argument("--bd_min_jump", type=float, default=1.0,
                         help="with --bd_jump_only: smallest change of the B_D Calpha-Calpha level (A) that "
                              "counts as a jump (default 1.0); also names the output folder")
-    parser.add_argument("--bd_window", type=int, default=500,
+    parser.add_argument("--bd_window", type=int, default=300,
                         help="with --bd_jump_only: frames before / after each jump in the 'window' way "
-                             "(default 500)")
+                             "(default 300)")
     parser.add_argument("--bd_segment_max", type=int, default=0,
                         help="with --bd_jump_only: in the 'segment' way use at most this many frames on "
                              "each side, the ones closest to the jump (default 0 = the whole flat stretch)")
@@ -866,6 +866,7 @@ def main():
                              asn_residues=_cfg.get("asn_residues"),
                              modes=("window", "segment") if args.bd_modes == "both"
                              else (args.bd_modes,),
+                             channel_type=args.channel_type,
                              min_jump=args.bd_min_jump, window=args.bd_window,
                              segment_max=args.bd_segment_max)
         raise SystemExit("--bd_jump_only: done.")

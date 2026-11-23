@@ -22,7 +22,7 @@ IDEA
    stretches is a jump (widening or narrowing). The jumps do not depend on
    the gate being open or closed.
 2. "Before" and "after" frames of every jump, two ways (both are run):
-     window   the `window` frames (default 500) just before / just after the
+     window   the `window` frames (default 300) just before / just after the
               jump, never crossing the previous / next jump
      segment  the whole flat stretch before / after the jump (optionally at
               most `segment_max` frames, the ones closest to the jump)
@@ -72,6 +72,16 @@ OUTPUT, bd_jump_residues/minjump_<X>/
                                          and labelled in every subunit
         event<k>_frame<F>_gate.csv       gate table: the four HBC Phe and the 3
                                          residues on each side (pos -3 .. +3)
+        event<k>_frame<F>_ranked_raw.csv every residue, sorted by Calpha
+                                         displacement, biggest first, with the
+                                         topology resid (raw numbers)
+        event<k>_frame<F>_ranked_pdb.csv the same list with PDB numbering, e.g.
+                                         E141.G1 / F192.2b (analysis/converter.py,
+                                         to_pdb, for this channel_type)
+                                         Both lists have `real_move` = yes when the
+                                         displacement is >= 3 x its own noise; floppy
+                                         loops and chain ends can have a large
+                                         displacement that is still only noise
         event<k>_frame<F>_disp.pdb       frame-0 structure with the Calpha
                                          displacement in the B-factor column
                                          (colour by B-factor in PyMOL / VMD)
@@ -90,11 +100,11 @@ import numpy as np
 import pandas as pd
 
 OUT_DIRNAME = "bd_jump_residues"
-DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=500, segment_max=0,
+DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=300, segment_max=0,
                 min_frames=100, pore_helix=12, ratio_moved=3.0,
                 tm_range=(-50, 15), gate_flank=3)
 BACKBONE = ("N", "CA", "C", "O", "OXT")
-GATE_SHOW = ["event", "direction", "resid", "resname", "subunit", "girk1", "pos", "disp",
+GATE_SHOW = ["event", "direction", "resid", "resname", "pdb", "subunit", "girk1", "pos", "disp",
              "d_radial", "d_axial", "d_around", "sc_disp", "noise", "ratio", "r_before"]
 
 
@@ -103,7 +113,7 @@ GATE_SHOW = ["event", "direction", "resid", "resname", "subunit", "girk1", "pos"
 # --------------------------------------------------------------------------
 def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
                          subunit_groups=None, asn_residues=None, modes=("window", "segment"),
-                         **settings):
+                         channel_type=None, **settings):
     cfg = {**DEFAULTS, **settings}
     out = Path(results_dir) / OUT_DIRNAME / f"minjump_{cfg['min_jump']:.1f}"
     out.mkdir(parents=True, exist_ok=True)
@@ -111,7 +121,8 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
     print(f"\n{'=' * 60}\nB_D JUMP RESIDUE ANALYSIS -> {out}\n{'=' * 60}")
 
     traj = collect_aligned_positions(u, sf_lower, sf_upper, cfg["pore_helix"])
-    info = residue_table(u, traj["residues"], hbc_diagonal_pairs, subunit_groups, asn_residues)
+    info = residue_table(u, traj["residues"], hbc_diagonal_pairs, subunit_groups, asn_residues,
+                         channel_type)
     pd.DataFrame(dict(frame=traj["frames"], fit_rmsd=traj["fit_rmsd"])).to_csv(
         out / "alignment_rmsd.csv", index=False, float_format="%.3f")
     print(f"  filter + pore-helix fit RMSD: median {np.median(traj['fit_rmsd']):.2f} A, "
@@ -164,6 +175,14 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
                        pos_range=cfg["tm_range"])
             gate = gate_table(res, cfg["gate_flank"])
             gate.to_csv(mdir / f"{tag}_gate.csv", index=False, float_format="%.3f")
+            raw, pdb = ranked_lists(res, cfg["ratio_moved"])
+            raw.to_csv(mdir / f"{tag}_ranked_raw.csv", index=False, float_format="%.3f")
+            pdb.to_csv(mdir / f"{tag}_ranked_pdb.csv", index=False, float_format="%.3f")
+            real = pdb[pdb.real_move == "yes"]
+            print(f"\n  [{name}] jump at {int(j.frame)}: {len(real)} residues moved >= "
+                  f"{cfg['ratio_moved']:g} x noise; the 20 biggest:")
+            print(real.head(20)[["rank", "residue", "subunit", "disp", "d_radial",
+                                 "sc_disp", "ratio"]].round(2).to_string(index=False))
             write_disp_pdb(u, traj, info, res, mdir / f"{tag}_disp.pdb")
             rows.append(res)
             gates.append(gate)
@@ -248,9 +267,27 @@ def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12):
     return dict(frames=frames, fit_rmsd=rmsd, residues=residues, ca=ca, sc=sc)
 
 
-def residue_table(u, residues, hbc_diagonal_pairs, subunit_groups=None, asn_residues=None):
-    """resid, resname, subunit letter, GIRK1 flag, pos (resid - HBC Phe resid of
-    the same subunit) for every residue."""
+ONE_LETTER = dict(ALA="A", ARG="R", ASN="N", ASP="D", ASH="D", CYS="C", CYX="C", CYM="C",
+                  GLN="Q", GLU="E", GLH="E", GLY="G", HIS="H", HID="H", HIE="H", HIP="H",
+                  HSD="H", HSE="H", HSP="H", ILE="I", LEU="L", LYS="K", LYN="K", MET="M",
+                  PHE="F", PRO="P", SER="S", THR="T", TRP="W", TYR="Y", VAL="V")
+
+
+def pdb_label(resid, resname, channel_type):
+    """'E141.G1'-style label from analysis/converter.py; the plain resid if the
+    channel type is not known to the converter."""
+    try:
+        from analysis.converter import to_pdb
+        num = to_pdb(int(resid), channel_type) if channel_type else str(resid)
+    except Exception:
+        num = str(resid)
+    return f"{ONE_LETTER.get(resname, 'X')}{num}"
+
+
+def residue_table(u, residues, hbc_diagonal_pairs, subunit_groups=None, asn_residues=None,
+                  channel_type=None):
+    """resid, resname, PDB label, subunit letter, GIRK1 flag, pos (resid - HBC
+    Phe resid of the same subunit) for every residue."""
     try:
         chain = np.array([r.atoms[0].fragindex for r in residues])
     except Exception:
@@ -272,8 +309,10 @@ def residue_table(u, residues, hbc_diagonal_pairs, subunit_groups=None, asn_resi
     pos = np.array([rid - hbc_of_chain[c] if c in hbc_of_chain else np.nan
                     for rid, c in zip(resid, chain)])
     sub = [chain_to_sub.get(c, f"chain{c}") for c in chain]
-    return pd.DataFrame(dict(resid=resid, resname=[r.resname for r in residues], chain=chain,
-                             subunit=sub, girk1=[c in girk1 for c in chain], pos=pos))
+    rn = [r.resname for r in residues]
+    return pd.DataFrame(dict(resid=resid, resname=rn,
+                             pdb=[pdb_label(i, n, channel_type) for i, n in zip(resid, rn)],
+                             chain=chain, subunit=sub, girk1=[c in girk1 for c in chain], pos=pos))
 
 
 # --------------------------------------------------------------------------
@@ -386,7 +425,7 @@ def compare_windows(traj, info, axis, b, a):
         scb, sca = np.nanmean(sc[b], 0), np.nanmean(sc[a], 0)
     disp = np.linalg.norm(d, axis=1)
     rmsf = lambda rows, p: np.sqrt(np.mean(np.sum((ca[rows] - p) ** 2, axis=2), axis=0))
-    res = info[["resid", "resname", "subunit", "girk1", "pos"]].copy()
+    res = info[["resid", "resname", "pdb", "subunit", "girk1", "pos"]].copy()
     res["disp"] = disp
     res["d_radial"] = ra - rb
     res["d_axial"] = d @ ax
@@ -409,13 +448,26 @@ def gate_table(res, flank=3):
     return g.sort_values(["subunit", "pos"])[cols].reset_index(drop=True)
 
 
+def ranked_lists(res, ratio_moved=3.0):
+    """Every residue sorted by Calpha displacement, biggest first. Returns the
+    list with raw topology resids and the same list with PDB labels."""
+    r = res.sort_values("disp", ascending=False).reset_index(drop=True)
+    r.insert(0, "rank", np.arange(1, len(r) + 1))
+    r["real_move"] = np.where(r.ratio >= ratio_moved, "yes", "no")
+    common = ["subunit", "girk1", "pos", "disp", "d_radial", "d_axial", "d_around", "sc_disp",
+              "noise", "ratio", "real_move", "rmsf_before", "rmsf_after"]
+    raw = r[["rank", "resid", "resname"] + common]
+    pdb = r[["rank", "pdb"] + common].rename(columns={"pdb": "residue"})
+    return raw, pdb
+
+
 def consistent_residues(allev, ratio_moved=3.0):
     df = allev.copy()
     sign = np.where(df.direction == "widening", 1.0, -1.0)
     df["d_radial_w"] = df.d_radial * sign       # + = moves out when B_D widens
     df["d_axial_w"] = df.d_axial * sign
     df["moved"] = df.ratio >= ratio_moved
-    g = df.groupby(["resid", "resname", "subunit", "girk1", "pos"], dropna=False)
+    g = df.groupby(["resid", "resname", "pdb", "subunit", "girk1", "pos"], dropna=False)
     out = g.agg(n_events=("event", "nunique"), n_moved=("moved", "sum"),
                 mean_disp=("disp", "mean"), mean_ratio=("ratio", "mean"),
                 mean_d_radial_widening=("d_radial_w", "mean"),
@@ -504,7 +556,7 @@ def plot_event(res, out_png, title, pos_range=None):
         ax.set_ylabel(f"{lab}\nÅ", fontsize=9)
         top = r.loc[r.ratio >= 3].nlargest(12 if zoom else 5, "disp")
         for _, t in top.iterrows():
-            ax.annotate(f"{t.resname}{t.resid}", (t.pos, t.disp), fontsize=6,
+            ax.annotate(t.pdb if "pdb" in t else f"{t.resname}{t.resid}", (t.pos, t.disp), fontsize=6,
                         xytext=(0, 3), textcoords="offset points", ha="center")
         if zoom:
             ax.set_ylim(ymin, ymax)
@@ -512,7 +564,7 @@ def plot_event(res, out_png, title, pos_range=None):
             g = r[r.pos == 0]
             for _, t in g.iterrows():
                 ax.bar([0], [t.d_radial], width=1.0, fill=False, edgecolor="purple", lw=1.5)
-                ax.text(0.995, 0.95, f"gate {t.resname}{t.resid}: {t.disp:.2f} Å, "
+                ax.text(0.995, 0.95, f"gate {t.pdb} (resid {t.resid}): {t.disp:.2f} Å, "
                             f"out {t.d_radial:+.2f} Å, ratio {t.ratio:.1f}",
                             transform=ax.transAxes, fontsize=7.5, color="purple",
                             ha="right", va="top",
