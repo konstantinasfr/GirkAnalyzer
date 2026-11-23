@@ -132,4 +132,8 @@ with tempfile.TemporaryDirectory() as tmp:
         for kind in ("change", "present"):
             for lab in ("pdb", "raw"):
                 assert list((d / "contacts").glob(f"event1_frame*_contacts_{kind}_{lab}.png")), (kind, lab)
+            ct = pd.read_csv(next((d / "contacts").glob(f"event1_frame*_contacts_{kind}.csv")))
+            assert np.allclose(ct.change_pct, ct.contact_after_pct - ct.contact_before_pct, atol=2e-3)
+            assert (ct.position_girk2 == 192 + ct.position_from_gate).all()
+            assert (d / "contacts" / f"all_events_contacts_{kind}.csv").exists()
     print("test_bd_jump_residues: OK")

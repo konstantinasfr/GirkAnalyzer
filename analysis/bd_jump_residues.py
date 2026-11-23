@@ -125,6 +125,15 @@ OUTPUT, bd_jump_residues/minjump_<X>/
                                          ('present') / +-1 ('change'); 'change' also
                                          >= 5 points change. 'present' = which pocket
                                          each gate Phe sits in
+        contacts/event<k>_frame<F>_contacts_<change|present>.csv
+                                         the numbers of that plot: one row per gate
+                                         Phe x neighbour shown, with position_girk2,
+                                         position_from_gate, neighbour (PDB) and resid
+                                         (raw), contact_before_pct, contact_after_pct,
+                                         change_pct (after - before, percentage
+                                         points), distances before / after and the
+                                         neighbour's own displacement
+        contacts/all_events_contacts_<change|present>.csv   all jumps together
         all_events_residues.csv          all events, long format
         all_events_neighbours.csv        the neighbour lists of all events
         all_events_gate.csv              the gate tables of all events
@@ -201,6 +210,7 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
         mdir.mkdir(exist_ok=True)
         (mdir / "contacts").mkdir(exist_ok=True)
         rows, gates, neighbours = [], [], []
+        contact_tabs = {"change": [], "present": []}
         for k, j in jumps.iterrows():
             b, a = event_windows(bounds, k + 1, mode, mcfg)
             if len(b) < cfg["min_frames"] or len(a) < cfg["min_frames"]:
@@ -233,6 +243,11 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
             nb = neighbour_table(traj, info, res, b, a, cfg)
             nb.to_csv(mdir / f"{tag}_neighbours.csv", index=False, float_format="%.3f")
             for kind in ("change", "present"):
+                tab = contacts_table(select_contacts(nb, kind, cfg["contact_top_n"],
+                                                     cfg["contact_min_pct"]))
+                tab.to_csv(mdir / "contacts" / f"{tag}_contacts_{kind}.csv", index=False,
+                           float_format="%.3f")
+                contact_tabs[kind].append(tab)
                 for lab in ("pdb", "raw"):
                     plot_contacts(nb, mdir / "contacts" / f"{tag}_contacts_{kind}_{lab}.png",
                                   title, kind=kind, label=lab, n=cfg["contact_top_n"],
@@ -265,6 +280,11 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
         allgate.to_csv(mdir / "all_events_gate.csv", index=False, float_format="%.3f")
         pd.concat(neighbours, ignore_index=True).to_csv(
             mdir / "all_events_neighbours.csv", index=False, float_format="%.3f")
+        for kind, tabs in contact_tabs.items():
+            if tabs:
+                pd.concat(tabs, ignore_index=True).to_csv(
+                    mdir / "contacts" / f"all_events_contacts_{kind}.csv", index=False,
+                    float_format="%.3f")
         print(f"\n  [{name}] the four HBC gate Phe at every jump:")
         print(allgate[allgate.pos == 0][GATE_SHOW].round(2).to_string(index=False))
         cons = consistent_residues(allev, cfg["ratio_moved"])
@@ -664,6 +684,45 @@ def plot_trace(frames, bd, ac, bounds, out_png, title):
 HBC_GIRK2 = 192        # GIRK2 numbering of the HBC Phe: position label = 192 + pos
 
 
+def select_contacts(nb, kind="present", n=0, min_pct=5.0):
+    """The neighbour rows shown in a contact plot (see plot_contacts), with the
+    position columns added: pos (from the HBC Phe of the neighbour's own
+    subunit), position_girk2 (192 + pos), change_pct (after - before)."""
+    if nb is None or nb.empty:
+        return pd.DataFrame()
+    d = nb[np.isfinite(nb.pos)].copy()
+    d["chg"] = d.contact_after_pct - d.contact_before_pct
+    skip = 1 if kind == "change" else 2
+    helix = d.same_subunit.astype(bool) & (d.seq_distance <= skip)
+    d = d[~helix & ((d.contact_before_pct >= min_pct) | (d.contact_after_pct >= min_pct))]
+    if kind == "change":
+        d = d[d.chg.abs() >= min_pct]
+        d["key"] = d.chg.abs()
+    else:
+        d["key"] = d[["contact_before_pct", "contact_after_pct"]].max(axis=1)
+    if n:
+        d = d.sort_values("key", ascending=False).groupby("gate").head(n)
+    d["pos"] = d.pos.astype(int)
+    return d
+
+
+def contacts_table(d):
+    """CSV version of a contact plot: one row per gate Phe x neighbour shown."""
+    if d.empty:
+        return d
+    out = pd.DataFrame(dict(
+        event=d.event, jump_frame=d.jump_frame, direction=d.direction,
+        gate=d.gate, gate_resid=d.gate_resid, gate_subunit=d.gate_subunit,
+        position_girk2=HBC_GIRK2 + d.pos, position_from_gate=d.pos,
+        neighbour=d.neighbour, resid=d.resid, resname=d.resname, subunit=d.subunit,
+        same_subunit=d.same_subunit,
+        contact_before_pct=d.contact_before_pct, contact_after_pct=d.contact_after_pct,
+        change_pct=d.chg,
+        dist_before=d.dist_before, dist_after=d.dist_after, d_dist=d.d_dist,
+        neighbour_disp=d.disp, neighbour_ratio=d.ratio, neighbour_real_move=d.real_move))
+    return out.sort_values(["gate_subunit", "position_girk2", "subunit"]).reset_index(drop=True)
+
+
 def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5.0,
                   cutoff=4.5):
     """2 x 2 grid, one panel per gate Phe. x axis = residue POSITIONS, the same
@@ -683,23 +742,10 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
 
-    if nb is None or nb.empty:
-        return
-    d = nb[np.isfinite(nb.pos)].copy()
-    d["chg"] = d.contact_after_pct - d.contact_before_pct
-    skip = 1 if kind == "change" else 2
-    helix = d.same_subunit.astype(bool) & (d.seq_distance <= skip)
-    d = d[~helix & ((d.contact_before_pct >= min_pct) | (d.contact_after_pct >= min_pct))]
-    if kind == "change":
-        d = d[d.chg.abs() >= min_pct]
-        d["key"] = d.chg.abs()
-    else:
-        d["key"] = d[["contact_before_pct", "contact_after_pct"]].max(axis=1)
-    if n:
-        d = d.sort_values("key", ascending=False).groupby("gate").head(n)
+    d = select_contacts(nb, kind, n, min_pct)
     if d.empty:
         return
-    d["pos"] = d.pos.astype(int)
+    skip = 1 if kind == "change" else 2
     positions = sorted(d.pos.unique())
     col = {p: i for i, p in enumerate(positions)}
     if label == "pdb":
