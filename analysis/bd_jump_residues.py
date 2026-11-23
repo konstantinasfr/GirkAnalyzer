@@ -108,19 +108,21 @@ OUTPUT, bd_jump_residues/minjump_<X>/
                                          real_move. Sorted per gate by how much the
                                          distance changes (biggest first)
         contacts/event<k>_frame<F>_contacts_change_<pdb|raw>.png
-                                         one panel per gate Phe: the neighbours (x
-                                         axis) whose contact with it changes most
-                                         at the jump; bars = % of frames in contact
-                                         (< 4.5 A) before (grey) and after (green =
-                                         gained, red = lost)
         contacts/event<k>_frame<F>_contacts_present_<pdb|raw>.png
-                                         the same with the neighbours most often in
-                                         contact (before or after): which pocket
-                                         each gate Phe sits in. Left out: bonded
-                                         neighbours (+-1; for 'present' also the
-                                         same-helix-turn +-2..4), neighbours < 5 %
-                                         before and after, and for 'change' contacts
-                                         changing by < 5 percentage points
+                                         2 x 2 grid, one panel per gate Phe, the SAME
+                                         residues on the x axis of every panel (the
+                                         union of what is selected for any gate,
+                                         ordered by subunit and resid); bars = % of
+                                         frames in contact (< 4.5 A) before (grey) and
+                                         after (green = gained, red = lost); under each
+                                         pair the change in percentage points.
+                                         'change': per gate the 10 contacts that change
+                                         most (>= 5 points); 'present': per gate the 10
+                                         most frequent contacts = which pocket each
+                                         gate Phe sits in. Same-subunit neighbours
+                                         within +-1 ('change') / +-2 ('present') are not
+                                         selected and drawn as 'helix'; neighbours
+                                         < 5 % before and after are not selected
         all_events_residues.csv          all events, long format
         all_events_neighbours.csv        the neighbour lists of all events
         all_events_gate.csv              the gate tables of all events
@@ -659,9 +661,15 @@ def plot_trace(frames, bd, ac, bounds, out_png, title):
 
 def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=10, min_pct=5.0,
                   cutoff=4.5):
-    """One panel per gate Phe; x axis = its neighbours, bars = % frames in
-    contact before / after the jump. kind 'change': the n neighbours whose
-    contact changes most; 'present': the n most often in contact."""
+    """2 x 2 grid, one panel per gate Phe. x axis = the SAME residues in every
+    panel, in the same order (subunit, then resid): the union of the residues
+    selected for any gate. Bars = % frames in contact (< cutoff) before / after
+    the jump; the change (after - before, percentage points) is written under
+    each pair. kind 'change': per gate the n neighbours whose contact changes
+    most (>= min_pct points); 'present': per gate the n most often in contact.
+    Left out of the selection: neighbours < min_pct before and after, and same-
+    subunit neighbours within +-1 ('change') or +-2 ('present') in sequence
+    (shown as 'helix' if they are in the union for another gate)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -669,48 +677,74 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=10, min_pct=
 
     if nb is None or nb.empty:
         return
-    # 'change': leave out only the bonded neighbours (+-1); 'present': also the
-    # same-helix-turn neighbours (+-2..4), which touch the Phe all the time anyway
-    skip = 1 if kind == "change" else 4
-    d = nb[nb.seq_distance.isna() | (nb.seq_distance > skip)].copy()
-    d = d[(d.contact_before_pct >= min_pct) | (d.contact_after_pct >= min_pct)]
+    d = nb.copy()
     d["chg"] = d.contact_after_pct - d.contact_before_pct
-    if kind == "change":
-        d = d[d.chg.abs() >= min_pct]          # only contacts that really change
+    skip = 1 if kind == "change" else 2
+    d["helix"] = d.same_subunit.astype(bool) & (d.seq_distance <= skip)
     gates = nb.drop_duplicates("gate").sort_values("gate_subunit")
-    fig, axes = plt.subplots(1, len(gates), figsize=(4.6 * len(gates), 4.6), sharey=True)
-    axes = np.atleast_1d(axes)
-    for ax, (_, g) in zip(axes, gates.iterrows()):
-        s = d[d.gate == g.gate]
-        key = s.chg.abs() if kind == "change" else s[["contact_before_pct", "contact_after_pct"]].max(axis=1)
-        top = s.loc[key.sort_values(ascending=False).index].head(n)
-        x = np.arange(len(top))
-        ax.bar(x - 0.2, top.contact_before_pct, 0.4, color="#9aa5b1")
-        ax.bar(x + 0.2, top.contact_after_pct, 0.4,
-               color=np.where(top.chg >= 0, "#2a9d8f", "#e76f51"))
-        names = top.neighbour if label == "pdb" else top.resname + top.resid.astype(str)
+
+    chosen = set()
+    for _, g in gates.iterrows():
+        s = d[(d.gate == g.gate) & ~d.helix]
+        s = s[(s.contact_before_pct >= min_pct) | (s.contact_after_pct >= min_pct)]
+        if kind == "change":
+            s = s[s.chg.abs() >= min_pct]
+            key = s.chg.abs()
+        else:
+            key = s[["contact_before_pct", "contact_after_pct"]].max(axis=1)
+        chosen |= set(s.loc[key.sort_values(ascending=False).index].head(n).resid)
+    if not chosen:
+        return
+    names = d.drop_duplicates("resid").set_index("resid")
+    order = sorted(chosen, key=lambda r: (names.at[r, "subunit"], r))
+    xl = [names.at[r, "neighbour"] if label == "pdb"
+          else f"{names.at[r, 'resname']}{r}" for r in order]
+    x = np.arange(len(order))
+
+    fig, axes = plt.subplots(2, 2, figsize=(max(12, 0.45 * len(order) * 2 + 3), 10),
+                             sharey=True)
+    for ax, (_, g) in zip(axes.flat, gates.iterrows()):
+        s = d[d.gate == g.gate].set_index("resid")
+        bef = np.array([s.at[r, "contact_before_pct"] if r in s.index else 0.0 for r in order])
+        aft = np.array([s.at[r, "contact_after_pct"] if r in s.index else 0.0 for r in order])
+        hel = np.array([bool(s.at[r, "helix"]) if r in s.index else False for r in order])
+        near = np.array([r in s.index for r in order])
+        bef[hel], aft[hel] = 0.0, 0.0
+        chg = aft - bef
+        ax.bar(x - 0.2, bef, 0.4, color="#9aa5b1")
+        ax.bar(x + 0.2, aft, 0.4, color=np.where(chg >= 0, "#2a9d8f", "#e76f51"))
+        for xi, c, h, nr in zip(x, chg, hel, near):
+            if h:
+                txt, col = "helix", "0.55"
+            elif not nr:
+                txt, col = "", "0.55"
+            else:
+                txt, col = f"{c:+.0f}", ("#1f7a6f" if c > 0 else "#c0503a" if c < 0 else "0.4")
+            ax.text(xi, -3, txt, ha="center", va="top", fontsize=7.5, color=col, rotation=90,
+                    clip_on=False)
         ax.set_xticks(x)
-        ax.set_xticklabels(names, rotation=60, ha="right", fontsize=8)
+        ax.set_xticklabels(xl, rotation=60, ha="right", fontsize=8.5)
+        ax.tick_params(axis="x", pad=28)
         gname = g.gate if label == "pdb" else f"resid {int(g.gate_resid)}"
         ax.set_title(f"gate {gname}  ({g.gate_subunit})", fontsize=10)
         ax.set_ylim(0, 105)
-        if not len(top):
-            ax.text(0.5, 0.5, "no neighbour above the threshold", ha="center",
-                    transform=ax.transAxes, fontsize=8)
-    axes[0].set_ylabel(f"% frames in contact (< {cutoff:g} Å)")
+        ax.set_xlim(-0.7, len(order) - 0.3)
+        ax.grid(axis="y", color="0.9", lw=0.6)
+        ax.set_axisbelow(True)
+    for ax in axes[:, 0]:
+        ax.set_ylabel(f"% frames in contact (< {cutoff:g} Å)")
     fig.legend(handles=[Patch(color="#9aa5b1", label="before the jump"),
                         Patch(color="#2a9d8f", label="after: contact gained"),
                         Patch(color="#e76f51", label="after: contact lost")],
-               loc="lower center", ncol=3, frameon=False, fontsize=8)
-    what = ("neighbours whose contact changes most" if kind == "change"
+               loc="lower center", ncol=3, frameon=False, fontsize=9)
+    what = ("neighbours whose contact changes most (>= 5 points)" if kind == "change"
             else "neighbours most often in contact")
     numbering = "PDB numbering" if label == "pdb" else "raw resid"
-    left_out = ("bonded ±1 left out; change ≥ 5 %" if kind == "change"
-                else "same subunit ±4 in sequence left out")
-    fig.suptitle(f"{title}\nfor each gate Phe: up to {n} {what} ({numbering}; {left_out})",
-                 fontsize=9)
-    fig.tight_layout(rect=(0, 0.06, 1, 0.92))
-    fig.savefig(out_png, dpi=180)
+    fig.suptitle(f"{title}\nresidues = union over the four gates of the up to {n} {what} "
+                 f"({numbering}); number under the bars = after - before (percentage points); "
+                 f"'helix' = same subunit within ±{skip}", fontsize=9)
+    fig.tight_layout(rect=(0, 0.04, 1, 0.93))
+    fig.savefig(out_png, dpi=170)
     plt.close(fig)
 
 
