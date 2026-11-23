@@ -113,13 +113,11 @@ OUTPUT, bd_jump_residues/minjump_<X>/
                                          residue POSITIONS, the same in every panel
                                          (union over the four gates): GIRK2 numbering
                                          for _pdb (GIRK1 shifted +11, A174.G1 = 185),
-                                         position from the HBC Phe for _raw. Bars = %
-                                         of frames in contact (< 4.5 A) of the
-                                         neighbour at that position before (grey) and
-                                         after (green = gained, red = lost); under
-                                         each pair its subunit (+ raw resid in _raw)
-                                         and the change in percentage points. Two
-                                         subunits at the same position -> two pairs.
+                                         position from the HBC Phe for _raw. One bar
+                                         per neighbouring residue, coloured by its
+                                         subunit: height = % frames in contact (< 4.5
+                                         A) AFTER the jump, black line = BEFORE, number
+                                         under it = after - before (percentage points)
                                          Selected per gate: within 8 A, >= 5 % contact
                                          before or after, not same subunit within +-2
                                          ('present') / +-1 ('change'); 'change' also
@@ -757,25 +755,31 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
         xl = [f"{p:+d}" for p in positions]
     gates = nb.drop_duplicates("gate").sort_values("gate_subunit")
 
-    fig, axes = plt.subplots(2, 2, figsize=(max(12, 0.9 * len(positions) * 2 + 3), 11),
+    def sub_of(r):
+        return str(r.neighbour).split(".")[-1] if "." in str(r.neighbour) else str(r.subunit)
+    d["sub"] = [sub_of(r) for _, r in d.iterrows()]
+    palette = ["#4c72b0", "#dd8452", "#55a868", "#c44e52", "#8172b3", "#937860"]
+    subs = sorted(d["sub"].unique(), key=lambda x: (x.startswith("G"), x))
+    scol = {s_: palette[i % len(palette)] for i, s_ in enumerate(subs)}
+
+    fig, axes = plt.subplots(2, 2, figsize=(max(12, 0.75 * len(positions) * 2 + 3), 10),
                              sharey=True)
     for ax, (_, g) in zip(axes.flat, gates.iterrows()):
-        s = d[d.gate == g.gate].sort_values(["pos", "subunit"])
+        s = d[d.gate == g.gate].sort_values(["pos", "sub"])
         for p, grp in s.groupby("pos"):
             k = len(grp)
-            w = 0.8 / (2 * k)
+            w = 0.8 / k
             for j, (_, r) in enumerate(grp.iterrows()):
-                x0 = col[p] - 0.4 + 2 * j * w
-                ax.bar(x0 + w / 2, r.contact_before_pct, w, color="#9aa5b1")
-                ax.bar(x0 + 1.5 * w, r.contact_after_pct, w,
-                       color="#2a9d8f" if r.chg >= 0 else "#e76f51")
-                who = str(r.neighbour) if label == "pdb" else f"{r.resname}{int(r.resid)}"
-                ax.text(x0 + w, -3, f"{who}  {r.chg:+.0f}", ha="center", va="top", rotation=90,
-                        fontsize=7.5, clip_on=False,
-                        color="#1f7a6f" if r.chg > 0 else "#c0503a" if r.chg < 0 else "0.4")
+                xc = col[p] - 0.4 + (j + 0.5) * w
+                ax.bar(xc, r.contact_after_pct, w * 0.9, color=scol[r["sub"]])
+                ax.hlines(r.contact_before_pct, xc - 0.45 * w, xc + 0.45 * w, color="black",
+                          lw=2)
+                ax.text(xc, -4, f"{r.chg:+.0f}", ha="center", va="top", fontsize=8,
+                        clip_on=False,
+                        color="#1f7a6f" if r.chg > 0 else "#c0503a" if r.chg < 0 else "0.45")
         ax.set_xticks(np.arange(len(positions)))
         ax.set_xticklabels(xl, fontsize=9)
-        ax.tick_params(axis="x", pad=64)
+        ax.tick_params(axis="x", pad=16)
         gname = g.gate if label == "pdb" else f"resid {int(g.gate_resid)}"
         ax.set_title(f"gate {gname}  ({g.gate_subunit})", fontsize=10)
         ax.set_ylim(0, 105)
@@ -786,10 +790,10 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
         ax.set_axisbelow(True)
     for ax in axes[:, 0]:
         ax.set_ylabel(f"% frames in contact (< {cutoff:g} Å)")
-    fig.legend(handles=[Patch(color="#9aa5b1", label="before the jump"),
-                        Patch(color="#2a9d8f", label="after: contact gained"),
-                        Patch(color="#e76f51", label="after: contact lost")],
-               loc="lower center", ncol=3, frameon=False, fontsize=9)
+    from matplotlib.lines import Line2D
+    handles = [Patch(color=scol[s_], label=f"subunit {s_}") for s_ in subs]
+    handles.append(Line2D([], [], color="black", lw=2, label="before the jump"))
+    fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=9)
     if kind == "change":
         rule = f"contact changes by ≥ {min_pct:g} points"
     else:
@@ -798,11 +802,11 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
         rule += f", top {n} per gate"
     xinfo = ("position in GIRK2 numbering (GIRK1 shifted +11: A174.G1 = 185)" if label == "pdb"
              else "position from the HBC Phe of the residue's own subunit (gate = 0)")
-    fig.suptitle(f"{title}\nx axis = {xinfo}; union over the four gate Phe of all neighbours "
-                 f"within 8 Å, {rule}, not same subunit ±{skip}\nunder each bar pair: the "
-                 f"neighbouring residue ({'PDB name' if label == 'pdb' else 'raw resid'}) and "
-                 f"after - before (percentage points)", fontsize=9)
-    fig.tight_layout(rect=(0, 0.04, 1, 0.92), h_pad=4.0)
+    fig.suptitle(f"{title}\nbar = % contact AFTER the jump, black line = BEFORE, number = after - "
+                 f"before (percentage points); one bar per neighbouring residue, coloured by its "
+                 f"subunit\nx axis = {xinfo}; neighbours within 8 Å, {rule}, not same subunit ±{skip}",
+                 fontsize=9)
+    fig.tight_layout(rect=(0, 0.04, 1, 0.91), h_pad=2.5)
     fig.savefig(out_png, dpi=170)
     plt.close(fig)
 
