@@ -871,16 +871,16 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
     rule = f"≥ {min_pct:g} % contact before or after and a change of ≥ {min_change:g} points"
     if n:
         rule += f", top {n} per gate"
-    rule += ("; grey italic name = shown only so every panel has the same positions "
-             "(below the filter for this gate)")
+    rule += (", not same subunit ±{skip}\ngrey italic name = shown only so every panel has the "
+             "same positions (below the filter for this gate)").replace("{skip}", str(skip))
     xinfo = ("position in GIRK2 numbering (GIRK1 shifted +11: A174.G1 = 185)" if label == "pdb"
              else "position from the HBC Phe of the residue's own subunit (gate = 0)")
     naming = ("residue names in GIRK2 numbering + subunit (GIRK1 shifted +11, e.g. F72 of GIRK1 = "
               "F83.G1)" if label == "pdb" else "raw resid")
     fig.suptitle(f"{title}\nfor every neighbouring residue: % frames in contact before (grey) and after "
                  f"the jump; under it the residue and the change (after - before)"
-                 f"\n{naming}; neighbours within 8 Å, {rule}, not same subunit ±{skip}", fontsize=fs - 2)
-    fig.tight_layout(rect=(0, 0.05, 1, 0.91), h_pad=5)
+                 f"\n{naming}\nneighbours within 8 Å, {rule}", fontsize=fs - 2)
+    fig.tight_layout(rect=(0, 0.05, 1, 0.88), h_pad=5)
     fig.savefig(out_png, dpi=170)
     plt.close(fig)
 
