@@ -132,6 +132,18 @@ OUTPUT, bd_jump_residues/minjump_<X>/
                                          points), distances before / after and the
                                          neighbour's own displacement
         contacts/all_events_contacts_<change|present>.csv   all jumps together
+        interactions/event<k>_frame<F>_interactions.csv
+                                         chemistry of each gate Phe ring (see
+                                         analysis/phe_interactions.py): per gate x
+                                         partner x type (pi-pi with geometry
+                                         parallel / tilted / T-shaped, S...pi with
+                                         Cys/Met sulfur, S-H...pi, CH-pi, cation-pi)
+                                         % frames before / after, change, median
+                                         distance and angle before / after
+        interactions/event<k>_frame<F>_interactions.png
+                                         2 x 2 grid, bars before / after of the
+                                         interactions that change by >= 10 points
+        interactions/all_events_interactions.csv   all jumps together
         all_events_residues.csv          all events, long format
         all_events_neighbours.csv        the neighbour lists of all events
         all_events_gate.csv              the gate tables of all events
@@ -146,6 +158,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from analysis.phe_interactions import plot_interactions
 
 OUT_DIRNAME = "bd_jump_residues"
 DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=(300, 500), segment_max=0,
@@ -213,7 +227,9 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
         sub_of = {cs: mdir / f"contacts_{cs[0]}_{cs[1]:g}" for cs in contact_sets}
         for sd in sub_of.values():
             sd.mkdir(exist_ok=True)
-        rows, gates = [], []
+        idir = mdir / "interactions"
+        idir.mkdir(exist_ok=True)
+        rows, gates, inters = [], [], []
         neighbours = {cs: [] for cs in contact_sets}
         contact_tabs = {cs: {"change": [], "present": []} for cs in contact_sets}
         for k, j in jumps.iterrows():
@@ -266,6 +282,15 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
                                       min_change=cfg["contact_min_change"])
                 if cs == contact_sets[0]:
                     nb = nb_cs
+            it = traj["rings"].summary(b, a, info) if traj.get("rings") is not None else pd.DataFrame()
+            if not it.empty:
+                for c_, v_ in (("event", k + 1), ("jump_frame", int(j.frame)),
+                               ("direction", j.direction))[::-1]:
+                    it.insert(0, c_, v_)
+                it.to_csv(idir / f"{tag}_interactions.csv", index=False, float_format="%.3f")
+                inters.append(it)
+                plot_interactions(it, idir / f"{tag}_interactions.png", title,
+                                  cfg["contact_min_pct"], cfg["contact_min_change"])
             mover = gate.loc[gate.pos == 0].sort_values("disp", ascending=False).iloc[0]
             near = nb[nb.gate == mover.pdb]
             print(f"\n  [{name}] jump at {int(j.frame)}: 3D neighbours of the gate Phe that moved "
@@ -273,6 +298,12 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
             print(near.head(15)[["neighbour", "subunit", "dist_before", "dist_after", "d_dist",
                                  "contact_before_pct", "contact_after_pct", "disp",
                                  "real_move"]].round(2).to_string(index=False))
+            if not it.empty:
+                im = it[(it.gate == mover.pdb) & (it[["pct_before", "pct_after"]].max(axis=1) >= 5)]
+                print(f"\n  [{name}] chemical interactions of the ring of {mover.pdb}:")
+                print(im[["partner", "interaction", "pct_before", "pct_after", "change_pct",
+                          "dist_before", "dist_after", "geometry_before", "geometry_after"]]
+                      .round(1).to_string(index=False))
             raw, pdb = ranked_lists(res, cfg["ratio_moved"])
             raw.to_csv(mdir / f"{tag}_ranked_raw.csv", index=False, float_format="%.3f")
             pdb.to_csv(mdir / f"{tag}_ranked_pdb.csv", index=False, float_format="%.3f")
@@ -288,6 +319,9 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
             continue
         allev = pd.concat(rows, ignore_index=True)
         allev.to_csv(mdir / "all_events_residues.csv", index=False, float_format="%.3f")
+        if inters:
+            pd.concat(inters, ignore_index=True).to_csv(
+                idir / "all_events_interactions.csv", index=False, float_format="%.3f")
         allgate = pd.concat(gates, ignore_index=True)
         allgate.to_csv(mdir / "all_events_gate.csv", index=False, float_format="%.3f")
         for cs in contact_sets:
@@ -378,6 +412,8 @@ def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12, gate_resids=
                  if gate_idx else None)
     if gate_idx:
         from MDAnalysis.lib.distances import distance_array
+    from analysis.phe_interactions import RingTracker
+    rings = RingTracker(residues, resmap, gate_resids, nf)
     frames = np.empty(nf, int)
     rmsd = np.empty(nf)
     ca = np.empty((nf, nres, 3), np.float32)
@@ -401,6 +437,7 @@ def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12, gate_resids=
                     dmin = distance_array(ag.positions, H).min(axis=0)
                     gate_dist[aset][i, k, gs["present"]] = np.minimum.reduceat(dmin, gs["starts"])
                     gate_dist[aset][i, k, gate_idx[k]] = np.nan
+        rings.update(i)
         if len(sc_ag):
             X = move(sc_ag.positions.astype(float))
             with np.errstate(invalid="ignore", divide="ignore"):
@@ -408,7 +445,7 @@ def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12, gate_resids=
                         / sc_count[:, None]
     sc[:, sc_count == 0] = np.nan
     return dict(frames=frames, fit_rmsd=rmsd, residues=residues, ca=ca, sc=sc,
-                gate_dist=gate_dist, gate_idx=gate_idx)
+                gate_dist=gate_dist, gate_idx=gate_idx, rings=rings)
 
 
 ONE_LETTER = dict(ALA="A", ARG="R", ASN="N", ASP="D", ASH="D", CYS="C", CYX="C", CYM="C",
