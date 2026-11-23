@@ -252,8 +252,8 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
                 neighbours[cs].append(nb_cs)
                 ctitle = f"{title}\ncontact = {atoms} atoms closer than {ccut:g} Å"
                 for kind in ("change", "present"):
-                    tab = contacts_table(select_contacts(nb_cs, kind, cfg["contact_top_n"],
-                                                         cfg["contact_min_pct"]))
+                    sel = select_contacts(nb_cs, kind, cfg["contact_top_n"], cfg["contact_min_pct"])
+                    tab = contacts_table(fill_union(nb_cs, sel, kind))
                     tab.to_csv(sd / f"{tag}_contacts_{kind}.csv", index=False,
                                float_format="%.3f")
                     contact_tabs[cs][kind].append(tab)
@@ -728,7 +728,34 @@ def select_contacts(nb, kind="present", n=0, min_pct=5.0):
     if n:
         d = d.sort_values("key", ascending=False).groupby("gate").head(n)
     d["pos"] = d.pos.astype(int)
+    d["passes_filter"] = True
     return d
+
+
+def fill_union(nb, d, kind="present"):
+    """Same residues in every panel: for every position in the union over the
+    gates, a gate that has no selected residue there gets the neighbour at that
+    position with the most contact (closest if tied), even below the filter
+    (passes_filter = False). A gate with no neighbour within 8 A there stays empty."""
+    if d.empty:
+        return d
+    skip = 1 if kind == "change" else 2
+    a = nb[np.isfinite(nb.pos)].copy()
+    a = a[~(a.same_subunit.astype(bool) & (a.seq_distance <= skip))]
+    a["chg"] = a.contact_after_pct - a.contact_before_pct
+    a["pos"] = a.pos.astype(int)
+    a["key"] = a[["contact_before_pct", "contact_after_pct"]].max(axis=1)
+    a["dmin"] = a[["dist_before", "dist_after"]].min(axis=1)
+    have = set(zip(d.gate, d.pos))
+    add = []
+    for (gate, p), grp in a[a.pos.isin(set(d.pos))].groupby(["gate", "pos"]):
+        if (gate, p) not in have:
+            add.append(grp.sort_values(["key", "dmin"], ascending=[False, True]).iloc[[0]])
+    if not add:
+        return d
+    f = pd.concat(add).drop(columns="dmin")
+    f["passes_filter"] = False
+    return pd.concat([d, f], ignore_index=True)
 
 
 def contacts_table(d):
@@ -747,7 +774,8 @@ def contacts_table(d):
         contact_before_pct=d.contact_before_pct, contact_after_pct=d.contact_after_pct,
         change_pct=d.chg,
         dist_before=d.dist_before, dist_after=d.dist_after, d_dist=d.d_dist,
-        neighbour_disp=d.disp, neighbour_ratio=d.ratio, neighbour_real_move=d.real_move))
+        neighbour_disp=d.disp, neighbour_ratio=d.ratio, neighbour_real_move=d.real_move,
+        passes_filter=d.passes_filter))
     return out.sort_values(["gate_subunit", "position_girk2", "subunit"]).reset_index(drop=True)
 
 
@@ -770,7 +798,7 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
 
-    d = select_contacts(nb, kind, n, min_pct)
+    d = fill_union(nb, select_contacts(nb, kind, n, min_pct), kind)
     if d.empty:
         return
     skip = 1 if kind == "change" else 2
@@ -809,10 +837,13 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
                        color="#2a9d8f" if r.chg >= 0 else "#e76f51")
                 name = (f"{ONE_LETTER.get(r.resname, 'X')}{HBC_GIRK2 + int(r.pos)}.{r['sub']}"
                         if label == "pdb" else f"{r.resname}{int(r.resid)}")
-                ax.text(xc, -3, name, ha="center", va="top", fontsize=7.5, clip_on=False)
-                ax.text(xc, -10, f"{r.chg:+.0f} %", ha="center", va="top", fontsize=7.5,
+                ax.text(xc, -3, name, ha="center", va="top", fontsize=7.5, clip_on=False,
+                        color="0.1" if r.passes_filter else "0.5",
+                        style="normal" if r.passes_filter else "italic")
+                c = round(float(r.chg)) + 0          # no "-0 %"
+                ax.text(xc, -10, f"{c:+d} %", ha="center", va="top", fontsize=7.5,
                         clip_on=False, fontweight="bold",
-                        color="#1f7a6f" if r.chg > 0 else "#c0503a" if r.chg < 0 else "0.45")
+                        color="#1f7a6f" if c > 0 else "#c0503a" if c < 0 else "0.45")
         ax.set_xticks(np.arange(len(positions)))
         ax.set_xticklabels([""] * len(positions))
         ax.tick_params(axis="x", length=0)
@@ -836,6 +867,8 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
         rule = f"≥ {min_pct:g} % contact before or after"
     if n:
         rule += f", top {n} per gate"
+    rule += ("; grey italic name = shown only so every panel has the same positions "
+             "(below the filter for this gate)")
     xinfo = ("position in GIRK2 numbering (GIRK1 shifted +11: A174.G1 = 185)" if label == "pdb"
              else "position from the HBC Phe of the residue's own subunit (gate = 0)")
     naming = ("residue names in GIRK2 numbering + subunit (GIRK1 shifted +11, e.g. F72 of GIRK1 = "
