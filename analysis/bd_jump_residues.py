@@ -151,6 +151,7 @@ OUT_DIRNAME = "bd_jump_residues"
 DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=(300, 500), segment_max=0,
                 min_frames=100, pore_helix=12, ratio_moved=3.0,
                 tm_range=(-50, 15), gate_flank=3, neighbour_cutoff=8.0, contact_cutoff=4.5,
+                contact_sets=(("heavy", 4.5), ("all", 3.5)),
                 top_n=10, top_exclude_ends=15, contact_top_n=0, contact_min_pct=5.0)
 BACKBONE = ("N", "CA", "C", "O", "OXT")
 GATE_SHOW = ["event", "direction", "resid", "resname", "pdb", "subunit", "girk1", "pos", "disp",
@@ -170,7 +171,9 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
     print(f"\n{'=' * 60}\nB_D JUMP RESIDUE ANALYSIS -> {out}\n{'=' * 60}")
 
     gate_resids = [r for pair in hbc_diagonal_pairs for r in pair]
-    traj = collect_aligned_positions(u, sf_lower, sf_upper, cfg["pore_helix"], gate_resids)
+    contact_sets = [(str(a), float(c)) for a, c in cfg["contact_sets"]]
+    traj = collect_aligned_positions(u, sf_lower, sf_upper, cfg["pore_helix"], gate_resids,
+                                     atom_sets=sorted({a for a, _ in contact_sets}))
     info = residue_table(u, traj["residues"], hbc_diagonal_pairs, subunit_groups, asn_residues,
                          channel_type)
     pd.DataFrame(dict(frame=traj["frames"], fit_rmsd=traj["fit_rmsd"])).to_csv(
@@ -206,9 +209,12 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
                 else f"segment_{'all' if not cfg['segment_max'] else 'max%d' % cfg['segment_max']}")
         mdir = out / name
         mdir.mkdir(exist_ok=True)
-        (mdir / "contacts").mkdir(exist_ok=True)
-        rows, gates, neighbours = [], [], []
-        contact_tabs = {"change": [], "present": []}
+        sub_of = {cs: mdir / f"contacts_{cs[0]}_{cs[1]:g}" for cs in contact_sets}
+        for sd in sub_of.values():
+            sd.mkdir(exist_ok=True)
+        rows, gates = [], []
+        neighbours = {cs: [] for cs in contact_sets}
+        contact_tabs = {cs: {"change": [], "present": []} for cs in contact_sets}
         for k, j in jumps.iterrows():
             b, a = event_windows(bounds, k + 1, mode, mcfg)
             if len(b) < cfg["min_frames"] or len(a) < cfg["min_frames"]:
@@ -238,20 +244,25 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
                                   exclude_ends=0, pos_range=cfg["tm_range"])
             gate = gate_table(res, cfg["gate_flank"])
             gate.to_csv(mdir / f"{tag}_gate.csv", index=False, float_format="%.3f")
-            nb = neighbour_table(traj, info, res, b, a, cfg)
-            nb.to_csv(mdir / f"{tag}_neighbours.csv", index=False, float_format="%.3f")
-            for kind in ("change", "present"):
-                tab = contacts_table(select_contacts(nb, kind, cfg["contact_top_n"],
-                                                     cfg["contact_min_pct"]))
-                tab.to_csv(mdir / "contacts" / f"{tag}_contacts_{kind}.csv", index=False,
-                           float_format="%.3f")
-                contact_tabs[kind].append(tab)
-                for lab in ("pdb", "raw"):
-                    plot_contacts(nb, mdir / "contacts" / f"{tag}_contacts_{kind}_{lab}.png",
-                                  title, kind=kind, label=lab, n=cfg["contact_top_n"],
-                                  min_pct=cfg["contact_min_pct"],
-                                  cutoff=cfg["contact_cutoff"])
-            neighbours.append(nb)
+            for cs in contact_sets:
+                atoms, ccut = cs
+                sd = sub_of[cs]
+                nb_cs = neighbour_table(traj, info, res, b, a, cfg, atoms, ccut)
+                nb_cs.to_csv(sd / f"{tag}_neighbours.csv", index=False, float_format="%.3f")
+                neighbours[cs].append(nb_cs)
+                ctitle = f"{title}\ncontact = {atoms} atoms closer than {ccut:g} Å"
+                for kind in ("change", "present"):
+                    tab = contacts_table(select_contacts(nb_cs, kind, cfg["contact_top_n"],
+                                                         cfg["contact_min_pct"]))
+                    tab.to_csv(sd / f"{tag}_contacts_{kind}.csv", index=False,
+                               float_format="%.3f")
+                    contact_tabs[cs][kind].append(tab)
+                    for lab in ("pdb", "raw"):
+                        plot_contacts(nb_cs, sd / f"{tag}_contacts_{kind}_{lab}.png", ctitle,
+                                      kind=kind, label=lab, n=cfg["contact_top_n"],
+                                      min_pct=cfg["contact_min_pct"], cutoff=ccut)
+                if cs == contact_sets[0]:
+                    nb = nb_cs
             mover = gate.loc[gate.pos == 0].sort_values("disp", ascending=False).iloc[0]
             near = nb[nb.gate == mover.pdb]
             print(f"\n  [{name}] jump at {int(j.frame)}: 3D neighbours of the gate Phe that moved "
@@ -276,13 +287,15 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
         allev.to_csv(mdir / "all_events_residues.csv", index=False, float_format="%.3f")
         allgate = pd.concat(gates, ignore_index=True)
         allgate.to_csv(mdir / "all_events_gate.csv", index=False, float_format="%.3f")
-        pd.concat(neighbours, ignore_index=True).to_csv(
-            mdir / "all_events_neighbours.csv", index=False, float_format="%.3f")
-        for kind, tabs in contact_tabs.items():
-            if tabs:
-                pd.concat(tabs, ignore_index=True).to_csv(
-                    mdir / "contacts" / f"all_events_contacts_{kind}.csv", index=False,
-                    float_format="%.3f")
+        for cs in contact_sets:
+            if neighbours[cs]:
+                pd.concat(neighbours[cs], ignore_index=True).to_csv(
+                    sub_of[cs] / "all_events_neighbours.csv", index=False, float_format="%.3f")
+            for kind, tabs in contact_tabs[cs].items():
+                if tabs:
+                    pd.concat(tabs, ignore_index=True).to_csv(
+                        sub_of[cs] / f"all_events_contacts_{kind}.csv", index=False,
+                        float_format="%.3f")
         print(f"\n  [{name}] the four HBC gate Phe at every jump:")
         print(allgate[allgate.pos == 0][GATE_SHOW].round(2).to_string(index=False))
         cons = consistent_residues(allev, cfg["ratio_moved"])
@@ -312,13 +325,15 @@ def alignment_selection(u, sf_lower, sf_upper, pore_helix):
     return sel
 
 
-def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12, gate_resids=()):
+def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12, gate_resids=(),
+                              atom_sets=("heavy",)):
     """One pass over the trajectory. Returns frames, fit_rmsd, residues
     (MDAnalysis ResidueGroup of the protein), ca (nf, nres, 3) and sc
     (nf, nres, 3; NaN where a residue has no side chain), all in the frame-0
     coordinate system of the alignment selection. With gate_resids also
-    gate_dist (nf, n_gates, nres): per frame the minimum heavy-atom distance
-    from each gate residue to every residue (NaN for the gate itself)."""
+    gate_dist {atom_set: (nf, n_gates, nres)}: per frame the minimum distance
+    from each gate residue to every residue (NaN for the gate itself), using
+    heavy atoms only ('heavy') or all atoms including hydrogens ('all')."""
     prot = u.select_atoms("protein")
     residues = prot.residues
     ca_ag = residues.atoms.select_atoms("name CA")
@@ -336,21 +351,29 @@ def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12, gate_resids=
     align = alignment_selection(u, sf_lower, sf_upper, pore_helix)
     nf = len(u.trajectory)
 
-    # heavy atoms of every residue, grouped by residue, for the gate distances
-    heavy = residues.atoms.select_atoms("not name H*")
-    h_res = np.array([resmap[a.resindex] for a in heavy], int)
-    order = np.argsort(h_res, kind="stable")
-    heavy, h_res = heavy[order], h_res[order]
-    starts = np.r_[0, np.flatnonzero(np.diff(h_res)) + 1]
-    present = h_res[starts]                   # residue index of each group
-    gate_ag, gate_idx = [], []
-    for g in gate_resids:
-        ag = residues.atoms.select_atoms(f"resid {g} and not name H*")
+    # atoms of every residue, grouped by residue, for the gate distances
+    gsets = {}
+    for aset in atom_sets:
+        sel = "not name H*" if aset == "heavy" else "all"
+        grp = residues.atoms.select_atoms(sel)
+        g_res = np.array([resmap[a.resindex] for a in grp], int)
+        order = np.argsort(g_res, kind="stable")
+        grp, g_res = grp[order], g_res[order]
+        starts = np.r_[0, np.flatnonzero(np.diff(g_res)) + 1]
+        gates_ag = []
+        for gr in gate_resids:
+            ag = residues.atoms.select_atoms(f"resid {gr} and ({sel})")
+            if len(ag):
+                gates_ag.append(ag)
+        gsets[aset] = dict(atoms=grp, starts=starts, present=g_res[starts], gates=gates_ag)
+    gate_idx = []
+    for gr in gate_resids:
+        ag = residues.atoms.select_atoms(f"resid {gr}")
         if len(ag):
-            gate_ag.append(ag)
             gate_idx.append(resmap[ag[0].resindex])
-    gate_dist = np.full((nf, len(gate_ag), nres), np.nan, np.float32) if gate_ag else None
-    if gate_ag:
+    gate_dist = ({aset: np.full((nf, len(gate_idx), nres), np.nan, np.float32) for aset in gsets}
+                 if gate_idx else None)
+    if gate_idx:
         from MDAnalysis.lib.distances import distance_array
     frames = np.empty(nf, int)
     rmsd = np.empty(nf)
@@ -368,12 +391,13 @@ def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12, gate_resids=
         move = lambda X: (X - Pc) @ R + ref_c
         rmsd[i] = np.sqrt(np.mean(np.sum((move(P) - ref) ** 2, axis=1)))
         ca[i] = move(ca_ag.positions.astype(float))
-        if gate_ag:
-            H = heavy.positions
-            for k, ag in enumerate(gate_ag):
-                dmin = distance_array(ag.positions, H).min(axis=0)
-                gate_dist[i, k, present] = np.minimum.reduceat(dmin, starts)
-                gate_dist[i, k, gate_idx[k]] = np.nan
+        if gate_idx:
+            for aset, gs in gsets.items():
+                H = gs["atoms"].positions
+                for k, ag in enumerate(gs["gates"]):
+                    dmin = distance_array(ag.positions, H).min(axis=0)
+                    gate_dist[aset][i, k, gs["present"]] = np.minimum.reduceat(dmin, gs["starts"])
+                    gate_dist[aset][i, k, gate_idx[k]] = np.nan
         if len(sc_ag):
             X = move(sc_ag.positions.astype(float))
             with np.errstate(invalid="ignore", divide="ignore"):
@@ -565,12 +589,15 @@ def gate_table(res, flank=3):
     return g.sort_values(["subunit", "pos"])[cols].reset_index(drop=True)
 
 
-def neighbour_table(traj, info, res, b, a, cfg):
-    """3D neighbours of each gate Phe for one jump (rows b = before, a = after)."""
+def neighbour_table(traj, info, res, b, a, cfg, atoms="heavy", contact_cutoff=None):
+    """3D neighbours of each gate Phe for one jump (rows b = before, a = after),
+    distances from the `atoms` set ('heavy' or 'all'), contact = < contact_cutoff."""
     gd = traj.get("gate_dist")
     if gd is None:
         return pd.DataFrame()
-    cut, ccut = cfg["neighbour_cutoff"], cfg["contact_cutoff"]
+    gd = gd[atoms] if isinstance(gd, dict) else gd
+    cut = cfg["neighbour_cutoff"]
+    ccut = cfg["contact_cutoff"] if contact_cutoff is None else contact_cutoff
     rows = []
     for k, gi in enumerate(traj["gate_idx"]):
         db, da = gd[b, k, :], gd[a, k, :]
@@ -765,15 +792,17 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
     subs = sorted(d["sub"].unique(), key=lambda x: (x.startswith("G"), x))
     scol = {s_: palette[i % len(palette)] for i, s_ in enumerate(subs)}
 
-    fig, axes = plt.subplots(2, 2, figsize=(max(12, 1.0 * len(positions) * 2 + 3), 10.5),
+    kmax = int(d.groupby(["gate", "pos"]).size().max())   # most residues in one column
+    slot = 0.8 / kmax                                      # same width for every residue
+    fig, axes = plt.subplots(2, 2, figsize=(max(12, 0.55 * kmax * len(positions) * 2 + 3), 10.5),
                              sharey=True)
     for ax, (_, g) in zip(axes.flat, gates.iterrows()):
         s = d[d.gate == g.gate].sort_values(["pos", "sub"])
         for p, grp in s.groupby("pos"):
             k = len(grp)
-            w = 0.8 / k                                   # slot of one residue (2 bars)
+            w = slot                                      # slot of one residue (2 bars)
             for j, (_, r) in enumerate(grp.iterrows()):
-                xc = col[p] - 0.4 + (j + 0.5) * w
+                xc = col[p] - k * w / 2 + (j + 0.5) * w   # residues centred in the column
                 bw = 0.42 * w
                 ax.bar(xc - bw / 2, r.contact_before_pct, bw, color="#9aa5b1")
                 ax.bar(xc + bw / 2, r.contact_after_pct, bw,

@@ -116,7 +116,8 @@ with tempfile.TemporaryDirectory() as tmp:
         assert set(raw.head(27).subunit) <= {"B", "D"}          # the 27 moved residues come first
         assert (raw.resid == raw.resid).all() and "residue" in pdb and len(pdb) == len(raw)
         assert (raw.head(15).real_move == "yes").all()
-        nb = pd.read_csv(next(d.glob("event1_frame*_neighbours.csv")))
+        ch = d / "contacts_heavy_4.5"
+        nb = pd.read_csv(next(ch.glob("event1_frame*_neighbours.csv")))
         nbB = nb[nb.gate_resid == 71]
         assert 71 not in set(nbB.resid) and {70, 72} <= set(nbB.resid)
         assert (nbB.dist_before.le(8) | nbB.dist_after.le(8)).all()
@@ -128,12 +129,17 @@ with tempfile.TemporaryDirectory() as tmp:
         for ts in u.trajectory[lo:hi + 1]:
             dmins.append(np.linalg.norm(g71.positions[:, None] - a74.positions[None], axis=2).min())
         assert abs(np.median(dmins) - row.dist_before) < 1e-3, (np.median(dmins), row.dist_before)
-        assert (d / "all_events_neighbours.csv").exists()
-        for kind in ("change", "present"):
-            for lab in ("pdb", "raw"):
-                assert list((d / "contacts").glob(f"event1_frame*_contacts_{kind}_{lab}.png")), (kind, lab)
-            ct = pd.read_csv(next((d / "contacts").glob(f"event1_frame*_contacts_{kind}.csv")))
-            assert np.allclose(ct.change_pct, ct.contact_after_pct - ct.contact_before_pct, atol=2e-3)
-            assert (ct.position_girk2 == 192 + ct.position_from_gate).all()
-            assert (d / "contacts" / f"all_events_contacts_{kind}.csv").exists()
+        # no hydrogens in the synthetic system -> all-atom distances equal heavy-atom ones
+        nba = pd.read_csv(next((d / "contacts_all_3.5").glob("event1_frame*_neighbours.csv")))
+        mm = nb.merge(nba, on=["gate_resid", "resid"])
+        assert len(mm) == len(nb) and np.allclose(mm.dist_before_x, mm.dist_before_y)
+        for cd in (ch, d / "contacts_all_3.5"):
+            assert (cd / "all_events_neighbours.csv").exists()
+            for kind in ("change", "present"):
+                for lab in ("pdb", "raw"):
+                    assert list(cd.glob(f"event1_frame*_contacts_{kind}_{lab}.png")), (cd, kind, lab)
+                ct = pd.read_csv(next(cd.glob(f"event1_frame*_contacts_{kind}.csv")))
+                assert np.allclose(ct.change_pct, ct.contact_after_pct - ct.contact_before_pct, atol=2e-3)
+                assert (ct.position_girk2 == 192 + ct.position_from_gate).all()
+                assert (cd / f"all_events_contacts_{kind}.csv").exists()
     print("test_bd_jump_residues: OK")
