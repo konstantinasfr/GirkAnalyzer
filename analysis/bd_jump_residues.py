@@ -711,6 +711,9 @@ def contacts_table(d):
     out = pd.DataFrame(dict(
         event=d.event, jump_frame=d.jump_frame, direction=d.direction,
         gate=d.gate, gate_resid=d.gate_resid, gate_subunit=d.gate_subunit,
+        name_girk2=[f"{ONE_LETTER.get(rn, 'X')}{HBC_GIRK2 + int(ps)}."
+                    f"{str(nb_).split('.')[-1] if '.' in str(nb_) else su}"
+                    for rn, ps, nb_, su in zip(d.resname, d.pos, d.neighbour, d.subunit)],
         position_girk2=HBC_GIRK2 + d.pos, position_from_gate=d.pos,
         neighbour=d.neighbour, resid=d.resid, resname=d.resname, subunit=d.subunit,
         same_subunit=d.same_subunit,
@@ -768,20 +771,22 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
         s = d[d.gate == g.gate].sort_values(["pos", "sub"])
         for p, grp in s.groupby("pos"):
             k = len(grp)
-            w = 0.8 / k
+            w = 0.8 / k                                   # slot of one residue (2 bars)
             for j, (_, r) in enumerate(grp.iterrows()):
                 xc = col[p] - 0.4 + (j + 0.5) * w
-                ax.bar(xc, r.contact_after_pct, w * 0.9, color=scol[r["sub"]])
-                ax.hlines(r.contact_before_pct, xc - 0.45 * w, xc + 0.45 * w, color="black",
-                          lw=2)
-                name = str(r.neighbour) if label == "pdb" else f"{r.resname}{int(r.resid)}"
-                ax.text(xc, -3, name, ha="center", va="top", fontsize=7, clip_on=False)
-                ax.text(xc, -9.5, f"{r.chg:+.0f}", ha="center", va="top", fontsize=7.5,
+                bw = 0.42 * w
+                ax.bar(xc - bw / 2, r.contact_before_pct, bw, color="#9aa5b1")
+                ax.bar(xc + bw / 2, r.contact_after_pct, bw,
+                       color="#2a9d8f" if r.chg >= 0 else "#e76f51")
+                name = (f"{ONE_LETTER.get(r.resname, 'X')}{HBC_GIRK2 + int(r.pos)}.{r['sub']}"
+                        if label == "pdb" else f"{r.resname}{int(r.resid)}")
+                ax.text(xc, -3, name, ha="center", va="top", fontsize=7.5, clip_on=False)
+                ax.text(xc, -10, f"{r.chg:+.0f} %", ha="center", va="top", fontsize=7.5,
                         clip_on=False, fontweight="bold",
                         color="#1f7a6f" if r.chg > 0 else "#c0503a" if r.chg < 0 else "0.45")
         ax.set_xticks(np.arange(len(positions)))
-        ax.set_xticklabels([f"pos {x_}" for x_ in xl], fontsize=8, color="0.45")
-        ax.tick_params(axis="x", pad=30, length=0)
+        ax.set_xticklabels([""] * len(positions))
+        ax.tick_params(axis="x", length=0)
         gname = g.gate if label == "pdb" else f"resid {int(g.gate_resid)}"
         ax.set_title(f"gate {gname}  ({g.gate_subunit})", fontsize=10)
         ax.set_ylim(0, 105)
@@ -792,10 +797,10 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
         ax.set_axisbelow(True)
     for ax in axes[:, 0]:
         ax.set_ylabel(f"% frames in contact (< {cutoff:g} Å)")
-    from matplotlib.lines import Line2D
-    handles = [Patch(color=scol[s_], label=f"subunit {s_}") for s_ in subs]
-    handles.append(Line2D([], [], color="black", lw=2, label="before the jump"))
-    fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=9)
+    fig.legend(handles=[Patch(color="#9aa5b1", label="before the jump"),
+                        Patch(color="#2a9d8f", label="after: contact gained"),
+                        Patch(color="#e76f51", label="after: contact lost")],
+               loc="lower center", ncol=3, frameon=False, fontsize=9)
     if kind == "change":
         rule = f"contact changes by ≥ {min_pct:g} points"
     else:
@@ -804,10 +809,11 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
         rule += f", top {n} per gate"
     xinfo = ("position in GIRK2 numbering (GIRK1 shifted +11: A174.G1 = 185)" if label == "pdb"
              else "position from the HBC Phe of the residue's own subunit (gate = 0)")
-    fig.suptitle(f"{title}\none bar per neighbouring residue (name under the bar), coloured by its "
-                 f"subunit: bar = % contact AFTER the jump, black line = BEFORE, number = after - "
-                 f"before (percentage points)\ngrey 'pos' = {xinfo}; neighbours within 8 Å, {rule}, "
-                 f"not same subunit ±{skip}", fontsize=9)
+    naming = ("residue names in GIRK2 numbering + subunit (GIRK1 shifted +11, e.g. F72 of GIRK1 = "
+              "F83.G1)" if label == "pdb" else "raw resid")
+    fig.suptitle(f"{title}\nfor every neighbouring residue: % frames in contact before (grey) and after "
+                 f"the jump; under it the residue and the change (after - before)"
+                 f"\n{naming}; neighbours within 8 Å, {rule}, not same subunit ±{skip}", fontsize=9)
     fig.tight_layout(rect=(0, 0.04, 1, 0.91), h_pad=2.5)
     fig.savefig(out_png, dpi=170)
     plt.close(fig)
