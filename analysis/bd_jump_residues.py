@@ -65,11 +65,18 @@ OUTPUT, bd_jump_residues/minjump_<X>/
                                          subunit, so equivalent positions of
                                          different subunits line up; HBC = 0)
         event<k>_frame<F>.png            displacement along the sequence, one
-                                         row per subunit
+                                         row per subunit (whole protein)
+        event<k>_frame<F>_TM.png         the same, zoomed on the transmembrane
+                                         part (pos -50 .. +15) with its own
+                                         y-scale; the gate (pos 0) is outlined
+                                         and labelled in every subunit
+        event<k>_frame<F>_gate.csv       gate table: the four HBC Phe and the 3
+                                         residues on each side (pos -3 .. +3)
         event<k>_frame<F>_disp.pdb       frame-0 structure with the Calpha
                                          displacement in the B-factor column
                                          (colour by B-factor in PyMOL / VMD)
         all_events_residues.csv          all events, long format
+        all_events_gate.csv              the gate tables of all events
         consistent_residues.csv          per residue over all events of the
                                          run: mean disp, mean d_radial with the
                                          sign of narrowing events flipped (so
@@ -84,8 +91,11 @@ import pandas as pd
 
 OUT_DIRNAME = "bd_jump_residues"
 DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=500, segment_max=0,
-                min_frames=100, pore_helix=12, ratio_moved=3.0)
+                min_frames=100, pore_helix=12, ratio_moved=3.0,
+                tm_range=(-50, 15), gate_flank=3)
 BACKBONE = ("N", "CA", "C", "O", "OXT")
+GATE_SHOW = ["event", "direction", "resid", "resname", "subunit", "girk1", "pos", "disp",
+             "d_radial", "d_axial", "d_around", "sc_disp", "noise", "ratio", "r_before"]
 
 
 # --------------------------------------------------------------------------
@@ -131,7 +141,7 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
                 else f"segment_{'all' if not cfg['segment_max'] else 'max%d' % cfg['segment_max']}")
         mdir = out / name
         mdir.mkdir(exist_ok=True)
-        rows = []
+        rows, gates = [], []
         for k, j in jumps.iterrows():
             b, a = event_windows(bounds, k + 1, mode, cfg)
             if len(b) < cfg["min_frames"] or len(a) < cfg["min_frames"]:
@@ -146,16 +156,25 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
             res.insert(4, "after_frames", f"{traj['frames'][a[0]]}-{traj['frames'][a[-1]]}")
             tag = f"event{k + 1}_frame{int(j.frame)}"
             res.to_csv(mdir / f"{tag}_residues.csv", index=False, float_format="%.3f")
-            plot_event(res, mdir / f"{tag}.png",
-                       f"{run_name}  jump at {int(j.frame)} ({j.direction}, "
-                       f"{j.step:+.2f} A)  [{name}]  before {res.before_frames.iloc[0]}, "
-                       f"after {res.after_frames.iloc[0]}")
+            title = (f"{run_name}  jump at {int(j.frame)} ({j.direction}, {j.step:+.2f} A)  "
+                     f"[{name}]  before {res.before_frames.iloc[0]}, "
+                     f"after {res.after_frames.iloc[0]}")
+            plot_event(res, mdir / f"{tag}.png", title)
+            plot_event(res, mdir / f"{tag}_TM.png", title + "  — transmembrane part",
+                       pos_range=cfg["tm_range"])
+            gate = gate_table(res, cfg["gate_flank"])
+            gate.to_csv(mdir / f"{tag}_gate.csv", index=False, float_format="%.3f")
             write_disp_pdb(u, traj, info, res, mdir / f"{tag}_disp.pdb")
             rows.append(res)
+            gates.append(gate)
         if not rows:
             continue
         allev = pd.concat(rows, ignore_index=True)
         allev.to_csv(mdir / "all_events_residues.csv", index=False, float_format="%.3f")
+        allgate = pd.concat(gates, ignore_index=True)
+        allgate.to_csv(mdir / "all_events_gate.csv", index=False, float_format="%.3f")
+        print(f"\n  [{name}] the four HBC gate Phe at every jump:")
+        print(allgate[allgate.pos == 0][GATE_SHOW].round(2).to_string(index=False))
         cons = consistent_residues(allev, cfg["ratio_moved"])
         cons.to_csv(mdir / "consistent_residues.csv", index=False, float_format="%.3f")
         print(f"\n  [{name}] residues that move most (ratio >= {cfg['ratio_moved']:g} in most events):")
@@ -382,6 +401,14 @@ def compare_windows(traj, info, axis, b, a):
     return res
 
 
+def gate_table(res, flank=3):
+    """The HBC Phe (pos 0) of every subunit and `flank` residues on each side."""
+    g = res[res.pos.abs() <= flank]
+    cols = ["event", "jump_frame", "direction", "before_frames", "after_frames"] + GATE_SHOW[2:] \
+        + ["rmsf_before", "rmsf_after"]
+    return g.sort_values(["subunit", "pos"])[cols].reset_index(drop=True)
+
+
 def consistent_residues(allev, ratio_moved=3.0):
     df = allev.copy()
     sign = np.where(df.direction == "widening", 1.0, -1.0)
@@ -443,16 +470,28 @@ def plot_trace(frames, bd, ac, bounds, out_png, title):
     plt.close(fig)
 
 
-def plot_event(res, out_png, title):
+def plot_event(res, out_png, title, pos_range=None):
+    """Displacement along the sequence, one row per subunit. With pos_range
+    (lo, hi): only that part, its own y-scale, the gate (pos 0) outlined and
+    labelled, every residue with ratio >= 3 labelled."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     subs = sorted(res.subunit.unique())
-    fig, axes = plt.subplots(len(subs), 1, figsize=(13, 2.3 * len(subs) + 0.6), sharex=True)
+    zoom = pos_range is not None
+    fig, axes = plt.subplots(len(subs), 1, figsize=(13, 2.3 * len(subs) + 0.6),
+                             sharex=True, sharey=zoom)
     axes = np.atleast_1d(axes)
+    if zoom:
+        lo, hi = pos_range
+        part = res[(res.pos >= lo) & (res.pos <= hi)]
+        ymax = 1.25 * max(part.disp.max(), part.sc_disp.max(), part.d_radial.abs().max(), 0.5)
+        ymin = min(part.d_radial.min() * 1.25, -0.3)
     for ax, s in zip(axes, subs):
         r = res[res.subunit == s].sort_values("pos")
+        if zoom:
+            r = r[(r.pos >= lo) & (r.pos <= hi)]
         x = r.pos.to_numpy()
         ax.bar(x, r.d_radial, width=1.0, color=np.where(r.d_radial > 0, "#2a9d8f", "#e76f51"),
                alpha=0.55, label="outward (+) / inward (−)")
@@ -463,10 +502,21 @@ def plot_event(res, out_png, title):
         ax.axhline(0, color="black", lw=0.5)
         lab = s + ("  (GIRK1)" if r.girk1.any() else "")
         ax.set_ylabel(f"{lab}\nÅ", fontsize=9)
-        top = r.loc[r.ratio >= 3].nlargest(5, "disp")
+        top = r.loc[r.ratio >= 3].nlargest(12 if zoom else 5, "disp")
         for _, t in top.iterrows():
             ax.annotate(f"{t.resname}{t.resid}", (t.pos, t.disp), fontsize=6,
                         xytext=(0, 3), textcoords="offset points", ha="center")
+        if zoom:
+            ax.set_ylim(ymin, ymax)
+            ax.set_xlim(lo - 0.5, hi + 0.5)
+            g = r[r.pos == 0]
+            for _, t in g.iterrows():
+                ax.bar([0], [t.d_radial], width=1.0, fill=False, edgecolor="purple", lw=1.5)
+                ax.text(0.995, 0.95, f"gate {t.resname}{t.resid}: {t.disp:.2f} Å, "
+                            f"out {t.d_radial:+.2f} Å, ratio {t.ratio:.1f}",
+                            transform=ax.transAxes, fontsize=7.5, color="purple",
+                            ha="right", va="top",
+                            bbox=dict(facecolor="white", edgecolor="purple", lw=0.6, alpha=0.9))
     axes[0].legend(fontsize=7, ncol=4, loc="upper left")
     axes[0].set_title(title, fontsize=9)
     axes[-1].set_xlabel("position relative to the HBC Phe of the same subunit (HBC = 0)")

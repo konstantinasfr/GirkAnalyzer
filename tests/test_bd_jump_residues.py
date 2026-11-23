@@ -97,4 +97,10 @@ with tempfile.TemporaryDirectory() as tmp:
         assert (A.disp < 3 * A.noise + 0.05).all()                    # nothing moved in A
         assert np.all(np.abs(B.loc[-5:9, "d_axial"]) < 0.15)          # outward, not up/down
         assert r.loc[r.resname == "PHE", "pos"].eq(0).all()
+        assert list(d.glob("event1_frame*_TM.png"))
+        g = pd.read_csv(next(d.glob("event1_frame*_gate.csv")))
+        assert sorted(g.pos.unique()) == list(range(-3, 4)) and len(g) == 4 * 7
+        gB = g[(g.subunit == "B") & (g.pos == 0)].iloc[0]
+        assert abs(gB.d_radial - 1.5) < 0.15 and gB.resid == 71
+        assert (d / "all_events_gate.csv").exists()
     print("test_bd_jump_residues: OK")
