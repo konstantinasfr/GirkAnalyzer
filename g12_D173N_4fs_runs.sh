@@ -2,11 +2,12 @@ python3 main.py --channel_type G12_D173N_4fs --run_number 1 --force_pkl_generati
 python3 main.py --channel_type G12_D173N_4fs --run_number 2 --force_pkl_generation 
 python3 main.py --channel_type G12_D173N_4fs --run_number 3 --force_pkl_generation 
 python3 main.py --channel_type G12_D173N_4fs --run_number 4 --force_pkl_generation 
+python3 main.py --channel_type G12_D173N_4fs --run_number 5 --force_pkl_generation 
 python3 main.py --channel_type G12_D173N_4fs --run_number 6 --force_pkl_generation 
 # python3 main.py --channel_type G12_D173N --run_number 5
 # python3 main.py --channel_type G12_D173N --run_number 6
 # python3 main.py --channel_type G12_D173N --run_number 7
-# python3 main.py --channel_type G12_D173N --run_number 8
+python3 main.py --channel_type G12_D173N_4fs --run_number 8
 # python3 main.py --channel_type G12_D173N --run_number 9
 # python3 main.py --channel_type G12_D173N --run_number 10
 # python3 main.py --channel_type G12_ML --run_number 11
