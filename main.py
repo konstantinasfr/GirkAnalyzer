@@ -111,6 +111,22 @@ def main():
     parser.add_argument("--hbc_close_below", type=float, default=5.69,
                         help="with --hbc_open_closed_only: smoothed distance (A) below which an open "
                              "stretch becomes closed (default 5.69)")
+    parser.add_argument("--bd_jump_only", action="store_true",
+                        help="Run only the B_D jump residue analysis (analysis/bd_jump_residues.py) for this "
+                             "run and stop: find the jumps of the GIRK1 (B_D) HBC diagonal Calpha-Calpha "
+                             "distance and compare every residue before vs after each jump. Results in "
+                             "results_dir/bd_jump_residues/minjump_<X>/")
+    parser.add_argument("--bd_min_jump", type=float, default=1.0,
+                        help="with --bd_jump_only: smallest change of the B_D Calpha-Calpha level (A) that "
+                             "counts as a jump (default 1.0); also names the output folder")
+    parser.add_argument("--bd_window", type=int, default=500,
+                        help="with --bd_jump_only: frames before / after each jump in the 'window' way "
+                             "(default 500)")
+    parser.add_argument("--bd_segment_max", type=int, default=0,
+                        help="with --bd_jump_only: in the 'segment' way use at most this many frames on "
+                             "each side, the ones closest to the jump (default 0 = the whole flat stretch)")
+    parser.add_argument("--bd_modes", default="both", choices=["both", "window", "segment"],
+                        help="with --bd_jump_only: how to choose the before / after frames (default both)")
     parser.add_argument("--skip_pip_check", action="store_true",
                         help="leave the PIP2 part out of the subunit check (subunit order and "
                              "GIRK1 placement are still checked). Use only for analyses that do "
@@ -841,6 +857,18 @@ def main():
                             open_above=args.hbc_open_above,
                             close_below=args.hbc_close_below)
         raise SystemExit("--hbc_open_closed_only: done.")
+
+    if args.bd_jump_only:
+        from analysis.bd_jump_residues import run_bd_jump_residues
+        run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower=_cfg.get("lower1"),
+                             sf_upper=_cfg.get("upper1"), results_dir=results_dir,
+                             subunit_groups=_cfg.get("subunit_groups"),
+                             asn_residues=_cfg.get("asn_residues"),
+                             modes=("window", "segment") if args.bd_modes == "both"
+                             else (args.bd_modes,),
+                             min_jump=args.bd_min_jump, window=args.bd_window,
+                             segment_max=args.bd_segment_max)
+        raise SystemExit("--bd_jump_only: done.")
     # end_frame = 3000
     print(f"Using end_frame = {end_frame} (last frame of trajectory)")
 
