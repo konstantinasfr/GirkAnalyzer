@@ -89,7 +89,7 @@ with tempfile.TemporaryDirectory() as tmp:
     rm = pd.read_csv(out / "alignment_rmsd.csv")
     # 0.25 A noise per coordinate in the frame and in the reference -> RMSD ~ 0.25*sqrt(3)*sqrt(2) = 0.61
     assert rm.fit_rmsd.median() < 0.75, rm.fit_rmsd.median()          # rotation undone (else ~20 A)
-    for mode in ("window300", "segment_all"):
+    for mode in ("window300", "window500", "segment_all"):
         d = out / mode
         r = pd.read_csv(next(d.glob("event1_frame*_residues.csv")))
         assert (d / "consistent_residues.csv").exists() and list(d.glob("*_disp.pdb"))
@@ -129,4 +129,7 @@ with tempfile.TemporaryDirectory() as tmp:
             dmins.append(np.linalg.norm(g71.positions[:, None] - a74.positions[None], axis=2).min())
         assert abs(np.median(dmins) - row.dist_before) < 1e-3, (np.median(dmins), row.dist_before)
         assert (d / "all_events_neighbours.csv").exists()
+        for kind in ("change", "present"):
+            for lab in ("pdb", "raw"):
+                assert list((d / "contacts").glob(f"event1_frame*_contacts_{kind}_{lab}.png")), (kind, lab)
     print("test_bd_jump_residues: OK")

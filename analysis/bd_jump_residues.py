@@ -22,7 +22,7 @@ IDEA
    stretches is a jump (widening or narrowing). The jumps do not depend on
    the gate being open or closed.
 2. "Before" and "after" frames of every jump, two ways (both are run):
-     window   the `window` frames (default 300) just before / just after the
+     window   the `window` frames (default 300 and 500, one folder each) just before / just after the
               jump, never crossing the previous / next jump
      segment  the whole flat stretch before / after the jump (optionally at
               most `segment_max` frames, the ones closest to the jump)
@@ -107,6 +107,20 @@ OUTPUT, bd_jump_residues/minjump_<X>/
                                          its own displacement at the jump and
                                          real_move. Sorted per gate by how much the
                                          distance changes (biggest first)
+        contacts/event<k>_frame<F>_contacts_change_<pdb|raw>.png
+                                         one panel per gate Phe: the neighbours (x
+                                         axis) whose contact with it changes most
+                                         at the jump; bars = % of frames in contact
+                                         (< 4.5 A) before (grey) and after (green =
+                                         gained, red = lost)
+        contacts/event<k>_frame<F>_contacts_present_<pdb|raw>.png
+                                         the same with the neighbours most often in
+                                         contact (before or after): which pocket
+                                         each gate Phe sits in. Left out: bonded
+                                         neighbours (+-1; for 'present' also the
+                                         same-helix-turn +-2..4), neighbours < 5 %
+                                         before and after, and for 'change' contacts
+                                         changing by < 5 percentage points
         all_events_residues.csv          all events, long format
         all_events_neighbours.csv        the neighbour lists of all events
         all_events_gate.csv              the gate tables of all events
@@ -123,10 +137,10 @@ import numpy as np
 import pandas as pd
 
 OUT_DIRNAME = "bd_jump_residues"
-DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=300, segment_max=0,
+DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=(300, 500), segment_max=0,
                 min_frames=100, pore_helix=12, ratio_moved=3.0,
                 tm_range=(-50, 15), gate_flank=3, neighbour_cutoff=8.0, contact_cutoff=4.5,
-                top_n=10, top_exclude_ends=15)
+                top_n=10, top_exclude_ends=15, contact_top_n=10, contact_min_pct=5.0)
 BACKBONE = ("N", "CA", "C", "O", "OXT")
 GATE_SHOW = ["event", "direction", "resid", "resname", "pdb", "subunit", "girk1", "pos", "disp",
              "d_radial", "d_axial", "d_around", "sc_disp", "noise", "ratio", "r_before"]
@@ -172,14 +186,19 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
         return
 
     axis = pore_axis(ca, info, sf_lower, sf_upper)
-    for mode in modes:
-        name = (f"window{cfg['window']}" if mode == "window"
+    windows = cfg["window"] if isinstance(cfg["window"], (list, tuple)) else [cfg["window"]]
+    runs = [("window", w) for w in windows if "window" in modes] \
+        + ([("segment", None)] if "segment" in modes else [])
+    for mode, w in runs:
+        mcfg = dict(cfg, window=w) if w else cfg
+        name = (f"window{w}" if mode == "window"
                 else f"segment_{'all' if not cfg['segment_max'] else 'max%d' % cfg['segment_max']}")
         mdir = out / name
         mdir.mkdir(exist_ok=True)
+        (mdir / "contacts").mkdir(exist_ok=True)
         rows, gates, neighbours = [], [], []
         for k, j in jumps.iterrows():
-            b, a = event_windows(bounds, k + 1, mode, cfg)
+            b, a = event_windows(bounds, k + 1, mode, mcfg)
             if len(b) < cfg["min_frames"] or len(a) < cfg["min_frames"]:
                 print(f"  [{name}] jump at frame {j.frame}: before/after shorter than "
                       f"{cfg['min_frames']} frames -> skipped")
@@ -209,6 +228,12 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
             gate.to_csv(mdir / f"{tag}_gate.csv", index=False, float_format="%.3f")
             nb = neighbour_table(traj, info, res, b, a, cfg)
             nb.to_csv(mdir / f"{tag}_neighbours.csv", index=False, float_format="%.3f")
+            for kind in ("change", "present"):
+                for lab in ("pdb", "raw"):
+                    plot_contacts(nb, mdir / "contacts" / f"{tag}_contacts_{kind}_{lab}.png",
+                                  title, kind=kind, label=lab, n=cfg["contact_top_n"],
+                                  min_pct=cfg["contact_min_pct"],
+                                  cutoff=cfg["contact_cutoff"])
             neighbours.append(nb)
             mover = gate.loc[gate.pos == 0].sort_values("disp", ascending=False).iloc[0]
             near = nb[nb.gate == mover.pdb]
@@ -629,6 +654,63 @@ def plot_trace(frames, bd, ac, bounds, out_png, title):
     ax.legend(fontsize=8, loc="best")
     fig.tight_layout()
     fig.savefig(out_png, dpi=200)
+    plt.close(fig)
+
+
+def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=10, min_pct=5.0,
+                  cutoff=4.5):
+    """One panel per gate Phe; x axis = its neighbours, bars = % frames in
+    contact before / after the jump. kind 'change': the n neighbours whose
+    contact changes most; 'present': the n most often in contact."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    if nb is None or nb.empty:
+        return
+    # 'change': leave out only the bonded neighbours (+-1); 'present': also the
+    # same-helix-turn neighbours (+-2..4), which touch the Phe all the time anyway
+    skip = 1 if kind == "change" else 4
+    d = nb[nb.seq_distance.isna() | (nb.seq_distance > skip)].copy()
+    d = d[(d.contact_before_pct >= min_pct) | (d.contact_after_pct >= min_pct)]
+    d["chg"] = d.contact_after_pct - d.contact_before_pct
+    if kind == "change":
+        d = d[d.chg.abs() >= min_pct]          # only contacts that really change
+    gates = nb.drop_duplicates("gate").sort_values("gate_subunit")
+    fig, axes = plt.subplots(1, len(gates), figsize=(4.6 * len(gates), 4.6), sharey=True)
+    axes = np.atleast_1d(axes)
+    for ax, (_, g) in zip(axes, gates.iterrows()):
+        s = d[d.gate == g.gate]
+        key = s.chg.abs() if kind == "change" else s[["contact_before_pct", "contact_after_pct"]].max(axis=1)
+        top = s.loc[key.sort_values(ascending=False).index].head(n)
+        x = np.arange(len(top))
+        ax.bar(x - 0.2, top.contact_before_pct, 0.4, color="#9aa5b1")
+        ax.bar(x + 0.2, top.contact_after_pct, 0.4,
+               color=np.where(top.chg >= 0, "#2a9d8f", "#e76f51"))
+        names = top.neighbour if label == "pdb" else top.resname + top.resid.astype(str)
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=60, ha="right", fontsize=8)
+        gname = g.gate if label == "pdb" else f"resid {int(g.gate_resid)}"
+        ax.set_title(f"gate {gname}  ({g.gate_subunit})", fontsize=10)
+        ax.set_ylim(0, 105)
+        if not len(top):
+            ax.text(0.5, 0.5, "no neighbour above the threshold", ha="center",
+                    transform=ax.transAxes, fontsize=8)
+    axes[0].set_ylabel(f"% frames in contact (< {cutoff:g} Å)")
+    fig.legend(handles=[Patch(color="#9aa5b1", label="before the jump"),
+                        Patch(color="#2a9d8f", label="after: contact gained"),
+                        Patch(color="#e76f51", label="after: contact lost")],
+               loc="lower center", ncol=3, frameon=False, fontsize=8)
+    what = ("neighbours whose contact changes most" if kind == "change"
+            else "neighbours most often in contact")
+    numbering = "PDB numbering" if label == "pdb" else "raw resid"
+    left_out = ("bonded ±1 left out; change ≥ 5 %" if kind == "change"
+                else "same subunit ±4 in sequence left out")
+    fig.suptitle(f"{title}\nfor each gate Phe: up to {n} {what} ({numbering}; {left_out})",
+                 fontsize=9)
+    fig.tight_layout(rect=(0, 0.06, 1, 0.92))
+    fig.savefig(out_png, dpi=180)
     plt.close(fig)
 
 
