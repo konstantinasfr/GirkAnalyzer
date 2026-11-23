@@ -823,48 +823,51 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
     subs = sorted(d["sub"].unique(), key=lambda x: (x.startswith("G"), x))
     scol = {s_: palette[i % len(palette)] for i, s_ in enumerate(subs)}
 
-    kmax = int(d.groupby(["gate", "pos"]).size().max())   # most residues in one column
-    slot = 0.8 / kmax                                      # same width for every residue
-    fig, axes = plt.subplots(2, 2, figsize=(max(14, 0.9 * kmax * len(positions) * 2 + 3), 12),
-                             sharey=True)
+    # every residue gets one slot of width 1 (2 bars); a position is as wide as
+    # the most residues any gate has there, so there is no empty padding
+    nk = d.groupby(["gate", "pos"]).size().groupby("pos").max()
+    x0, x = {}, 0.0
+    for p in positions:
+        x0[p] = x
+        x += nk[p]
+    xmax = x
+    fs = 16
+    fig, axes = plt.subplots(2, 2, figsize=(max(16, 1.25 * xmax * 2 + 3), 13), sharey=True)
     for ax, (_, g) in zip(axes.flat, gates.iterrows()):
         s = d[d.gate == g.gate].sort_values(["pos", "sub"])
         for p, grp in s.groupby("pos"):
-            k = len(grp)
-            w = slot                                      # slot of one residue (2 bars)
+            off = (nk[p] - len(grp)) / 2                  # centre in the position's column
             for j, (_, r) in enumerate(grp.iterrows()):
-                xc = col[p] - k * w / 2 + (j + 0.5) * w   # residues centred in the column
-                bw = 0.42 * w
+                xc = x0[p] + off + j + 0.5
+                bw = 0.4
                 ax.bar(xc - bw / 2, r.contact_before_pct, bw, color="#9aa5b1")
                 ax.bar(xc + bw / 2, r.contact_after_pct, bw,
                        color="#2a9d8f" if r.chg >= 0 else "#e76f51")
                 name = (f"{ONE_LETTER.get(r.resname, 'X')}{HBC_GIRK2 + int(r.pos)}.{r['sub']}"
                         if label == "pdb" else f"{r.resname}{int(r.resid)}")
-                ax.text(xc, -3, name, ha="center", va="top", fontsize=12, clip_on=False,
+                ax.text(xc, -3, name, ha="center", va="top", fontsize=fs, clip_on=False,
                         color="0.1" if r.passes_filter else "0.5",
                         style="normal" if r.passes_filter else "italic")
                 c = round(float(r.chg)) + 0          # no "-0 %"
-                ax.text(xc, -12, f"{c:+d} %", ha="center", va="top", fontsize=12,
+                ax.text(xc, -14, f"{c:+d} %", ha="center", va="top", fontsize=fs,
                         clip_on=False, fontweight="bold",
                         color="#1f7a6f" if c > 0 else "#c0503a" if c < 0 else "0.45")
-        ax.set_xticks(np.arange(len(positions)))
-        ax.set_xticklabels([""] * len(positions))
-        ax.tick_params(axis="x", length=0)
+        ax.set_xticks([])
         gname = g.gate if label == "pdb" else f"resid {int(g.gate_resid)}"
-        ax.set_title(f"gate {gname}  ({g.gate_subunit})", fontsize=15, fontweight="bold")
-        ax.tick_params(axis="y", labelsize=12)
+        ax.set_title(f"gate {gname}  ({g.gate_subunit})", fontsize=fs + 3, fontweight="bold")
+        ax.tick_params(axis="y", labelsize=fs)
         ax.set_ylim(0, 105)
-        ax.set_xlim(-0.6, len(positions) - 0.4)
-        for i in range(1, len(positions)):
-            ax.axvline(i - 0.5, color="0.92", lw=0.8, zorder=0)
+        ax.set_xlim(0, xmax)
+        for p in positions[1:]:
+            ax.axvline(x0[p], color="0.9", lw=0.8, zorder=0)
         ax.grid(axis="y", color="0.9", lw=0.6)
         ax.set_axisbelow(True)
     for ax in axes[:, 0]:
-        ax.set_ylabel(f"% frames in contact (< {cutoff:g} Å)", fontsize=13)
+        ax.set_ylabel(f"% frames in contact (< {cutoff:g} Å)", fontsize=fs)
     fig.legend(handles=[Patch(color="#9aa5b1", label="before the jump"),
                         Patch(color="#2a9d8f", label="after: contact gained"),
                         Patch(color="#e76f51", label="after: contact lost")],
-               loc="lower center", ncol=3, frameon=False, fontsize=13)
+               loc="lower center", ncol=3, frameon=False, fontsize=fs)
     rule = f"≥ {min_pct:g} % contact before or after and a change of ≥ {min_change:g} points"
     if n:
         rule += f", top {n} per gate"
@@ -876,8 +879,8 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
               "F83.G1)" if label == "pdb" else "raw resid")
     fig.suptitle(f"{title}\nfor every neighbouring residue: % frames in contact before (grey) and after "
                  f"the jump; under it the residue and the change (after - before)"
-                 f"\n{naming}; neighbours within 8 Å, {rule}, not same subunit ±{skip}", fontsize=12)
-    fig.tight_layout(rect=(0, 0.05, 1, 0.89), h_pad=4)
+                 f"\n{naming}; neighbours within 8 Å, {rule}, not same subunit ±{skip}", fontsize=fs - 2)
+    fig.tight_layout(rect=(0, 0.05, 1, 0.91), h_pad=5)
     fig.savefig(out_png, dpi=170)
     plt.close(fig)
 
