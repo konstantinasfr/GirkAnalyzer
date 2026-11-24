@@ -92,3 +92,6 @@ sig, gates = gate_signals(traj, info, (np.zeros(3), np.array([0, 0, 1.0])))
 assert gates[0]["pocket"] == "F83.2b" and sig.latch_A.mean() == 1.0
 assert np.allclose(sig.d_pocket_A, 5.0)
 print("gate_signals latch: OK")
+assert gates[0]["pocket186"] == "F186.2b" and abs(sig.latch186_A.mean() - 0.5) < 1e-9
+assert sig.in_pocket_A.mean() == 1.0
+print("in_pocket: OK")

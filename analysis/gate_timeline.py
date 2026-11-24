@@ -28,6 +28,9 @@ Per subunit and per frame (timeline_all_frames.csv):
     d_pocket    ring centroid distance gate Phe - pocket Phe (pos -109: F83 /
                 GIRK1 F72 of the neighbouring subunit closest on average)
     latch       1 if that pair is pi-stacked (criteria of phe_interactions.py)
+    d_pocket186 / latch186   the same with the second docking site of that
+                pocket, F186 (pos -6; GIRK1 F175) of the same neighbouring subunit
+    in_pocket   1 if pi-stacked with F83 OR F186 of the neighbouring subunit
     d_gate      ring distance to the nearest other gate Phe
     gate_stack  1 if pi-stacked with another gate Phe
 
@@ -145,7 +148,20 @@ def gate_signals(traj, info, axis, pocket_pos=-109):
                 ent["pocket"] = part.pdb.iloc[j]
                 d, ang = A["d"][:, g_, j], A["ang"][:, g_, j]
                 out[f"d_pocket_{s}"] = d
-                out[f"latch_{s}"] = _pi_ok(d, ang).astype(float)
+                ok83 = _pi_ok(d, ang)
+                out[f"latch_{s}"] = ok83.astype(float)
+                # second docking site of the same pocket: F186 (pos -6) of the same subunit
+                pch = part.chain.iloc[j]
+                p186 = [k for k in range(len(A["res"]))
+                        if part.pos.iloc[k] == pocket_pos + 103 and part.chain.iloc[k] == pch]
+                if p186:
+                    k = p186[0]
+                    ent["pocket186"] = part.pdb.iloc[k]
+                    d2, ang2 = A["d"][:, g_, k], A["ang"][:, g_, k]
+                    ok186 = _pi_ok(d2, ang2)
+                    out[f"d_pocket186_{s}"] = d2
+                    out[f"latch186_{s}"] = ok186.astype(float)
+                    out[f"in_pocket_{s}"] = (ok83 | ok186).astype(float)
             og = [j for j in range(len(A["res"])) if A["res"][j] in gate_rows_rings
                   and A["res"][j] != ri]
             if og:

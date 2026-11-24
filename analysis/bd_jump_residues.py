@@ -513,9 +513,14 @@ def residue_table(u, residues, hbc_diagonal_pairs, subunit_groups=None, asn_resi
 # --------------------------------------------------------------------------
 # jumps
 # --------------------------------------------------------------------------
-def flat_stretches(x, min_jump=1.0, min_stretch=150):
+def flat_stretches(x, min_jump=1.0, min_stretch=150, exhaustive=False):
     """Boundaries [0, b1, ..., len(x)] of flat stretches (binary segmentation
-    on the mean, then merging of neighbours closer than min_jump)."""
+    on the mean, then merging of neighbours closer than min_jump).
+    exhaustive=False: a part is not split further when its best cut separates
+    levels closer than min_jump (fast, but misses level changes hidden inside a
+    part whose two halves happen to have similar means, e.g. high - low - high).
+    exhaustive=True: every part is split down to min_stretch and the merging
+    alone decides which cuts survive."""
     x = np.asarray(x, float)
 
     def best_split(lo, hi):
@@ -533,7 +538,7 @@ def flat_stretches(x, min_jump=1.0, min_stretch=150):
         if hi - lo < 2 * min_stretch:
             continue
         k = best_split(lo, hi)
-        if k is None or abs(x[lo:k].mean() - x[k:hi].mean()) < min_jump:
+        if k is None or (not exhaustive and abs(x[lo:k].mean() - x[k:hi].mean()) < min_jump):
             continue
         cuts.append(k)
         stack += [(lo, k), (k, hi)]

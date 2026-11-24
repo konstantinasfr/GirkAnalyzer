@@ -24,6 +24,13 @@ assert 15 < k0 < 21, k0
 
 b, st, near = states_of(np.r_[np.full(300, 10.0), np.full(300, 12.0)], 1.0, 150, 25)
 assert b == [0, 300, 600] and st[299] == 1 and st[300] == 2 and near[280:320].all() and not near[:270].any()
+# high - low - high: the first cut alone is < 1 A, the exhaustive search still finds both jumps
+rng0 = np.random.default_rng(3)
+y = np.r_[np.full(2000, 16.0), np.full(2800, 14.0), np.full(2000, 16.0)] + rng0.normal(0, .5, 6800)
+b, st, near = states_of(y, 1.0, 150, 25)
+assert len(b) == 4 and abs(b[1] - 2000) < 30 and abs(b[2] - 4800) < 30, b
+b, st, near = states_of(15 + 0.8 * np.sin(np.arange(6800) / 900) + rng0.normal(0, .5, 6800), 1.0, 150, 25)
+assert b == [0, 6800], b                                                  # slow drift: one state
 b, st, near = states_of(np.full(600, 10.0) + np.random.default_rng(0).normal(0, .3, 600), 1.0, 150, 25)
 assert b == [0, 600] and (st == 1).all() and not near.any()
 

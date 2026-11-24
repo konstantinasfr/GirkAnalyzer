@@ -13,7 +13,10 @@ IDEA
 The two HBC diagonals (A_C and B_D, CA-CA of the gate Phe of opposite
 subunits) are split separately into flat stretches = states, with the same
 method as --bd_jump_only (a cut where the average level before and after
-differs by >= --gs_min_jump, default 1.0 A, stretches >= 150 frames). A
+differs by >= --gs_min_jump, default 1.0 A, stretches >= 150 frames; every
+stretch is split down to 150 frames and only the merging of neighbours whose
+levels differ by < min_jump decides which cuts stay, so a high-low-high trace
+is not missed -- --bd_jump_only keeps its faster search). A
 diagonal without a jump is one state: the whole run. The joint state is the
 combination (A_C state, B_D state). For every state: the average CA-CA
 distances, how often (% of its frames) every chemical interaction of every
@@ -27,16 +30,19 @@ OUTPUT
 ------
 frames.csv.gz              one row per frame: A_C, B_D, state_AC, state_BD,
                            state_joint, near_jump, per gate kink_G189 /
-                           kink_G180 / r_gate / chi1 / d_pocket / latch /
-                           d_gate / gate_stack (suffix = subunit), and a 0/1
+                           kink_G180 / bend_G189 / bend_G180 / r_gate / chi1 /
+                           d_pocket / latch (F83) / latch186 (F186) /
+                           in_pocket (F83 or F186) / d_gate / gate_stack
+                           (suffix = subunit), and a 0/1
                            column per gate x partner x interaction present in
                            >= 1 % of the run ('gate|partner|kind'). This is
                            what the cross-run clustering reads.
 interaction_columns.csv    what every 'gate|partner|kind' column is (gate,
                            partner, resid, position from its HBC Phe, kind)
 states.csv                 one row per diagonal (A_C, B_D, joint) x state:
-                           frames, CA-CA means, per gate latch % / gate-stack
-                           % / kink / r_gate / chi1 / d_pocket
+                           frames, CA-CA means, per gate latch % (F83) /
+                           latch186 % (F186) / in_pocket % / gate-stack % /
+                           kink and bend (mean, sd) / r_gate / chi1 / d_pocket
 state_interactions.csv     long table: diagonal x state x gate x partner x
                            kind: % frames, median distance, pi-pi geometry
 states_trace.png           the two diagonals with their states, latch, local bend
@@ -70,7 +76,7 @@ STATE_COLOURS = ["#4c72b0", "#dd8452", "#55a868", "#c44e52", "#8172b3", "#937860
 
 def states_of(x, min_jump, min_stretch, buffer):
     """flat stretches of x -> (bounds, state number per frame (1..n), near-jump mask)."""
-    b = flat_stretches(x, min_jump, min_stretch)
+    b = flat_stretches(x, min_jump, min_stretch, exhaustive=True)
     st = np.empty(len(x), int)
     near = np.zeros(len(x), bool)
     for k in range(len(b) - 1):
@@ -88,7 +94,8 @@ def _gate_means(sig, gates, idx):
     r = {}
     for e in gates:
         s = e["subunit"]
-        for key, f in (("latch", 100), ("gate_stack", 100), ("kink_G189", 1), ("kink_G180", 1),
+        for key, f in (("latch", 100), ("latch186", 100), ("in_pocket", 100),
+                       ("gate_stack", 100), ("kink_G189", 1), ("kink_G180", 1),
                        ("bend_G189", 1), ("bend_G180", 1),
                        ("r_gate", 1), ("chi1", 1), ("d_pocket", 1), ("d_gate", 1)):
             c = f"{key}_{s}"
@@ -192,7 +199,7 @@ def run_gate_states(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir, subu
                                     f"{run_name}  states of {d}", cfg["plot_min_pct"])
 
     show = ["diagonal", "state", "label", "first_frame", "last_frame", "A_C", "B_D"] + \
-        [c for c in states.columns if c.startswith("latch_pct_")]
+        [c for c in states.columns if c.startswith(("latch_pct_", "in_pocket_pct_"))]
     print(states[show].round(2).to_string(index=False))
     print(f"  -> {out}")
     return out
@@ -221,7 +228,7 @@ def plot_trace(fr, diag, bounds, gates, out_png, run_name, cfg):
             ax.axvline(f[j], color="purple", ls="--", lw=1)
         ax.set_ylabel(f"{d} Cα-Cα (Å)", fontsize=13)
         ax.set_ylim(top=np.nanmax(x) + 0.12 * (np.nanmax(x) - np.nanmin(x)) + 0.4)
-    for ax, key, lab in ((axes[2], "latch", "latch: π-stack with\npocket F83 (%)"),
+    for ax, key, lab in ((axes[2], "in_pocket", "in pocket: π-stack with\nF83 or F186 (%)"),
                          (axes[3], "bend_G189", "local bend G189\nHELANAL (deg)"),
                          (axes[4], "bend_G180", "local bend G180\nHELANAL (deg)"),
                          (axes[5], "kink_G189", "kink G189\n8+8 CA (deg)"),
