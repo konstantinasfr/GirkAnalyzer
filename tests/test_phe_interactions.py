@@ -75,3 +75,12 @@ assert res_label("PHE", -109, "F72.G1", "D") == "F72.G1 (=F83)"
 assert res_label("PHE", -109, "F72.G1", "D", two_lines=True) == "F72.G1\n(=F83)"
 assert res_label("PHE", -109, "F83.2c", "C") == "F83.2c"
 print("res_label: OK")
+
+# every panel gets the same columns: a second gate without the C190 S...pi still gets a column
+t2 = s.reset_index().copy()
+t2b = t2.copy(); t2b["gate"] = "F192.2c"; t2b["gate_subunit"] = "C"
+t2b = t2b[t2b.interaction != "S...pi"]
+with tempfile.TemporaryDirectory() as tmp:
+    plot_interactions(pd.concat([t2, t2b]), Path(tmp) / "y.png", "test 2 gates")
+    assert (Path(tmp) / "y.png").exists()
+print("union plot: OK")

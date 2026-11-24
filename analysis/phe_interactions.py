@@ -194,14 +194,16 @@ class RingTracker:
     # ---- per jump
     def summary(self, b, a, info):
         """One row per gate Phe x partner residue x interaction kind that is
-        present in >= 1 % of the before or after frames."""
+        present in >= 1 % of the before or after frames, or whose partner is
+        within 12 A (median, before or after) -- kept so that every gate has a
+        value for the equivalent partner of the other gates."""
         if not self.gates or not self.ready:
             return pd.DataFrame()
         rows = []
 
         def add(g, ri, kind, okb, oka, db, da, extra=None):
             pb, pa = 100 * np.nanmean(okb), 100 * np.nanmean(oka)
-            if max(pb, pa) < 1:
+            if max(pb, pa) < 1 and not (np.nanmedian(db) <= 12 or np.nanmedian(da) <= 12):
                 return
             gk, gri, _ = self.gates[g]
             gi, n = info.iloc[gri], info.iloc[ri]
@@ -272,6 +274,7 @@ def interaction_name(r, two_lines=False):
     return res_label(r.resname, r.pos, r.partner, r.subunit, two_lines)
 
 
+HBC_GIRK2 = 192
 LABEL = {"pi-pi": "π–π", "S...pi": "S···π", "S-H...pi": "S–H···π", "CH-pi": "CH–π",
          "cation-pi": "cation–π"}
 
@@ -288,40 +291,85 @@ def plot_interactions(tab, out_png, title, min_pct=5.0, min_change=0.0):
     from matplotlib.patches import Patch
     if tab is None or tab.empty:
         return
-    d = tab[(tab[["pct_before", "pct_after"]].max(axis=1) >= min_pct)
-            & (tab.change_pct.abs() >= min_change)].copy()   # min_change 0 = all
+    tab = tab.copy()
+    tab["pos"] = tab.pos.astype(int)
+    keep = ((tab[["pct_before", "pct_after"]].max(axis=1) >= min_pct)
+            & (tab.change_pct.abs() >= min_change))                 # min_change 0 = all
+    d = tab[keep].copy()
     if d.empty:
         return
+    d["passes_filter"] = True
+    # same columns in every panel: the union of (position, interaction); a gate
+    # without a selected partner there gets its equivalent partner (same position,
+    # same interaction, most frames, then closest), drawn in grey italics
+    slots = sorted(set(zip(d.pos, d.interaction)), key=lambda s_: (s_[0], KINDS.index(s_[1])
+                                                                    if s_[1] in KINDS else 9))
+    rest = tab[~keep].copy()
+    rest["key"] = rest[["pct_before", "pct_after"]].max(axis=1)
+    rest["dmin"] = rest[["dist_before", "dist_after"]].min(axis=1)
+    have = set(zip(d.gate, d.pos, d.interaction))
+    fill = []
+    for gate in tab.gate.unique():
+        for p, kind in slots:
+            if (gate, p, kind) in have:
+                continue
+            c = rest[(rest.gate == gate) & (rest.pos == p) & (rest.interaction == kind)]
+            if len(c):
+                fill.append(c.sort_values(["key", "dmin"], ascending=[False, True]).iloc[[0]])
+    if fill:
+        f = pd.concat(fill).drop(columns=["key", "dmin"])
+        f["passes_filter"] = False
+        d = pd.concat([d, f], ignore_index=True)
+    nk = {s_: int(d[(d.pos == s_[0]) & (d.interaction == s_[1])].groupby("gate").size().max())
+          for s_ in slots}
+    x0, x = {}, 0.0
+    for s_ in slots:
+        x0[s_] = x
+        x += nk[s_]
+    xmax = max(x, 1)
     gates = tab.drop_duplicates("gate").sort_values("gate_subunit")
-    nmax = max(1, int(d.groupby("gate").size().max()))
     fs = 16
-    fig, axes = plt.subplots(2, 2, figsize=(max(16, 1.6 * nmax * 2 + 3), 13), sharey=True)
+    fig, axes = plt.subplots(2, 2, figsize=(max(16, 1.6 * xmax * 2 + 3), 13), sharey=True)
     for ax, (_, g) in zip(axes.flat, gates.iterrows()):
-        s = d[d.gate == g.gate].sort_values(["pos", "subunit", "interaction"])
-        for x, (_, r) in enumerate(s.iterrows()):
-            xc, bw = x + 0.5, 0.4
-            ax.bar(xc - bw / 2, r.pct_before, bw, color="#9aa5b1")
-            ax.bar(xc + bw / 2, r.pct_after, bw, color="#2a9d8f" if r.change_pct >= 0 else "#e76f51")
-            kind = LABEL.get(r.interaction, r.interaction)
-            if r.interaction == "pi-pi":
-                geo = str(r.geometry_after if r.change_pct >= 0 else r.geometry_before)
-                kind += f"\n{geo.split(' (')[0]}" if geo and geo != "nan" else ""
-            text = f"{interaction_name(r, two_lines=True)}\n{kind}"
-            nl = text.count("\n") + 1
-            ax.annotate(text, (xc, 0), xytext=(0, -4), textcoords="offset points", ha="center",
-                        va="top", fontsize=fs - 2, annotation_clip=False, linespacing=1.1)
-            c = round(float(r.change_pct)) + 0
-            ax.annotate(f"{c:+d} %", (xc, 0), xytext=(0, -8 - nl * (fs - 2) * 1.25),
-                        textcoords="offset points", ha="center", va="top", fontsize=fs,
-                        annotation_clip=False, fontweight="bold",
-                        color="#1f7a6f" if c > 0 else "#c0503a" if c < 0 else "0.45")
-        ax.set_xlim(0, max(nmax, 1))
+        s = d[d.gate == g.gate]
+        for s_ in slots:
+            grp = s[(s.pos == s_[0]) & (s.interaction == s_[1])].sort_values("subunit")
+            if grp.empty:                                 # no equivalent residue at all
+                ax.annotate(f"{HBC_GIRK2 + s_[0]}\n{LABEL.get(s_[1], s_[1])}\nnone",
+                            (x0[s_] + nk[s_] / 2, 0), xytext=(0, -4),
+                            textcoords="offset points", ha="center", va="top",
+                            fontsize=fs - 2, annotation_clip=False, color="0.6",
+                            style="italic", linespacing=1.1)
+            off = (nk[s_] - len(grp)) / 2
+            for jj, (_, r) in enumerate(grp.iterrows()):
+                xc, bw = x0[s_] + off + jj + 0.5, 0.4
+                ax.bar(xc - bw / 2, r.pct_before, bw, color="#9aa5b1")
+                ax.bar(xc + bw / 2, r.pct_after, bw,
+                       color="#2a9d8f" if r.change_pct >= 0 else "#e76f51")
+                kind = LABEL.get(r.interaction, r.interaction)
+                if r.interaction == "pi-pi":
+                    geo = str(r.geometry_after if r.change_pct >= 0 else r.geometry_before)
+                    kind += f"\n{geo.split(' (')[0]}" if geo and geo != "nan" else "\n–"
+                text = f"{interaction_name(r, two_lines=True)}\n{kind}"
+                nl = text.count("\n") + 1
+                ax.annotate(text, (xc, 0), xytext=(0, -4), textcoords="offset points",
+                            ha="center", va="top", fontsize=fs - 2, annotation_clip=False,
+                            linespacing=1.1, color="0.1" if r.passes_filter else "0.5",
+                            style="normal" if r.passes_filter else "italic")
+                c = round(float(r.change_pct)) + 0
+                ax.annotate(f"{c:+d} %", (xc, 0), xytext=(0, -8 - nl * (fs - 2) * 1.25),
+                            textcoords="offset points", ha="center", va="top", fontsize=fs,
+                            annotation_clip=False, fontweight="bold",
+                            color="#1f7a6f" if c > 0 else "#c0503a" if c < 0 else "0.45")
+        for s_ in slots[1:]:
+            ax.axvline(x0[s_], color="0.9", lw=0.8, zorder=0)
+        ax.set_xlim(0, xmax)
         ax.set_xticks([])
         ax.set_ylim(0, 105)
         ax.tick_params(axis="y", labelsize=fs)
         ax.set_title(f"gate {g.gate}  ({g.gate_subunit})", fontsize=fs + 3, fontweight="bold")
         if s.empty:
-            ax.text(0.5, 0.5, "no interaction changes", transform=ax.transAxes, ha="center",
+            ax.text(0.5, 0.5, "no interactions", transform=ax.transAxes, ha="center",
                     fontsize=fs, color="0.5")
         ax.grid(axis="y", color="0.9", lw=0.6)
         ax.set_axisbelow(True)
@@ -337,7 +385,9 @@ def plot_interactions(tab, out_png, title, min_pct=5.0, min_change=0.0):
                  f"S···π (Cys/Met S ≤ 5.5 Å), S–H···π (H ≤ 3.2 Å, ≥ 120°),\nCH–π (methyl C ≤ 4.5 Å over "
                  f"the ring face), cation–π (Lys NZ / Arg CZ ≤ 6 Å)\nshown: ≥ {min_pct:g} % before "
                  f"or after" + (f" and a change of ≥ {min_change:g} points" if min_change else "")
-                 + "\nGIRK1 residues: own number, GIRK2 position in brackets, e.g. F72.G1 (=F83)",
+                 + "\nGIRK1 residues: own number, GIRK2 position in brackets, e.g. F72.G1 (=F83)\n"
+                 "grey italic = the equivalent partner of this gate (same position and type), "
+                 "below the filter",
                  fontsize=fs - 2)
     fig.tight_layout(rect=(0, 0.05, 1, 0.85), h_pad=9)
     fig.savefig(out_png, dpi=170)
