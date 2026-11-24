@@ -45,6 +45,12 @@ for th in (10, -25):
     R = np.array([[np.cos(r), 0, -np.sin(r)], [0, 1, 0], [np.sin(r), 0, np.cos(r)]])  # lower end -> +x (away)
     tot, rad, tan = segment_tilt((Hd @ R.T)[None], list(range(5, 12)), pore)
     assert abs(tot[0] - abs(th)) < 1e-6 and abs(rad[0] - th) < 1e-6 and abs(tan[0]) < 1e-6, (th, tot, rad)
+# direction of the chain after the helix end (CA -> CA vector) relative to the pore axis
+from analysis.gate_timeline import vector_tilt
+for th in (0, 20, -30):
+    rr_ = np.radians(th)
+    tot, rad, tan = vector_tilt(np.zeros((1, 3)), np.array([[6 * np.sin(rr_), 0, -6 * np.cos(rr_)]]), pore)
+    assert abs(tot[0] - abs(th)) < 1e-6 and abs(rad[0] - th) < 1e-6 and abs(tan[0]) < 1e-6
 # bend profile: the local bend peaks within +-1 residue of a kink
 r = np.radians(20)
 R = np.array([[np.cos(r), 0, np.sin(r)], [0, 1, 0], [-np.sin(r), 0, np.cos(r)]])
@@ -104,15 +110,15 @@ with tempfile.TemporaryDirectory() as tmp:
     assert bd.loc[2, "kink_G189_F71"] > bd.loc[1, "kink_G189_F71"] + 2
     fr = pd.read_csv(out / "frames.csv.gz")
     assert len(fr) == 900 and set(fr.state_BD) == {1, 2} and set(fr.state_AC) == {1}
-    assert {"bend_G189_A", "bend_G180_D", "seg_G189_B", "seg_G189_rad_B", "ctl_G189_C",
+    assert {"bend_G189_A", "bend_G180_D", "seg_G189_B", "seg_G189_rad_B", "post_rad_C", "post_A",
             "bend_ref_A", "helix_G189_B", "helix_G180_A"} <= set(fr.columns)
     assert fr.helix_G189_B.between(0, 1).all()
-    assert {"bprof-3_B", "bprof+6_A", "bprof-16_D", "tilt_up_rad_B", "tilt_elbow_B", "tilt_low_tan_C"} <= set(fr.columns)
+    assert {"bprof-3_B", "bprof+6_A", "bprof-16_D", "tilt_up_rad_B", "tilt_end_B", "tilt_end_tan_C"} <= set(fr.columns)
     bp = pd.read_csv(out / "bend_profile.csv")
-    assert set(bp.position_girk2) == set(range(176, 199)) and "tilt_low_rad_F71" in s
+    assert set(bp.position_girk2) == set(range(176, 199)) and "tilt_end_rad_F71" in s and "post_rad_F71" in s
     assert all((out / f"states_{k}_{d}.png").exists() for k in ("tilt", "bend_profile")
                for d in ("A_C", "B_D", "joint"))
-    assert "ctl_G189_sd_F71" in s and "seg_G189_rad_F71" in s
+    assert "post_sd_F71" in s and "seg_G189_rad_F71" in s and "ctl_G189_F71" not in s
     assert "kink_G189_sd_F71" in s and "bend_G180_sd_F151" in s
     assert all((out / f"states_bending_{d}.png").exists() for d in ("A_C", "B_D", "joint"))
     assert (out / "states_trace.png").exists() and json.load(open(out / "run_info.json"))["n_frames"] == 900

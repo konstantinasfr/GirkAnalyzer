@@ -64,11 +64,11 @@ GATE_KEYS = (("in_pocket", 100, "in pocket (F83 or F186) %"), ("latch", 100, "on
              ("latch186", 100, "on F186 %"), ("gate_stack", 100, "π-stack with a gate Phe %"),
              ("bend_G189", 1, "local bend G189 (deg)"), ("bend_G180", 1, "local bend G180 (deg)"),
              ("seg_G189", 1, "segment bend G189 (deg)"), ("seg_G189_rad", 1, "outward bend G189 (deg)"),
-             ("ctl_G189", 1, "gate-free control G189 (deg)"), ("seg_G180", 1, "segment bend G180 (deg)"),
+             ("seg_G180", 1, "segment bend G180 (deg)"),
              ("bend_ref", 1, "noise floor A185 (deg)"), ("helix_G189", 1, "helix intact 182-199"),
              ("tilt_up", 1, "tilt 182-188 (deg)"), ("tilt_up_rad", 1, "lean out 182-188 (deg)"),
-             ("tilt_elbow", 1, "tilt 189-192 (deg)"), ("tilt_elbow_rad", 1, "lean out 189-192 (deg)"),
-             ("tilt_low", 1, "tilt 193-199 (deg)"), ("tilt_low_rad", 1, "lean out 193-199 (deg)"),
+             ("tilt_end", 1, "tilt 189-194 (deg)"), ("tilt_end_rad", 1, "lean out 189-194 (deg)"),
+             ("post", 1, "direction 195->199 (deg)"), ("post_rad", 1, "lean out 195->199 (deg)"),
              ("r_gate", 1, "gate CA from pore axis (Å)"), ("chi1", 1, "χ1 (deg)"))
 ONE = dict(PHE="F", TYR="Y", TRP="W", HIS="H", HSD="H", HSE="H", HIE="H", HID="H", CYS="C",
            MET="M", ALA="A", VAL="V", LEU="L", ILE="I", THR="T", LYS="K", ARG="R")
@@ -240,7 +240,7 @@ def run_gate_states_pool(root, k=None, out=None, max_fit=40000, seed=0):
                 col = f"{key}_{s}"
                 if col in d:
                     row[f"{key}{'_pct' if f == 100 else ''}_{s}"] = f * d[col].mean()
-                    if key.startswith(("bend", "seg", "ctl", "tilt")):
+                    if key.startswith(("bend", "seg", "tilt", "post")):
                         row[f"{key}_sd_{s}"] = d[col].std()
         rows.append(row)
     cl = pd.DataFrame(rows)
@@ -357,9 +357,9 @@ def plot_cluster_gates(cl, subs, gl, out_png):
     import matplotlib.pyplot as plt
     keys = [("in_pocket", "_pct", "in pocket (%)"), ("gate_stack", "_pct", "π-stack with\na gate Phe (%)"),
             ("bend_G189", "", "local bend\nG189 (deg)"), ("seg_G189_rad", "", "outward bend\nG189 (deg)"),
-            ("ctl_G189", "", "gate-free\ncontrol G189 (deg)"), ("bend_G180", "", "local bend\nG180 (deg)"),
-            ("tilt_up_rad", "", "lean out\n182-188 (deg)"), ("tilt_elbow_rad", "", "lean out\n189-192 (deg)"),
-            ("tilt_low_rad", "", "lean out\n193-199 (deg)"),
+            ("bend_G180", "", "local bend\nG180 (deg)"),
+            ("tilt_up_rad", "", "lean out\n182-188 (deg)"), ("tilt_end_rad", "", "lean out\n189-194 (deg)"),
+            ("post_rad", "", "after the helix\n195→199 (deg)"),
             ("r_gate", "", "gate CA from\npore axis (Å)")]
     keys = [k_ for k_ in keys if any(f"{k_[0]}{k_[1]}_{s}" in cl for s in subs)]
     if not keys:
@@ -409,6 +409,9 @@ def plot_cluster_profile(pr, cl, gl, out_png):
             ax.axvline(x, color="0.4", ls="--" if lab != "F192" else ":", lw=1)
             ax.text(x, 1.0, lab, transform=ax.get_xaxis_transform(), ha="center", va="bottom",
                     fontsize=11, color="0.3")
+        ax.axvspan(194.5, 198.5, color="0.85", alpha=0.5, zorder=0)
+        ax.text(196.5, 0.97, "helix end /\nC-linker", transform=ax.get_xaxis_transform(),
+                ha="center", va="top", fontsize=10, color="0.35")
         ax.set_title(f"gate {gl.get(s, s)}", fontsize=15, fontweight="bold", pad=18)
         ax.grid(color="0.92", lw=0.6)
         ax.tick_params(labelsize=12)
