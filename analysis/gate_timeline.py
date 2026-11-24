@@ -23,6 +23,21 @@ Per subunit and per frame (timeline_all_frames.csv):
                 h..h+3 (bisector method), angle between them; 0 for a straight
                 ideal helix, exact for a kink at h
     bend_G180   the same at the upper glycine
+    bend_ref    the same at A185 (pos -7, no glycine): noise floor of the local bend
+    seg_G189    segment-axis bend at G189: angle between the axes of the
+                helical segments 182-188 and 190-196 (7 CA each, the glycine
+                left out), each axis fitted through the HELANAL axis points
+                (Kink Finder / ProKink style): exact on ideal helices and much
+                less noisy than the local bend. _rad = signed part of the bend
+                away from (+) / towards (-) the pore axis, _tan = part around
+                the pore
+    seg_G180    the same at G180 (173-179 vs 181-187)
+    ctl_G189    gate-free control: 182-188 vs 193-199, the gate Phe (192) not
+                used, so it cannot follow a local movement of the gate itself
+    helix_G189  fraction of the alpha-helix H-bonds O(i)...N(i+4) (N-O <= 3.5 A)
+                present for i = 182..195 (covers every residue the G189
+                measures use); low = the helix is broken and the angles mean
+                little.  helix_G180: i = 173..187
     r_gate      distance of the gate Phe CA from the pore axis (A)
     chi1        chi1 of the gate Phe (deg, 0-360)
     d_pocket    ring centroid distance gate Phe - pocket Phe (pos -109: F83 /
@@ -93,6 +108,101 @@ def local_bend(ca, rows7):
     return np.degrees(np.arccos(np.clip(np.einsum("fi,fi->f", a[:, 0], a[:, 3]), -1, 1)))
 
 
+def axis_points(X):
+    """HELANAL local helix-axis points: X (nf, n, 3) consecutive CA -> points
+    (nf, 2*(n-3), 3) on the helix axis (two per window i..i+3, at residues i+1
+    and i+2: CA moved along its bisector by the local radius). For an ideal
+    helix they lie exactly on the axis."""
+    A = X[:, :-3] + X[:, 2:-1] - 2 * X[:, 1:-2]
+    B = X[:, 1:-2] + X[:, 3:] - 2 * X[:, 2:-1]
+    nA = np.linalg.norm(A, axis=-1, keepdims=True)
+    nB = np.linalg.norm(B, axis=-1, keepdims=True)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cos = np.einsum("fij,fij->fi", A, B)[..., None] / (nA * nB)
+        r = np.sqrt(nA * nB) / (2 * (1 - cos))
+        P1 = X[:, 1:-2] + r * A / nA
+        P2 = X[:, 2:-1] + r * B / nB
+    return np.concatenate([P1, P2], axis=1)
+
+
+def segment_axis(X):
+    """axis of a helical segment (nf, n, 3), n >= 4: straight line through its
+    HELANAL axis points, pointing from the first to the last residue."""
+    P = axis_points(X)
+    Pc = P - np.nanmean(P, 1, keepdims=True)
+    Pc = np.nan_to_num(Pc)
+    _, _, vt = np.linalg.svd(Pc, full_matrices=False)
+    a = vt[:, 0]
+    s = np.sign(np.einsum("ij,ij->i", a, X[:, -1] - X[:, 0]))
+    return a * s[:, None]
+
+
+def segment_bend(ca, rows_up, rows_down, hinge_xyz=None, axis=None):
+    """Bend between two helical segments (Kink Finder / ProKink style): angle
+    between their axes, each fitted through HELANAL axis points (exact on ideal
+    helices, ~2 turns per side so much less noisy than the local bend). With
+    hinge_xyz (nf, 3) and the pore axis (point, unit direction), also the signed
+    parts of the bend: radial (+ = the lower segment bends away from the pore
+    axis, - = towards it) and tangential (around the pore, right-handed about
+    the pore axis pointing to the filter).
+    Returns (total, radial, tangential) in degrees."""
+    u = segment_axis(ca[:, rows_up])
+    d = segment_axis(ca[:, rows_down])
+    tot = np.degrees(np.arccos(np.clip(np.einsum("ij,ij->i", u, d), -1, 1)))
+    if hinge_xyz is None or axis is None:
+        return tot, None, None
+    c0, a0 = axis
+    # outward direction: from the pore axis to the helix axis of the upper segment
+    # (the CA of the glycine sits 2.3 A off the helix axis, which would mix the parts)
+    v = np.nanmean(axis_points(ca[:, rows_up]), 1) - c0
+    rad = v - np.outer(v @ a0, a0)                          # outward, perpendicular to the pore
+    rad = rad - np.einsum("ij,ij->i", rad, u)[:, None] * u  # perpendicular to the upper axis
+    rad /= np.linalg.norm(rad, axis=1, keepdims=True)
+    tan = np.cross(a0[None], rad)                           # around the pore, right-handed
+    tan -= np.einsum("ij,ij->i", tan, u)[:, None] * u
+    tan /= np.linalg.norm(tan, axis=1, keepdims=True)
+    du = np.einsum("ij,ij->i", d, u)
+    r_ = np.degrees(np.arctan2(np.einsum("ij,ij->i", d, rad), du))
+    t_ = np.degrees(np.arctan2(np.einsum("ij,ij->i", d, tan), du))
+    return tot, r_, t_
+
+
+class HelixTracker:
+    """Per frame, for every gate subunit, which backbone alpha-helix H-bonds
+    O(i) ... N(i+4) (N-O <= 3.5 A) are present for i at positions lo..hi from
+    the gate Phe (resid offsets in the same chain). update(i) once per frame."""
+
+    def __init__(self, residues, gate_resids, nf, lo=-21, hi=3, cut=3.5):
+        self.cut, self.lo, self.hi = cut, lo, hi
+        self.pairs = []                      # per gate: (O atoms, N atoms, positions)
+        for gr in gate_resids:
+            O, N, pos = [], [], []
+            for p in range(lo, hi + 1):
+                o = residues.atoms.select_atoms(f"resid {gr + p} and name O")
+                n = residues.atoms.select_atoms(f"resid {gr + p + 4} and name N")
+                if len(o) == 1 and len(n) == 1:
+                    O.append(o[0].index)
+                    N.append(n[0].index)
+                    pos.append(p)
+            self.pairs.append((np.array(O, int), np.array(N, int), np.array(pos, int)))
+        self.u = residues.universe
+        self.hb = [np.zeros((nf, len(pz)), bool) for _, _, pz in self.pairs]
+
+    def update(self, i):
+        X = self.u.atoms.positions
+        for k, (O, N, _) in enumerate(self.pairs):
+            if len(O):
+                self.hb[k][i] = np.linalg.norm(X[O] - X[N], axis=1) <= self.cut
+
+    def fraction(self, k, lo, hi):
+        """per-frame fraction of the H-bonds O(i)...N(i+4) present, lo <= i <= hi."""
+        O, N, pos = self.pairs[k]
+        m = (pos >= lo) & (pos <= hi)
+        if not m.any():
+            return None
+        return self.hb[k][:, m].mean(1)
+
+
 def kink_angle(ca, rows_above, rows_below):
     a, b = _axis(ca[:, rows_above]), _axis(ca[:, rows_below])
     return np.degrees(np.arccos(np.clip(np.einsum("ij,ij->i", a, b), -1, 1)))
@@ -125,9 +235,29 @@ def gate_signals(traj, info, axis, pocket_pos=-109):
                 out[f"{name}_{s}"] = np.full(nf, np.nan)
             else:
                 out[f"{name}_{s}"] = kink_angle(ca, above, below)
-        for name, hinge in (("bend_G189", -3), ("bend_G180", -12)):
+        for name, hinge in (("bend_G189", -3), ("bend_G180", -12), ("bend_ref", -7)):
             r7 = [rows.get((g.chain, hinge + k)) for k in range(-3, 4)]
             out[f"{name}_{s}"] = (np.full(nf, np.nan) if None in r7 else local_bend(ca, r7))
+        # segment-axis bends (7 CA per side) with signed radial / tangential parts
+        for name, up, down, hinge in (("seg_G189", (-10, -4), (-2, 4), -3),
+                                      ("seg_G180", (-19, -13), (-11, -5), -12),
+                                      ("ctl_G189", (-10, -4), (1, 7), -3)):
+            ru = [rows.get((g.chain, p)) for p in range(up[0], up[1] + 1)]
+            rd = [rows.get((g.chain, p)) for p in range(down[0], down[1] + 1)]
+            rh = rows.get((g.chain, hinge))
+            if None in ru or None in rd or rh is None:
+                for suf in ("", "_rad", "_tan"):
+                    out[f"{name}{suf}_{s}"] = np.full(nf, np.nan)
+                continue
+            tot, rad, tan = segment_bend(ca, ru, rd, ca[:, rh], axis)
+            out[f"{name}_{s}"], out[f"{name}_rad_{s}"], out[f"{name}_tan_{s}"] = tot, rad, tan
+        ht = traj.get("helix")
+        if ht is not None:
+            k_ = gate_rows.index(gi)
+            for name, lo, hi in (("helix_G189", -10, 3), ("helix_G180", -19, -5)):
+                fr_ = ht.fraction(k_, lo, hi)
+                if fr_ is not None:
+                    out[f"{name}_{s}"] = fr_
         v = ca[:, gi] - c0
         out[f"r_gate_{s}"] = np.linalg.norm(v - np.outer(v @ a0, a0), axis=1)
         gates.append(ent)
@@ -174,8 +304,9 @@ def gate_signals(traj, info, axis, pocket_pos=-109):
     return df, gates
 
 
-SIGNALS = [("kink_G189", "kink at G189, 8+8 CA (deg)"), ("kink_G180", "kink at G180, 8+8 CA (deg)"),
-           ("bend_G189", "local bend at G189, HELANAL (deg)"),
+SIGNALS = [("bend_G189", "local bend at G189, HELANAL (deg)"),
+           ("seg_G189_rad", "segment bend G189, outward part (deg)"),
+           ("ctl_G189", "gate-free control G189 (deg)"),
            ("bend_G180", "local bend at G180, HELANAL (deg)"),
            ("r_gate", "gate Phe CA from pore axis (Å)"), ("chi1", "gate Phe χ1 (deg)"),
            ("d_pocket", "ring distance to pocket F83 (Å)"),
@@ -340,7 +471,8 @@ def latch_table(sig, gates, jumps, wins, bd):
                     x = sig[c].to_numpy()
                     r[f"{key}_before_pct"] = 100 * np.nanmean(x[b])
                     r[f"{key}_after_pct"] = 100 * np.nanmean(x[a])
-            for key in ("kink_G189", "kink_G180", "bend_G189", "bend_G180", "chi1", "r_gate",
+            for key in ("kink_G189", "kink_G180", "bend_G189", "bend_G180", "seg_G189",
+                        "seg_G189_rad", "ctl_G189", "seg_G180", "helix_G189", "chi1", "r_gate",
                         "d_pocket", "d_gate"):
                 c = f"{key}_{s}"
                 if c in sig:

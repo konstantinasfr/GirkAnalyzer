@@ -428,6 +428,8 @@ def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12, gate_resids=
         from MDAnalysis.lib.distances import distance_array
     from analysis.phe_interactions import RingTracker
     rings = RingTracker(residues, resmap, gate_resids, nf)
+    from analysis.gate_timeline import HelixTracker
+    helix = HelixTracker(residues, gate_resids, nf)
     frames = np.empty(nf, int)
     rmsd = np.empty(nf)
     ca = np.empty((nf, nres, 3), np.float32)
@@ -452,6 +454,7 @@ def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12, gate_resids=
                     gate_dist[aset][i, k, gs["present"]] = np.minimum.reduceat(dmin, gs["starts"])
                     gate_dist[aset][i, k, gate_idx[k]] = np.nan
         rings.update(i)
+        helix.update(i)
         if len(sc_ag):
             X = move(sc_ag.positions.astype(float))
             with np.errstate(invalid="ignore", divide="ignore"):
@@ -459,7 +462,7 @@ def collect_aligned_positions(u, sf_lower, sf_upper, pore_helix=12, gate_resids=
                         / sc_count[:, None]
     sc[:, sc_count == 0] = np.nan
     return dict(frames=frames, fit_rmsd=rmsd, residues=residues, ca=ca, sc=sc,
-                gate_dist=gate_dist, gate_idx=gate_idx, rings=rings)
+                gate_dist=gate_dist, gate_idx=gate_idx, rings=rings, helix=helix)
 
 
 ONE_LETTER = dict(ALA="A", ARG="R", ASN="N", ASP="D", ASH="D", CYS="C", CYX="C", CYM="C",

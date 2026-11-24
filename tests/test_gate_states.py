@@ -18,6 +18,23 @@ for th in (10, 30, 45):
     R = np.array([[1, 0, 0], [0, np.cos(r), -np.sin(r)], [0, np.sin(r), np.cos(r)]])
     X = H.copy(); X[h + 1:] = (X[h + 1:] - X[h]) @ R.T + X[h]
     assert abs(local_bend(X[None], list(range(h - 3, h + 4)))[0] - th) < 0.5, th
+# segment-axis bend (7 CA per side through HELANAL axis points): 0 for a straight helix,
+# exact for a kink, and its outward / sideways parts exact for a pure outward / sideways tilt
+from analysis.gate_timeline import segment_bend, HelixTracker
+tt30 = np.radians(100) * np.arange(30)
+H30 = np.c_[2.3 * np.cos(tt30), 2.3 * np.sin(tt30), 1.5 * np.arange(30)]
+hh = 15
+up, dn = list(range(hh - 7, hh)), list(range(hh + 1, hh + 8))
+pore = (np.array([-10.0, 0, 0]), np.array([0, 0, 1.0]))      # pore axis 10 A away along -x
+assert segment_bend(H30[None], up, dn)[0][0] < 1e-6
+for kvec, th, exp_rad in (((0, 1, 0), 25, 25), ((0, 1, 0), -15, -15), ((1, 0, 0), 20, 0)):
+    k = np.array(kvec, float); r = np.radians(th)
+    K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    R = np.eye(3) + np.sin(r) * K + (1 - np.cos(r)) * K @ K
+    X = H30.copy(); X[hh + 1:] = (X[hh + 1:] - X[hh]) @ R.T + X[hh]
+    tot, rad, tan = segment_bend(X[None], up, dn, X[None, hh], pore)
+    assert abs(tot[0] - abs(th)) < 1e-6 and abs(rad[0] - exp_rad) < 1e-6, (th, tot, rad, tan)
+    assert abs(abs(tan[0]) - (abs(th) if exp_rad == 0 else 0)) < 1e-6
 # the broad 8+8 measure has an offset of ~18 deg for a straight ideal helix (documented)
 k0 = kink_angle(H[None], list(range(h - 8, h)), list(range(h + 1, h + 9)))[0]
 assert 15 < k0 < 21, k0
@@ -33,6 +50,27 @@ b, st, near = states_of(15 + 0.8 * np.sin(np.arange(6800) / 900) + rng0.normal(0
 assert b == [0, 6800], b                                                  # slow drift: one state
 b, st, near = states_of(np.full(600, 10.0) + np.random.default_rng(0).normal(0, .3, 600), 1.0, 150, 25)
 assert b == [0, 600] and (st == 1).all() and not near.any()
+
+# HelixTracker: O(i)...N(i+4) present in half of the frames
+import MDAnalysis as mda
+from MDAnalysis.coordinates.memory import MemoryReader
+nres = 12
+uu = mda.Universe.empty(2 * nres, n_residues=nres, atom_resindex=np.repeat(np.arange(nres), 2),
+                        trajectory=False)
+uu.add_TopologyAttr("names", ["N", "O"] * nres)
+uu.add_TopologyAttr("resids", np.arange(1, nres + 1))
+uu.add_TopologyAttr("resnames", ["ALA"] * nres)
+XX = np.zeros((10, 2 * nres, 3), np.float32)
+for f in range(10):
+    for i in range(nres):
+        XX[f, 2 * i] = [0, 0, 10.0 * i]                                   # N of residue i
+        XX[f, 2 * i + 1] = [0, 0, 10.0 * (i + 4) + (2.9 if f < 5 else 6.0)]  # O(i) near N(i+4)?
+uu.load_new(XX, format=MemoryReader)
+ht = HelixTracker(uu.residues, [9], 10, lo=-8, hi=-1)
+for i, ts in enumerate(uu.trajectory):
+    ht.update(i)
+fr_h = ht.fraction(0, -8, -1)
+assert np.allclose(fr_h[:5], 1) and np.allclose(fr_h[5:], 0), fr_h
 
 u, sf_lower, sf_upper, pairs, groups = build()
 with tempfile.TemporaryDirectory() as tmp:
@@ -50,7 +88,10 @@ with tempfile.TemporaryDirectory() as tmp:
     assert bd.loc[2, "kink_G189_F71"] > bd.loc[1, "kink_G189_F71"] + 2
     fr = pd.read_csv(out / "frames.csv.gz")
     assert len(fr) == 900 and set(fr.state_BD) == {1, 2} and set(fr.state_AC) == {1}
-    assert {"bend_G189_A", "bend_G180_D"} <= set(fr.columns)
+    assert {"bend_G189_A", "bend_G180_D", "seg_G189_B", "seg_G189_rad_B", "ctl_G189_C",
+            "bend_ref_A", "helix_G189_B", "helix_G180_A"} <= set(fr.columns)
+    assert fr.helix_G189_B.between(0, 1).all()
+    assert "ctl_G189_sd_F71" in s and "seg_G189_rad_F71" in s
     assert "kink_G189_sd_F71" in s and "bend_G180_sd_F151" in s
     assert all((out / f"states_bending_{d}.png").exists() for d in ("A_C", "B_D", "joint"))
     assert (out / "states_trace.png").exists() and json.load(open(out / "run_info.json"))["n_frames"] == 900

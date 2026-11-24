@@ -61,6 +61,9 @@ CL_COLOURS = ["#4c72b0", "#dd8452", "#55a868", "#c44e52", "#8172b3", "#937860",
 GATE_KEYS = (("in_pocket", 100, "in pocket (F83 or F186) %"), ("latch", 100, "on F83 %"),
              ("latch186", 100, "on F186 %"), ("gate_stack", 100, "π-stack with a gate Phe %"),
              ("bend_G189", 1, "local bend G189 (deg)"), ("bend_G180", 1, "local bend G180 (deg)"),
+             ("seg_G189", 1, "segment bend G189 (deg)"), ("seg_G189_rad", 1, "outward bend G189 (deg)"),
+             ("ctl_G189", 1, "gate-free control G189 (deg)"), ("seg_G180", 1, "segment bend G180 (deg)"),
+             ("bend_ref", 1, "noise floor A185 (deg)"), ("helix_G189", 1, "helix intact 182-199"),
              ("r_gate", 1, "gate CA from pore axis (Å)"), ("chi1", 1, "χ1 (deg)"))
 ONE = dict(PHE="F", TYR="Y", TRP="W", HIS="H", HSD="H", HSE="H", HIE="H", HID="H", CYS="C",
            MET="M", ALA="A", VAL="V", LEU="L", ILE="I", THR="T", LYS="K", ARG="R")
@@ -232,7 +235,7 @@ def run_gate_states_pool(root, k=None, out=None, max_fit=40000, seed=0):
                 col = f"{key}_{s}"
                 if col in d:
                     row[f"{key}{'_pct' if f == 100 else ''}_{s}"] = f * d[col].mean()
-                    if key.startswith("bend"):
+                    if key.startswith(("bend", "seg", "ctl")):
                         row[f"{key}_sd_{s}"] = d[col].std()
         rows.append(row)
     cl = pd.DataFrame(rows)
@@ -338,7 +341,8 @@ def plot_cluster_gates(cl, subs, gl, out_png):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     keys = [("in_pocket", "_pct", "in pocket (%)"), ("gate_stack", "_pct", "π-stack with\na gate Phe (%)"),
-            ("bend_G189", "", "local bend\nG189 (deg)"), ("bend_G180", "", "local bend\nG180 (deg)"),
+            ("bend_G189", "", "local bend\nG189 (deg)"), ("seg_G189_rad", "", "outward bend\nG189 (deg)"),
+            ("ctl_G189", "", "gate-free\ncontrol G189 (deg)"), ("bend_G180", "", "local bend\nG180 (deg)"),
             ("r_gate", "", "gate CA from\npore axis (Å)")]
     keys = [k_ for k_ in keys if any(f"{k_[0]}{k_[1]}_{s}" in cl for s in subs)]
     if not keys:
