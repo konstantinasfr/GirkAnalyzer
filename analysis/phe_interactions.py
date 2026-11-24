@@ -69,6 +69,18 @@ def _centre_normal(P):
     return c, nrm / np.linalg.norm(nrm, axis=1, keepdims=True)
 
 
+def _centres(ags):
+    """centroids and unit normals of rings with different atom counts (His has 5)."""
+    c = np.empty((len(ags), 3))
+    n = np.empty((len(ags), 3))
+    by_size = {}
+    for i, ag in enumerate(ags):
+        by_size.setdefault(len(ag), []).append(i)
+    for idx in by_size.values():
+        c[idx], n[idx] = _centre_normal(np.array([ags[i].positions for i in idx]))
+    return c, n
+
+
 def _theta(v, n):
     """angle (deg, 0-90) between vectors v (..., 3) and the ring normal n (broadcast)."""
     d = np.linalg.norm(v, axis=-1)
@@ -123,7 +135,7 @@ class RingTracker:
                 if len(c) == 1:
                     cat.append((ri, c))
         if arom:
-            ac, _ = _centre_normal(np.array([ag.positions for _, ag in arom]))
+            ac, _ = _centres([ag for _, ag in arom])
             arom = [x for x, keep in zip(arom, near(ac)) if keep]
         sulf = [x for x in sulf if near(x[1].positions)[0]]
         meth = [x for x in meth if near(x[1].positions)[0]]
@@ -149,7 +161,7 @@ class RingTracker:
         gc, gn = _centre_normal(np.array([ag.positions for _, _, ag in self.gates]))
         A = self.arom
         if len(A["res"]):
-            ac, an = _centre_normal(np.array([ag.positions for ag in A["ags"]]))
+            ac, an = _centres(A["ags"])
             A["d"][i] = np.linalg.norm(ac[None] - gc[:, None], axis=2)
             A["ang"][i] = np.degrees(np.arccos(np.clip(np.abs(gn @ an.T), 0, 1)))
             for g, (_, ri, _) in enumerate(self.gates):      # a ring with itself

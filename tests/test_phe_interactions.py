@@ -13,7 +13,7 @@ from analysis.phe_interactions import RingTracker, plot_interactions
 ring = ["CG", "CD1", "CE1", "CZ", "CE2", "CD2"]
 hexa = np.array([[1.4 * np.cos(np.pi / 3 * k), 1.4 * np.sin(np.pi / 3 * k), 0] for k in range(6)])
 res = [("PHE", ring), ("PHE", ring), ("PHE", ring), ("CYS", ["SG", "HG"]), ("ALA", ["CB"]),
-       ("LYS", ["NZ"])]
+       ("LYS", ["NZ"]), ("HIS", ["CG", "ND1", "CE1", "NE2", "CD2"])]
 names = [n for _, ns in res for n in ns]
 rix = np.repeat(np.arange(len(res)), [len(ns) for _, ns in res])
 u = mda.Universe.empty(len(names), n_residues=len(res), atom_resindex=rix, trajectory=False)
@@ -21,6 +21,8 @@ u.add_TopologyAttr("names", names)
 u.add_TopologyAttr("resnames", [r for r, _ in res])
 u.add_TopologyAttr("resids", np.arange(1, len(res) + 1))
 
+penta = np.array([[1.2 * np.cos(2 * np.pi / 5 * k), 1.2 * np.sin(2 * np.pi / 5 * k), 0]
+                  for k in range(5)])
 NF = 100
 X = np.zeros((NF, len(names), 3), np.float32)
 for f in range(NF):
@@ -31,7 +33,8 @@ for f in range(NF):
         hexa[:, [0, 2, 1]] + [-5.0, 0, 0],        # ring in xz plane: T-shaped
         np.array([[0, 0, -4.0], [0, 0, -2.7]]) + ([0, 0, 0] if after else [0, -9, 0]),
         [[1.0, 0.5, 3.6 if after else -3.6]],                          # CB over the ring face
-        [[0, 5.8, 0]]])                                                # NZ in the ring plane
+        [[0, 5.8, 0]],                                                 # NZ in the ring plane
+        penta + [0, 0, -10.0]])                                        # HIS (5-ring), tracked, no contact
 u.load_new(X, format=MemoryReader)
 
 residues = u.residues
@@ -39,10 +42,11 @@ resmap = {r.resindex: i for i, r in enumerate(residues)}
 tr = RingTracker(residues, resmap, [1], NF)
 for i, ts in enumerate(u.trajectory):
     tr.update(i)
-info = pd.DataFrame(dict(resid=[1, 2, 3, 4, 5, 6], resname=[r for r, _ in res],
-                         pdb=["F192.2a", "F186.2b", "F83.2b", "C190.2b", "A185.2b", "K194.2b"],
-                         subunit=["A", "B", "B", "B", "B", "B"], pos=[0, -6, -109, -2, -7, 2],
-                         chain=[0, 1, 1, 1, 1, 1]))
+info = pd.DataFrame(dict(resid=[1, 2, 3, 4, 5, 6, 7], resname=[r for r, _ in res],
+                         pdb=["F192.2a", "F186.2b", "F83.2b", "C190.2b", "A185.2b", "K194.2b",
+                              "H200.2b"],
+                         subunit=["A", "B", "B", "B", "B", "B", "B"],
+                         pos=[0, -6, -109, -2, -7, 2, 8], chain=[0, 1, 1, 1, 1, 1, 1]))
 s = tr.summary(np.arange(0, 50), np.arange(50, 100), info).set_index(["partner", "interaction"])
 print(s[["pct_before", "pct_after", "dist_before", "dist_after", "geometry_before",
          "geometry_after"]].round(2))
