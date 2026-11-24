@@ -167,7 +167,7 @@ DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=(300, 500), seg
                 tm_range=(-50, 15), gate_flank=3, neighbour_cutoff=8.0, contact_cutoff=4.5,
                 contact_sets=(("heavy", 4.5), ("all", 3.5)),
                 top_n=10, top_exclude_ends=15, contact_top_n=0, contact_min_pct=5.0,
-                contact_min_change=10.0)
+                contact_min_change=0.0)
 BACKBONE = ("N", "CA", "C", "O", "OXT")
 GATE_SHOW = ["event", "direction", "resid", "resname", "pdb", "subunit", "girk1", "pos", "disp",
              "d_radial", "d_axial", "d_around", "sc_disp", "noise", "ratio", "r_before"]
@@ -749,7 +749,7 @@ def plot_trace(frames, bd, ac, bounds, out_png, title):
 HBC_GIRK2 = 192        # GIRK2 numbering of the HBC Phe: position label = 192 + pos
 
 
-def select_contacts(nb, kind="present", n=0, min_pct=5.0, min_change=10.0):
+def select_contacts(nb, kind="present", n=0, min_pct=5.0, min_change=0.0):
     """The neighbour rows shown in a contact plot (see plot_contacts), with the
     position columns added: pos (from the HBC Phe of the neighbour's own
     subunit), position_girk2 (192 + pos), change_pct (after - before)."""
@@ -760,7 +760,8 @@ def select_contacts(nb, kind="present", n=0, min_pct=5.0, min_change=10.0):
     skip = 1 if kind == "change" else 2
     helix = d.same_subunit.astype(bool) & (d.seq_distance <= skip)
     d = d[~helix & ((d.contact_before_pct >= min_pct) | (d.contact_after_pct >= min_pct))]
-    d = d[d.chg.abs() >= min_change]          # both plots: only residues whose contact changes
+    if min_change:
+        d = d[d.chg.abs() >= min_change]      # optional: only residues whose contact changes
     if kind == "change":
         d["key"] = d.chg.abs()
     else:
@@ -798,6 +799,20 @@ def fill_union(nb, d, kind="present"):
     return pd.concat([d, f], ignore_index=True)
 
 
+def res_label(resname, pos, pdb_name, subunit, two_lines=False):
+    """Residue name for the plots: GIRK2 residues as F83.2c (GIRK2 number +
+    subunit); GIRK1 residues with their own number and the GIRK2 position in
+    brackets, F72.G1 (=F83). pos = position from the HBC Phe."""
+    pdb_name = str(pdb_name)
+    sub = pdb_name.split(".")[-1] if "." in pdb_name else str(subunit)
+    g2 = f"{ONE_LETTER.get(resname, 'X')}{HBC_GIRK2 + int(pos)}"
+    if sub.upper().startswith("G") and "." in pdb_name:          # GIRK1
+        if pdb_name.split(".")[0] == g2:
+            return pdb_name
+        return f"{pdb_name}{chr(10) if two_lines else ' '}(={g2})"
+    return f"{g2}.{sub}"
+
+
 def contacts_table(d):
     """CSV version of a contact plot: one row per gate Phe x neighbour shown."""
     if d.empty:
@@ -805,6 +820,8 @@ def contacts_table(d):
     out = pd.DataFrame(dict(
         event=d.event, jump_frame=d.jump_frame, direction=d.direction,
         gate=d.gate, gate_resid=d.gate_resid, gate_subunit=d.gate_subunit,
+        label=[res_label(rn, ps, nb_, su) for rn, ps, nb_, su in
+               zip(d.resname, d.pos, d.neighbour, d.subunit)],
         name_girk2=[f"{ONE_LETTER.get(rn, 'X')}{HBC_GIRK2 + int(ps)}."
                     f"{str(nb_).split('.')[-1] if '.' in str(nb_) else su}"
                     for rn, ps, nb_, su in zip(d.resname, d.pos, d.neighbour, d.subunit)],
@@ -820,7 +837,7 @@ def contacts_table(d):
 
 
 def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5.0,
-                  cutoff=4.5, min_change=10.0):
+                  cutoff=4.5, min_change=0.0):
     """2 x 2 grid, one panel per gate Phe. x axis = residue POSITIONS, the same
     in every panel: pos = resid - HBC Phe resid of the residue's own subunit,
     labelled in GIRK2 numbering (192 + pos, so GIRK1 A174 = 185) for label
@@ -832,7 +849,8 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
     If two subunits touch the same gate at the same position, both are drawn.
     Selected per gate: neighbours within 8 A with >= min_pct contact before or
     after, not in the same subunit within +-1 ('change') / +-2 ('present');
-    both plots also need a change of >= min_change points (default 10); n > 0 keeps only the top n."""
+    with min_change > 0 also a change of >= min_change points (default 0 = all);
+    n > 0 keeps only the top n."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -880,15 +898,18 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
                 ax.bar(xc - bw / 2, r.contact_before_pct, bw, color="#9aa5b1")
                 ax.bar(xc + bw / 2, r.contact_after_pct, bw,
                        color="#2a9d8f" if r.chg >= 0 else "#e76f51")
-                name = (f"{ONE_LETTER.get(r.resname, 'X')}{HBC_GIRK2 + int(r.pos)}.{r['sub']}"
+                name = (res_label(r.resname, r.pos, r.neighbour, r.subunit, two_lines=True)
                         if label == "pdb" else f"{r.resname}{int(r.resid)}")
-                ax.text(xc, -3, name, ha="center", va="top", fontsize=fs, clip_on=False,
-                        color="0.1" if r.passes_filter else "0.5",
-                        style="normal" if r.passes_filter else "italic")
+                nl = name.count("\n") + 1
+                ax.annotate(name, (xc, 0), xytext=(0, -4), textcoords="offset points",
+                            ha="center", va="top", fontsize=fs, annotation_clip=False,
+                            linespacing=1.05, color="0.1" if r.passes_filter else "0.5",
+                            style="normal" if r.passes_filter else "italic")
                 c = round(float(r.chg)) + 0          # no "-0 %"
-                ax.text(xc, -14, f"{c:+d} %", ha="center", va="top", fontsize=fs,
-                        clip_on=False, fontweight="bold",
-                        color="#1f7a6f" if c > 0 else "#c0503a" if c < 0 else "0.45")
+                ax.annotate(f"{c:+d} %", (xc, 0), xytext=(0, -8 - nl * fs * 1.2),
+                            textcoords="offset points", ha="center", va="top", fontsize=fs,
+                            annotation_clip=False, fontweight="bold",
+                            color="#1f7a6f" if c > 0 else "#c0503a" if c < 0 else "0.45")
         ax.set_xticks([])
         gname = g.gate if label == "pdb" else f"resid {int(g.gate_resid)}"
         ax.set_title(f"gate {gname}  ({g.gate_subunit})", fontsize=fs + 3, fontweight="bold")
@@ -905,19 +926,21 @@ def plot_contacts(nb, out_png, title, kind="change", label="pdb", n=0, min_pct=5
                         Patch(color="#2a9d8f", label="after: contact gained"),
                         Patch(color="#e76f51", label="after: contact lost")],
                loc="lower center", ncol=3, frameon=False, fontsize=fs)
-    rule = f"≥ {min_pct:g} % contact before or after and a change of ≥ {min_change:g} points"
+    rule = f"≥ {min_pct:g} % contact before or after"
+    if min_change:
+        rule += f" and a change of ≥ {min_change:g} points"
     if n:
         rule += f", top {n} per gate"
     rule += (", not same subunit ±{skip}\ngrey italic name = shown only so every panel has the "
              "same positions (below the filter for this gate)").replace("{skip}", str(skip))
     xinfo = ("position in GIRK2 numbering (GIRK1 shifted +11: A174.G1 = 185)" if label == "pdb"
              else "position from the HBC Phe of the residue's own subunit (gate = 0)")
-    naming = ("residue names in GIRK2 numbering + subunit (GIRK1 shifted +11, e.g. F72 of GIRK1 = "
-              "F83.G1)" if label == "pdb" else "raw resid")
+    naming = ("residue names: GIRK2 number + subunit; GIRK1 residues with their own number and "
+              "the GIRK2 position in brackets, e.g. F72.G1 (=F83)" if label == "pdb" else "raw resid")
     fig.suptitle(f"{title}\nfor every neighbouring residue: % frames in contact before (grey) and after "
                  f"the jump; under it the residue and the change (after - before)"
                  f"\n{naming}\nneighbours within 8 Å, {rule}", fontsize=fs - 2)
-    fig.tight_layout(rect=(0, 0.05, 1, 0.88), h_pad=5)
+    fig.tight_layout(rect=(0, 0.05, 1, 0.88), h_pad=7)
     fig.savefig(out_png, dpi=170)
     plt.close(fig)
 

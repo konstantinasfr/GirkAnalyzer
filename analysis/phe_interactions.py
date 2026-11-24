@@ -267,17 +267,16 @@ class RingTracker:
         return df.drop(columns="abs_chg").reset_index(drop=True)
 
 
-def interaction_name(r, hbc_girk2=192):
-    from analysis.bd_jump_residues import ONE_LETTER
-    sub = str(r.partner).split(".")[-1] if "." in str(r.partner) else str(r.subunit)
-    return f"{ONE_LETTER.get(r.resname, 'X')}{hbc_girk2 + int(r.pos)}.{sub}"
+def interaction_name(r, two_lines=False):
+    from analysis.bd_jump_residues import res_label
+    return res_label(r.resname, r.pos, r.partner, r.subunit, two_lines)
 
 
 LABEL = {"pi-pi": "π–π", "S...pi": "S···π", "S-H...pi": "S–H···π", "CH-pi": "CH–π",
          "cation-pi": "cation–π"}
 
 
-def plot_interactions(tab, out_png, title, min_pct=5.0, min_change=10.0):
+def plot_interactions(tab, out_png, title, min_pct=5.0, min_change=0.0):
     """2 x 2 grid, one panel per gate Phe: for every partner x interaction with
     >= min_pct before or after and a change of >= min_change points, % frames
     with the interaction before (grey) and after (green gained / red lost);
@@ -290,7 +289,7 @@ def plot_interactions(tab, out_png, title, min_pct=5.0, min_change=10.0):
     if tab is None or tab.empty:
         return
     d = tab[(tab[["pct_before", "pct_after"]].max(axis=1) >= min_pct)
-            & (tab.change_pct.abs() >= min_change)].copy()
+            & (tab.change_pct.abs() >= min_change)].copy()   # min_change 0 = all
     if d.empty:
         return
     gates = tab.drop_duplicates("gate").sort_values("gate_subunit")
@@ -307,11 +306,15 @@ def plot_interactions(tab, out_png, title, min_pct=5.0, min_change=10.0):
             if r.interaction == "pi-pi":
                 geo = str(r.geometry_after if r.change_pct >= 0 else r.geometry_before)
                 kind += f"\n{geo.split(' (')[0]}" if geo and geo != "nan" else ""
-            ax.text(xc, -3, f"{interaction_name(r)}\n{kind}", ha="center", va="top",
-                    fontsize=fs - 2, clip_on=False, linespacing=1.1)
+            text = f"{interaction_name(r, two_lines=True)}\n{kind}"
+            nl = text.count("\n") + 1
+            ax.annotate(text, (xc, 0), xytext=(0, -4), textcoords="offset points", ha="center",
+                        va="top", fontsize=fs - 2, annotation_clip=False, linespacing=1.1)
             c = round(float(r.change_pct)) + 0
-            ax.text(xc, -34, f"{c:+d} %", ha="center", va="top", fontsize=fs, clip_on=False,
-                    fontweight="bold", color="#1f7a6f" if c > 0 else "#c0503a" if c < 0 else "0.45")
+            ax.annotate(f"{c:+d} %", (xc, 0), xytext=(0, -8 - nl * (fs - 2) * 1.25),
+                        textcoords="offset points", ha="center", va="top", fontsize=fs,
+                        annotation_clip=False, fontweight="bold",
+                        color="#1f7a6f" if c > 0 else "#c0503a" if c < 0 else "0.45")
         ax.set_xlim(0, max(nmax, 1))
         ax.set_xticks([])
         ax.set_ylim(0, 105)
@@ -332,8 +335,10 @@ def plot_interactions(tab, out_png, title, min_pct=5.0, min_change=10.0):
                loc="lower center", ncol=3, frameon=False, fontsize=fs)
     fig.suptitle(f"{title}\ninteractions of the gate Phe ring: π–π (ring-ring, ≤ 5.5-6.5 Å), "
                  f"S···π (Cys/Met S ≤ 5.5 Å), S–H···π (H ≤ 3.2 Å, ≥ 120°),\nCH–π (methyl C ≤ 4.5 Å over "
-                 f"the ring face), cation–π (Lys NZ / Arg CZ ≤ 6 Å); shown: ≥ {min_pct:g} % before "
-                 f"or after and a change of ≥ {min_change:g} points", fontsize=fs - 2)
-    fig.tight_layout(rect=(0, 0.05, 1, 0.88), h_pad=7)
+                 f"the ring face), cation–π (Lys NZ / Arg CZ ≤ 6 Å)\nshown: ≥ {min_pct:g} % before "
+                 f"or after" + (f" and a change of ≥ {min_change:g} points" if min_change else "")
+                 + "\nGIRK1 residues: own number, GIRK2 position in brackets, e.g. F72.G1 (=F83)",
+                 fontsize=fs - 2)
+    fig.tight_layout(rect=(0, 0.05, 1, 0.85), h_pad=9)
     fig.savefig(out_png, dpi=170)
     plt.close(fig)

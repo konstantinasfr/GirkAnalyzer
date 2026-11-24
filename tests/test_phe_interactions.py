@@ -69,3 +69,9 @@ with tempfile.TemporaryDirectory() as tmp:
     plot_interactions(s.reset_index(), Path(tmp) / "x.png", "test")
     assert (Path(tmp) / "x.png").exists()
 print("test_phe_interactions: OK")
+
+from analysis.bd_jump_residues import res_label
+assert res_label("PHE", -109, "F72.G1", "D") == "F72.G1 (=F83)"
+assert res_label("PHE", -109, "F72.G1", "D", two_lines=True) == "F72.G1\n(=F83)"
+assert res_label("PHE", -109, "F83.2c", "C") == "F83.2c"
+print("res_label: OK")
