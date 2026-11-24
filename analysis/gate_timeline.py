@@ -15,6 +15,14 @@ Per subunit and per frame (timeline_all_frames.csv):
                 lower glycine (pos -3: G189 in GIRK2, G178 in GIRK1); axis =
                 first principal axis of 8 CA on each side; 0 = straight
     kink_G180   the same at the upper glycine (pos -12: G180 / GIRK1 G169)
+                NOTE: this broad 8+8 measure reads ~18 deg for an ideal straight
+                helix and underestimates kinks (20 -> 10 deg): use it only to
+                compare states, not as an absolute angle
+    bend_G189   local bending angle at the lower glycine, standard HELANAL
+                definition: local helix axes of the CA windows h-3..h and
+                h..h+3 (bisector method), angle between them; 0 for a straight
+                ideal helix, exact for a kink at h
+    bend_G180   the same at the upper glycine
     r_gate      distance of the gate Phe CA from the pore axis (A)
     chi1        chi1 of the gate Phe (deg, 0-360)
     d_pocket    ring centroid distance gate Phe - pocket Phe (pos -109: F83 /
@@ -61,6 +69,27 @@ def _axis(X):
     return a * sgn[:, None]
 
 
+def local_axes(X):
+    """Local helix axes (HELANAL; Sugeta & Miyazawa 1967, Bansal et al. 2000):
+    X (nf, n, 3) consecutive CA -> (nf, n-3, 3) unit axes of the windows
+    i..i+3, from the cross product of the bisectors at i+1 and i+2, pointing
+    from residue i to i+3."""
+    A = X[:, :-3] + X[:, 2:-1] - 2 * X[:, 1:-2]
+    B = X[:, 1:-2] + X[:, 3:] - 2 * X[:, 2:-1]
+    ax = np.cross(A, B)
+    ax /= np.linalg.norm(ax, axis=-1, keepdims=True)
+    s = np.sign(np.einsum("fij,fij->fi", ax, X[:, 3:] - X[:, :-3]))
+    return ax * s[..., None]
+
+
+def local_bend(ca, rows7):
+    """HELANAL local bending angle at the middle residue h of rows7 (CA rows of
+    h-3 .. h+3): angle between the local axes of windows h-3..h and h..h+3.
+    0 for an ideal straight helix, exactly theta for a helix kinked by theta at h."""
+    a = local_axes(ca[:, rows7])
+    return np.degrees(np.arccos(np.clip(np.einsum("fi,fi->f", a[:, 0], a[:, 3]), -1, 1)))
+
+
 def kink_angle(ca, rows_above, rows_below):
     a, b = _axis(ca[:, rows_above]), _axis(ca[:, rows_below])
     return np.degrees(np.arccos(np.clip(np.einsum("ij,ij->i", a, b), -1, 1)))
@@ -93,6 +122,9 @@ def gate_signals(traj, info, axis, pocket_pos=-109):
                 out[f"{name}_{s}"] = np.full(nf, np.nan)
             else:
                 out[f"{name}_{s}"] = kink_angle(ca, above, below)
+        for name, hinge in (("bend_G189", -3), ("bend_G180", -12)):
+            r7 = [rows.get((g.chain, hinge + k)) for k in range(-3, 4)]
+            out[f"{name}_{s}"] = (np.full(nf, np.nan) if None in r7 else local_bend(ca, r7))
         v = ca[:, gi] - c0
         out[f"r_gate_{s}"] = np.linalg.norm(v - np.outer(v @ a0, a0), axis=1)
         gates.append(ent)
@@ -126,7 +158,9 @@ def gate_signals(traj, info, axis, pocket_pos=-109):
     return df, gates
 
 
-SIGNALS = [("kink_G189", "kink at G189 (deg)"), ("kink_G180", "kink at G180 (deg)"),
+SIGNALS = [("kink_G189", "kink at G189, 8+8 CA (deg)"), ("kink_G180", "kink at G180, 8+8 CA (deg)"),
+           ("bend_G189", "local bend at G189, HELANAL (deg)"),
+           ("bend_G180", "local bend at G180, HELANAL (deg)"),
            ("r_gate", "gate Phe CA from pore axis (Å)"), ("chi1", "gate Phe χ1 (deg)"),
            ("d_pocket", "ring distance to pocket F83 (Å)"),
            ("d_gate", "ring distance to nearest gate Phe (Å)")]
@@ -219,6 +253,9 @@ def correlation(sig, gates, bd, ac, diag_of):
         D = pd.Series(diag)
         if k is not None and dp is not None:
             r["spearman_kinkG189_vs_dpocket"] = k.corr(dp, method="spearman")
+        bnd = sig.get(f"bend_G189_{s}")
+        if bnd is not None and dp is not None:
+            r["spearman_bendG189_vs_dpocket"] = bnd.corr(dp, method="spearman")
         if k is not None and rg is not None:
             r["spearman_kinkG189_vs_rgate"] = k.corr(rg, method="spearman")
         if dp is not None:
@@ -287,7 +324,8 @@ def latch_table(sig, gates, jumps, wins, bd):
                     x = sig[c].to_numpy()
                     r[f"{key}_before_pct"] = 100 * np.nanmean(x[b])
                     r[f"{key}_after_pct"] = 100 * np.nanmean(x[a])
-            for key in ("kink_G189", "kink_G180", "chi1", "r_gate", "d_pocket", "d_gate"):
+            for key in ("kink_G189", "kink_G180", "bend_G189", "bend_G180", "chi1", "r_gate",
+                        "d_pocket", "d_gate"):
                 c = f"{key}_{s}"
                 if c in sig:
                     x = sig[c].to_numpy()
@@ -306,6 +344,10 @@ def latch_table(sig, gates, jumps, wins, bd):
         wid = df.direction == "widening"
         df["latch_change_pct"] = dl
         df["kink_G189_change"] = dk
+        db = df.get("bend_G189_after", np.nan) - df.get("bend_G189_before", np.nan)
+        df["bend_G189_change"] = db
+        df["fits_bend_and_latch_local"] = np.where((wid & (dl > 0) & (db > 0)) | (~wid & (dl < 0) & (db < 0)),
+                                                   "yes", "no")
         df["fits_bend_and_latch"] = np.where((wid & (dl > 0) & (dk > 0)) | (~wid & (dl < 0) & (dk < 0)),
                                              "yes", "no")
         rows.append(df)

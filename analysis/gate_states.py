@@ -39,7 +39,11 @@ states.csv                 one row per diagonal (A_C, B_D, joint) x state:
                            % / kink / r_gate / chi1 / d_pocket
 state_interactions.csv     long table: diagonal x state x gate x partner x
                            kind: % frames, median distance, pi-pi geometry
-states_trace.png           the two diagonals with their states, latch and kink
+states_trace.png           the two diagonals with their states, latch, local bend
+                           (HELANAL) and broad kink (8+8 CA) at G189 / G180
+states_bending_<A_C|B_D|joint>.png
+                           rows = the four bending measures, columns = gates:
+                           distribution per state (violin, mean +- sd)
 state_interactions_<A_C|B_D|joint>.png
                            2 x 2 grid (one panel per gate), for every
                            interaction one bar per state; same columns
@@ -76,15 +80,23 @@ def states_of(x, min_jump, min_stretch, buffer):
     return b, st, near
 
 
+BENDS = (("kink_G189", "kink G189, 8+8 CA"), ("kink_G180", "kink G180, 8+8 CA"),
+         ("bend_G189", "local bend G189 (HELANAL)"), ("bend_G180", "local bend G180 (HELANAL)"))
+
+
 def _gate_means(sig, gates, idx):
     r = {}
     for e in gates:
         s = e["subunit"]
         for key, f in (("latch", 100), ("gate_stack", 100), ("kink_G189", 1), ("kink_G180", 1),
+                       ("bend_G189", 1), ("bend_G180", 1),
                        ("r_gate", 1), ("chi1", 1), ("d_pocket", 1), ("d_gate", 1)):
             c = f"{key}_{s}"
             if c in sig:
-                r[f"{key}{'_pct' if f == 100 else ''}_{e['gate']}"] = f * np.nanmean(sig[c].to_numpy()[idx])
+                x = sig[c].to_numpy()[idx]
+                r[f"{key}{'_pct' if f == 100 else ''}_{e['gate']}"] = f * np.nanmean(x)
+                if key.startswith(("kink", "bend")):
+                    r[f"{key}_sd_{e['gate']}"] = np.nanstd(x)
     return r
 
 
@@ -172,6 +184,8 @@ def run_gate_states(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir, subu
     # ---- plots
     plot_trace(fr, diag, bounds, gates, out / "states_trace.png", run_name, cfg)
     for d in ("A_C", "B_D", "joint"):
+        plot_bending(fr, gates, st[d], near, states[states.diagonal == d],
+                     out / f"states_bending_{d}.png", f"{run_name}  TM2 bending per state of {d}")
         if not si.empty:
             plot_state_interactions(si[si.diagonal == d], states[states.diagonal == d],
                                     out / f"state_interactions_{d}.png",
@@ -189,7 +203,7 @@ def plot_trace(fr, diag, bounds, gates, out_png, run_name, cfg):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     f = fr.frame.to_numpy()
-    fig, axes = plt.subplots(4, 1, figsize=(14, 11), sharex=True)
+    fig, axes = plt.subplots(7, 1, figsize=(14, 18), sharex=True)
     for ax, d in zip(axes[:2], ("A_C", "B_D")):
         x = diag[d]
         ax.plot(f, x, color="0.7", lw=0.5)
@@ -208,13 +222,16 @@ def plot_trace(fr, diag, bounds, gates, out_png, run_name, cfg):
         ax.set_ylabel(f"{d} Cα-Cα (Å)", fontsize=13)
         ax.set_ylim(top=np.nanmax(x) + 0.12 * (np.nanmax(x) - np.nanmin(x)) + 0.4)
     for ax, key, lab in ((axes[2], "latch", "latch: π-stack with\npocket F83 (%)"),
-                         (axes[3], "kink_G189", "kink at G189\n(deg)")):
+                         (axes[3], "bend_G189", "local bend G189\nHELANAL (deg)"),
+                         (axes[4], "bend_G180", "local bend G180\nHELANAL (deg)"),
+                         (axes[5], "kink_G189", "kink G189\n8+8 CA (deg)"),
+                         (axes[6], "kink_G180", "kink G180\n8+8 CA (deg)")):
         for e in gates:
             c = f"{key}_{e['subunit']}"
             if c not in fr:
                 continue
             y = fr[c].to_numpy() * (100 if key == "latch" else 1)
-            ax.plot(f, pd.Series(y).rolling(100, center=True, min_periods=1).mean(),
+            ax.plot(f, pd.Series(y).rolling(100, center=True, min_periods=1).mean(),  # noqa
                     color=SUB_COLOURS.get(e["subunit"], "0.3"), lw=1.6, label=e["gate"])
         ax.set_ylabel(lab, fontsize=13)
         if ax.get_legend_handles_labels()[0]:
@@ -224,8 +241,75 @@ def plot_trace(fr, diag, bounds, gates, out_png, run_name, cfg):
         ax.grid(color="0.92", lw=0.6)
     axes[-1].set_xlabel("frame", fontsize=13)
     fig.suptitle(f"{run_name}  states of the two HBC diagonals (jump ≥ {cfg['min_jump']:g} Å); "
-                 f"latch / kink = running mean of 100 frames", fontsize=14)
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+                 f"latch / bend / kink = running mean of 100 frames\nHELANAL = standard local "
+                 f"bending angle (0 for a straight helix); 8+8 CA = broad measure, ~18° offset, "
+                 f"for comparing states only", fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+
+
+def plot_bending(fr, gates, state, near, states, out_png, title):
+    """grid: rows = the four bending measures, columns = the four gates
+    (subunits); per state the distribution of the per-frame values (violin,
+    frames within 25 of a jump left out), mean +- sd written above."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+    nst = int(state.max())
+    rows = [(k, lab) for k, lab in BENDS if any(f"{k}_{e['subunit']}" in fr for e in gates)]
+    if not rows or not gates:
+        return
+    fs = 13
+    fig, axes = plt.subplots(len(rows), len(gates), figsize=(4.4 * len(gates), 3.6 * len(rows)),
+                             squeeze=False, sharey="row")
+    for i, (key, lab) in enumerate(rows):
+        for jg, e in enumerate(gates):
+            ax = axes[i, jg]
+            c = f"{key}_{e['subunit']}"
+            if c not in fr:
+                ax.axis("off")
+                continue
+            x = fr[c].to_numpy()
+            data, pos = [], []
+            for s in range(1, nst + 1):
+                v = x[(state == s) & ~near]
+                v = v[np.isfinite(v)]
+                if len(v) > 1:
+                    data.append(v)
+                    pos.append(s)
+            if data:
+                vp = ax.violinplot(data, positions=pos, widths=0.8, showmeans=True,
+                                   showextrema=False)
+                for b, s in zip(vp["bodies"], pos):
+                    b.set_facecolor(STATE_COLOURS[(s - 1) % len(STATE_COLOURS)])
+                    b.set_alpha(0.7)
+                vp["cmeans"].set_color("black")
+                top = max(np.percentile(v, 99) for v in data)
+                for v, s in zip(data, pos):
+                    ax.text(s, top, f"{v.mean():.1f}\n±{v.std():.1f}", ha="center", va="bottom",
+                            fontsize=fs - 3)
+            ax.set_xticks(range(1, nst + 1))
+            ax.set_xticklabels([str(s) for s in range(1, nst + 1)], fontsize=fs - 2)
+            ax.tick_params(axis="y", labelsize=fs - 2)
+            ax.grid(axis="y", color="0.92", lw=0.6)
+            if i == 0:
+                ax.set_title(e["gate"], fontsize=fs + 2, fontweight="bold")
+            if jg == 0:
+                ax.set_ylabel(f"{lab}\n(deg)", fontsize=fs)
+            if i == len(rows) - 1:
+                ax.set_xlabel("state", fontsize=fs)
+            ax.margins(y=0.25)
+    leg = [Patch(color=STATE_COLOURS[(int(r.state) - 1) % len(STATE_COLOURS)],
+                 label=f"{int(r.state)} = {r.label}: frames {r.first_frame}-{r.last_frame}, "
+                       f"A_C {r.A_C:.1f} / B_D {r.B_D:.1f} Å") for _, r in states.iterrows()]
+    fig.legend(handles=leg, loc="lower center", ncol=min(3, len(leg)), frameon=False,
+               fontsize=fs - 1)
+    fig.suptitle(f"{title}\nHELANAL = standard local bending angle at the glycine (0 for a "
+                 f"straight helix); 8+8 CA = broad measure (~18° for a straight helix, compare "
+                 f"states only)\nnumbers = mean ± sd over the frames of the state", fontsize=fs + 1)
+    fig.tight_layout(rect=(0, 0.05, 1, 0.92))
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
 
