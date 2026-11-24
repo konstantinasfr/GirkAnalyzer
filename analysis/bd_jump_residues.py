@@ -145,6 +145,17 @@ OUTPUT, bd_jump_residues/minjump_<X>/
                                          interactions that change by >= 10 points
         interactions/all_events_interactions.csv   all jumps together
         all_events_residues.csv          all events, long format
+    timeline/                            "bend and latch" tests (analysis/gate_timeline.py):
+        timeline_all_frames.csv          per frame: B_D, A_C and per gate the kink at
+                                         G189 / G180, r_gate, chi1, ring distance to the
+                                         pocket F83, latch (pi-stack), nearest gate ring
+        event<k>_frame<F>_timeline.png   those signals +- 500 frames around the jump
+        event<k>_frame<F>_order.csv      before / after / z and the halfway frame of
+                                         every signal: what changes first?
+        correlation.csv / .png           whole run: kink vs pocket distance, diagonal
+                                         with / without the latch
+        latch_events.csv                 every jump x gate: latch, gate-gate stack, kink
+                                         before / after; fits_bend_and_latch
         all_events_neighbours.csv        the neighbour lists of all events
         all_events_gate.csv              the gate tables of all events
         consistent_residues.csv          per residue over all events of the
@@ -167,7 +178,7 @@ DEFAULTS = dict(min_jump=1.0, min_stretch=150, buffer=25, window=(300, 500), seg
                 tm_range=(-50, 15), gate_flank=3, neighbour_cutoff=8.0, contact_cutoff=4.5,
                 contact_sets=(("heavy", 4.5), ("all", 3.5)),
                 top_n=10, top_exclude_ends=15, contact_top_n=0, contact_min_pct=5.0,
-                contact_min_change=0.0)
+                contact_min_change=0.0, timeline_window=500, pocket_pos=-109)
 BACKBONE = ("N", "CA", "C", "O", "OXT")
 GATE_SHOW = ["event", "direction", "resid", "resname", "pdb", "subunit", "girk1", "pos", "disp",
              "d_radial", "d_axial", "d_around", "sc_disp", "noise", "ratio", "r_before"]
@@ -215,6 +226,9 @@ def run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir,
         return
 
     axis = pore_axis(ca, info, sf_lower, sf_upper)
+    from analysis.gate_timeline import run_gate_timeline
+    run_gate_timeline(traj, info, axis, bd, ac, bounds, jumps, out, hbc_diagonal_pairs, cfg,
+                      run_name)
     windows = cfg["window"] if isinstance(cfg["window"], (list, tuple)) else [cfg["window"]]
     runs = [("window", w) for w in windows if "window" in modes] \
         + ([("segment", None)] if "segment" in modes else [])

@@ -84,3 +84,11 @@ with tempfile.TemporaryDirectory() as tmp:
     plot_interactions(pd.concat([t2, t2b]), Path(tmp) / "y.png", "test 2 gates")
     assert (Path(tmp) / "y.png").exists()
 print("union plot: OK")
+
+# gate_timeline reads the latch (pi-stack with the pocket Phe, pos -109) from the tracker
+from analysis.gate_timeline import gate_signals
+traj = dict(frames=np.arange(NF), ca=np.zeros((NF, len(res), 3)), gate_idx=[0], rings=tr)
+sig, gates = gate_signals(traj, info, (np.zeros(3), np.array([0, 0, 1.0])))
+assert gates[0]["pocket"] == "F83.2b" and sig.latch_A.mean() == 1.0
+assert np.allclose(sig.d_pocket_A, 5.0)
+print("gate_signals latch: OK")

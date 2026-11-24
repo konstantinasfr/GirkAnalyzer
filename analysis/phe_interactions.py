@@ -81,6 +81,15 @@ def _centres(ags):
     return c, n
 
 
+def dihedral(p):
+    """dihedral angle (deg, -180..180) of 4 points p (4, 3)."""
+    b0, b1, b2 = p[0] - p[1], p[2] - p[1], p[3] - p[2]
+    b1 = b1 / np.linalg.norm(b1)
+    v = b0 - (b0 @ b1) * b1
+    w = b2 - (b2 @ b1) * b1
+    return float(np.degrees(np.arctan2(np.cross(b1, v) @ w, v @ w)))
+
+
 def _theta(v, n):
     """angle (deg, 0-90) between vectors v (..., 3) and the ring normal n (broadcast)."""
     d = np.linalg.norm(v, axis=-1)
@@ -96,6 +105,7 @@ class RingTracker:
     def __init__(self, residues, resmap, gate_resids, nf, cutoff=15.0):
         self.residues, self.resmap, self.nf, self.cutoff = residues, resmap, nf, cutoff
         self.gates = []                    # (gate number in gate_resids order, residue index, ring ag)
+        self.chi_ags = []                  # N, CA, CB, CG of each gate Phe (chi1)
         k = 0
         for gr in gate_resids:
             sel = residues.atoms.select_atoms(f"resid {gr}")
@@ -105,8 +115,12 @@ class RingTracker:
             ag = _ring_ag(residues[ri])
             if ag is not None:
                 self.gates.append((k, ri, ag))
+                chi = [residues[ri].atoms.select_atoms(f"name {n}") for n in ("N", "CA", "CB", "CG")]
+                self.chi_ags.append(sum(chi[1:], chi[0]) if all(len(c) == 1 for c in chi)
+                                    else None)
             k += 1
         self.ready = False
+        self.chi1 = np.full((nf, len(self.gates)), np.nan, np.float32)
 
     # ---- first frame: choose the partners
     def _setup(self):
@@ -158,6 +172,9 @@ class RingTracker:
             return
         if not self.ready:
             self._setup()
+        for g, ag in enumerate(self.chi_ags):
+            if ag is not None:
+                self.chi1[i, g] = dihedral(ag.positions)
         gc, gn = _centre_normal(np.array([ag.positions for _, _, ag in self.gates]))
         A = self.arom
         if len(A["res"]):

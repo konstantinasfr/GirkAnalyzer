@@ -89,6 +89,20 @@ with tempfile.TemporaryDirectory() as tmp:
     rm = pd.read_csv(out / "alignment_rmsd.csv")
     # 0.25 A noise per coordinate in the frame and in the reference -> RMSD ~ 0.25*sqrt(3)*sqrt(2) = 0.61
     assert rm.fit_rmsd.median() < 0.75, rm.fit_rmsd.median()          # rotation undone (else ~20 A)
+    # timeline: chain B residues from index 25 (pos -5) move 1.5 A outward -> kink at the
+    # lower glycine (pos -3) of B grows, its gate CA moves out by 1.5 A; A does not change
+    td = out / "timeline"
+    sig = pd.read_csv(td / "timeline_all_frames.csv")
+    pre, post = sig.iloc[100:400], sig.iloc[500:850]
+    assert post.kink_G189_B.mean() - pre.kink_G189_B.mean() > 2, (pre.kink_G189_B.mean(), post.kink_G189_B.mean())
+    assert abs(post.kink_G189_A.mean() - pre.kink_G189_A.mean()) < 1
+    assert abs(post.r_gate_B.mean() - pre.r_gate_B.mean() - 1.5) < 0.15
+    od = pd.read_csv(next(td.glob("event1_frame*_order.csv")))
+    rB = od[(od.signal.str.startswith("gate Phe CA")) & (od.subunit == "B")].iloc[0]
+    assert rB.changes == "yes" and abs(rB.lag) <= 15, rB
+    assert list(td.glob("event1_frame*_timeline.png")) and (td / "correlation.csv").exists()
+    le = pd.read_csv(td / "latch_events.csv")
+    assert le.loc[le.mover, "subunit"].tolist() == ["B"]
     for mode in ("window300", "window500", "segment_all"):
         d = out / mode
         r = pd.read_csv(next(d.glob("event1_frame*_residues.csv")))
