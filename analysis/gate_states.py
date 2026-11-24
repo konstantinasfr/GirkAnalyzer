@@ -200,11 +200,13 @@ def plot_trace(fr, diag, bounds, gates, out_png, run_name, cfg):
             m = x[lo:hi].mean()
             c = STATE_COLOURS[k % len(STATE_COLOURS)]
             ax.hlines(m, f[lo], f[hi - 1], color=c, lw=3)
-            ax.text((f[lo] + f[hi - 1]) / 2, m + 0.15, f"{d} {k + 1}: {m:.2f} Å", color=c,
-                    ha="center", va="bottom", fontsize=12, fontweight="bold")
+            ax.text((f[lo] + f[hi - 1]) / 2, np.nanmax(x[lo:hi]), f"{d} {k + 1}: {m:.2f} Å",
+                    color=c, ha="center", va="bottom", fontsize=12, fontweight="bold",
+                    bbox=dict(facecolor="white", alpha=0.85, edgecolor="none", pad=1.5))
         for j in b[1:-1]:
             ax.axvline(f[j], color="purple", ls="--", lw=1)
         ax.set_ylabel(f"{d} Cα-Cα (Å)", fontsize=13)
+        ax.set_ylim(top=np.nanmax(x) + 0.12 * (np.nanmax(x) - np.nanmin(x)) + 0.4)
     for ax, key, lab in ((axes[2], "latch", "latch: π-stack with\npocket F83 (%)"),
                          (axes[3], "kink_G189", "kink at G189\n(deg)")):
         for e in gates:
