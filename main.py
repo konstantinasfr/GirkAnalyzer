@@ -878,6 +878,8 @@ def main():
                             close_below=args.hbc_close_below)
         raise SystemExit("--hbc_open_closed_only: done.")
 
+
+    # python3 main.py --gate_states_pool /media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results/G12
     if args.gate_states_only:
         from analysis.gate_states import run_gate_states
         run_gate_states(u, hbc_diagonal_pairs, sf_lower=_cfg.get("lower1"),
