@@ -34,6 +34,13 @@ Per subunit and per frame (timeline_all_frames.csv):
     seg_G180    the same at G180 (173-179 vs 181-187)
     ctl_G189    gate-free control: 182-188 vs 193-199, the gate Phe (192) not
                 used, so it cannot follow a local movement of the gate itself
+    bprof<p>    local bend (HELANAL) at every TM2 position p = -16..+6 from the
+                gate Phe (GIRK2 176..198): the bend profile along TM2
+    tilt_up / tilt_elbow / tilt_low
+                tilt of the segments 182-188 / 189-192 / 193-199 relative to the
+                pore axis (axis through the HELANAL axis points, pointing down);
+                _rad = signed lean away from (+) / towards (-) the pore axis
+                going down, _tan = lean around the pore
     helix_G189  fraction of the alpha-helix H-bonds O(i)...N(i+4) (N-O <= 3.5 A)
                 present for i = 182..195 (covers every residue the G189
                 measures use); low = the helix is broken and the angles mean
@@ -167,6 +174,35 @@ def segment_bend(ca, rows_up, rows_down, hinge_xyz=None, axis=None):
     return tot, r_, t_
 
 
+def segment_tilt(ca, rows, axis):
+    """Tilt of a helical segment relative to the pore axis. The segment axis
+    (through its HELANAL axis points, pointing N -> C, i.e. down towards the
+    cytoplasm) is compared with the pore axis pointing the same way (chosen
+    from the average over all frames, so tilts are 0-90 deg). Returns (total,
+    radial, tangential) in degrees: radial + = the segment leans away from the
+    pore axis going down (its lower end further out), - = towards it;
+    tangential = lean around the pore (right-handed about the axis pointing to
+    the filter). Needs >= 4 consecutive CA."""
+    c0, a0 = axis
+    u = segment_axis(ca[:, rows])
+    # reference = the pore-axis direction along which the segment runs (N -> C), chosen once
+    # from the average so it does not depend on which end of the filter the pore axis points to
+    down = a0 if np.nanmean(u @ a0) > 0 else -a0
+    v = np.nanmean(axis_points(ca[:, rows]), 1) - c0
+    rad = v - np.outer(v @ a0, a0)
+    rad /= np.linalg.norm(rad, axis=1, keepdims=True)
+    tan = np.cross(a0[None], rad)
+    ud = u @ down
+    tot = np.degrees(np.arccos(np.clip(ud, -1, 1)))
+    r_ = np.degrees(np.arctan2(np.einsum("ij,ij->i", u, rad), ud))
+    t_ = np.degrees(np.arctan2(np.einsum("ij,ij->i", u, tan), ud))
+    return tot, r_, t_
+
+
+PROFILE = range(-16, 7)            # local bend at every TM2 position 176..198 (GIRK2 numbering)
+TILT_SEGMENTS = (("up", -10, -4), ("elbow", -3, 0), ("low", 1, 7))   # 182-188, 189-192, 193-199
+
+
 class HelixTracker:
     """Per frame, for every gate subunit, which backbone alpha-helix H-bonds
     O(i) ... N(i+4) (N-O <= 3.5 A) are present for i at positions lo..hi from
@@ -251,6 +287,18 @@ def gate_signals(traj, info, axis, pocket_pos=-109):
                 continue
             tot, rad, tan = segment_bend(ca, ru, rd, ca[:, rh], axis)
             out[f"{name}_{s}"], out[f"{name}_rad_{s}"], out[f"{name}_tan_{s}"] = tot, rad, tan
+        # bend profile along TM2 and tilt of three segments relative to the pore axis
+        for p_ in PROFILE:
+            r7 = [rows.get((g.chain, p_ + k)) for k in range(-3, 4)]
+            out[f"bprof{p_:+d}_{s}"] = (np.full(nf, np.nan) if None in r7 else local_bend(ca, r7))
+        for name, lo, hi in TILT_SEGMENTS:
+            rr = [rows.get((g.chain, p_)) for p_ in range(lo, hi + 1)]
+            if None in rr:
+                for suf in ("", "_rad", "_tan"):
+                    out[f"tilt_{name}{suf}_{s}"] = np.full(nf, np.nan)
+                continue
+            tot, rad, tan = segment_tilt(ca, rr, axis)
+            out[f"tilt_{name}_{s}"], out[f"tilt_{name}_rad_{s}"], out[f"tilt_{name}_tan_{s}"] = tot, rad, tan
         ht = traj.get("helix")
         if ht is not None:
             k_ = gate_rows.index(gi)

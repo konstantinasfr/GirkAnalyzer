@@ -35,6 +35,22 @@ for kvec, th, exp_rad in (((0, 1, 0), 25, 25), ((0, 1, 0), -15, -15), ((1, 0, 0)
     tot, rad, tan = segment_bend(X[None], up, dn, X[None, hh], pore)
     assert abs(tot[0] - abs(th)) < 1e-6 and abs(rad[0] - exp_rad) < 1e-6, (th, tot, rad, tan)
     assert abs(abs(tan[0]) - (abs(th) if exp_rad == 0 else 0)) < 1e-6
+# segment tilt relative to the pore axis: vertical helix 0, leaning by theta -> exactly theta,
+# sign + when the lower end is further from the pore axis
+from analysis.gate_timeline import segment_tilt
+Hd = np.c_[2.3 * np.cos(tt30), 2.3 * np.sin(tt30), -1.5 * np.arange(30)]   # N -> C going down
+assert np.allclose(segment_tilt(Hd[None], list(range(5, 12)), pore)[0], 0, atol=1e-6)
+for th in (10, -25):
+    r = np.radians(th)
+    R = np.array([[np.cos(r), 0, -np.sin(r)], [0, 1, 0], [np.sin(r), 0, np.cos(r)]])  # lower end -> +x (away)
+    tot, rad, tan = segment_tilt((Hd @ R.T)[None], list(range(5, 12)), pore)
+    assert abs(tot[0] - abs(th)) < 1e-6 and abs(rad[0] - th) < 1e-6 and abs(tan[0]) < 1e-6, (th, tot, rad)
+# bend profile: the local bend peaks within +-1 residue of a kink
+r = np.radians(20)
+R = np.array([[np.cos(r), 0, np.sin(r)], [0, 1, 0], [-np.sin(r), 0, np.cos(r)]])
+X = H30.copy(); X[hh + 1:] = (X[hh + 1:] - X[hh]) @ R.T + X[hh]
+prof = [local_bend(X[None], list(range(k - 3, k + 4)))[0] for k in range(hh - 5, hh + 6)]
+assert abs(int(np.argmax(prof)) - 5) <= 1 and prof[0] < 1e-6 and prof[-1] < 1e-6, prof
 # the broad 8+8 measure has an offset of ~18 deg for a straight ideal helix (documented)
 k0 = kink_angle(H[None], list(range(h - 8, h)), list(range(h + 1, h + 9)))[0]
 assert 15 < k0 < 21, k0
@@ -91,6 +107,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert {"bend_G189_A", "bend_G180_D", "seg_G189_B", "seg_G189_rad_B", "ctl_G189_C",
             "bend_ref_A", "helix_G189_B", "helix_G180_A"} <= set(fr.columns)
     assert fr.helix_G189_B.between(0, 1).all()
+    assert {"bprof-3_B", "bprof+6_A", "bprof-16_D", "tilt_up_rad_B", "tilt_elbow_B", "tilt_low_tan_C"} <= set(fr.columns)
+    bp = pd.read_csv(out / "bend_profile.csv")
+    assert set(bp.position_girk2) == set(range(176, 199)) and "tilt_low_rad_F71" in s
+    assert all((out / f"states_{k}_{d}.png").exists() for k in ("tilt", "bend_profile")
+               for d in ("A_C", "B_D", "joint"))
     assert "ctl_G189_sd_F71" in s and "seg_G189_rad_F71" in s
     assert "kink_G189_sd_F71" in s and "bend_G180_sd_F151" in s
     assert all((out / f"states_bending_{d}.png").exists() for d in ("A_C", "B_D", "joint"))

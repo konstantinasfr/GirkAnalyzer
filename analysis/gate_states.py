@@ -58,6 +58,14 @@ states_bending_<A_C|B_D|joint>.png
                            state (violin, mean +- sd). The old broad 8+8 CA
                            kink is still in the CSVs but not plotted (biased:
                            ~18 deg for a straight helix)
+states_tilt_<A_C|B_D|joint>.png
+                           tilt of the TM2 segments 182-188 / 189-192 / 193-199
+                           relative to the pore axis (lean out + / in -, and
+                           total), violins per state
+bend_profile.csv           local bend at every TM2 position 176-198 per state and
+                           gate (mean, sd)
+states_bend_profile_<A_C|B_D|joint>.png
+                           bend profile along TM2, one line per state
 state_interactions_<A_C|B_D|joint>.png
                            2 x 2 grid (one panel per gate), for every
                            interaction one bar per state; same columns
@@ -102,6 +110,12 @@ BENDS = (("bend_G189", "local bend G189\n(HELANAL)"),
          ("seg_G180", "segment bend G180\n173-179 vs 181-187"),
          ("bend_ref", "noise floor: local\nbend A185 (no Gly)"),
          ("helix_G189", "helix intact 182-199\n(fraction of i→i+4 H-bonds)"))
+TILTS = (("tilt_up_rad", "upper 182-188:\nlean out (+) / in (-)"),
+         ("tilt_elbow_rad", "elbow 189-192:\nlean out (+) / in (-)"),
+         ("tilt_low_rad", "lower 193-199:\nlean out (+) / in (-)"),
+         ("tilt_up", "upper 182-188:\ntotal tilt"),
+         ("tilt_elbow", "elbow 189-192:\ntotal tilt"),
+         ("tilt_low", "lower 193-199:\ntotal tilt"))
 
 
 def _gate_means(sig, gates, idx):
@@ -114,12 +128,15 @@ def _gate_means(sig, gates, idx):
                        ("seg_G189", 1), ("seg_G189_rad", 1), ("seg_G189_tan", 1),
                        ("seg_G180", 1), ("seg_G180_rad", 1), ("ctl_G189", 1), ("ctl_G189_rad", 1),
                        ("helix_G189", 1), ("helix_G180", 1),
+                       ("tilt_up", 1), ("tilt_up_rad", 1), ("tilt_up_tan", 1),
+                       ("tilt_elbow", 1), ("tilt_elbow_rad", 1), ("tilt_elbow_tan", 1),
+                       ("tilt_low", 1), ("tilt_low_rad", 1), ("tilt_low_tan", 1),
                        ("r_gate", 1), ("chi1", 1), ("d_pocket", 1), ("d_gate", 1)):
             c = f"{key}_{s}"
             if c in sig:
                 x = sig[c].to_numpy()[idx]
                 r[f"{key}{'_pct' if f == 100 else ''}_{e['gate']}"] = f * np.nanmean(x)
-                if key.startswith(("kink", "bend", "seg", "ctl")):
+                if key.startswith(("kink", "bend", "seg", "ctl", "tilt")):
                     r[f"{key}_sd_{e['gate']}"] = np.nanstd(x)
     return r
 
@@ -168,7 +185,7 @@ def run_gate_states(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir, subu
     meta.to_csv(out / "interaction_columns.csv", index=False)
 
     # ---- per-state tables
-    rows, inter = [], []
+    rows, inter, prof = [], [], []
     for d in ("A_C", "B_D", "joint"):
         for s in range(1, st[d].max() + 1):
             ins = st[d] == s
@@ -184,6 +201,15 @@ def run_gate_states(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir, subu
                        B_D=diag["B_D"][use].mean(), B_D_sd=diag["B_D"][use].std())
             row.update(_gate_means(sig, gates, use))
             rows.append(row)
+            for e in gates:
+                for c in sig.columns:
+                    if c.startswith("bprof") and c.endswith("_" + e["subunit"]):
+                        pp = int(c[5:].rsplit("_", 1)[0])
+                        x = sig[c].to_numpy()[use]
+                        prof.append(dict(run=run_name, diagonal=d, state=s, label=lab,
+                                         gate=e["gate"], subunit=e["subunit"], pos=pp,
+                                         position_girk2=192 + pp, mean=np.nanmean(x),
+                                         sd=np.nanstd(x)))
             sm = traj["rings"].summary(use, use, info)
             if not sm.empty:
                 sm = sm.rename(columns=dict(pct_before="pct", dist_before="median_dist",
@@ -197,6 +223,8 @@ def run_gate_states(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir, subu
                 inter.append(sm)
     states = pd.DataFrame(rows)
     states.to_csv(out / "states.csv", index=False, float_format="%.3f")
+    bp = pd.DataFrame(prof)
+    bp.to_csv(out / "bend_profile.csv", index=False, float_format="%.3f")
     si = pd.concat(inter, ignore_index=True) if inter else pd.DataFrame()
     si.to_csv(out / "state_interactions.csv", index=False, float_format="%.3f")
     json.dump(dict(run=run_name, channel_type=channel_type, n_frames=nf,
@@ -210,6 +238,15 @@ def run_gate_states(u, hbc_diagonal_pairs, sf_lower, sf_upper, results_dir, subu
     for d in ("A_C", "B_D", "joint"):
         plot_bending(fr, gates, st[d], near, states[states.diagonal == d],
                      out / f"states_bending_{d}.png", f"{run_name}  TM2 bending per state of {d}")
+        plot_bending(fr, gates, st[d], near, states[states.diagonal == d],
+                     out / f"states_tilt_{d}.png", f"{run_name}  TM2 segment tilt per state of {d}",
+                     rows_def=TILTS, note="tilt of each TM2 segment relative to the pore axis (axis "
+                     "through the HELANAL axis points, pointing down);\nlean + = the lower end of the "
+                     "segment is further from the pore axis, - = closer")
+        if not bp.empty:
+            plot_profile(bp[bp.diagonal == d], states[states.diagonal == d],
+                         out / f"states_bend_profile_{d}.png",
+                         f"{run_name}  bend profile along TM2 per state of {d}")
         if not si.empty:
             plot_state_interactions(si[si.diagonal == d], states[states.diagonal == d],
                                     out / f"state_interactions_{d}.png",
@@ -274,7 +311,7 @@ def plot_trace(fr, diag, bounds, gates, out_png, run_name, cfg):
     plt.close(fig)
 
 
-def plot_bending(fr, gates, state, near, states, out_png, title):
+def plot_bending(fr, gates, state, near, states, out_png, title, rows_def=None, note=None):
     """grid: rows = the four bending measures, columns = the four gates
     (subunits); per state the distribution of the per-frame values (violin,
     frames within 25 of a jump left out), mean +- sd written above."""
@@ -283,7 +320,8 @@ def plot_bending(fr, gates, state, near, states, out_png, title):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
     nst = int(state.max())
-    rows = [(k, lab) for k, lab in BENDS if any(f"{k}_{e['subunit']}" in fr for e in gates)]
+    rows = [(k, lab) for k, lab in (rows_def or BENDS)
+            if any(f"{k}_{e['subunit']}" in fr for e in gates)]
     if not rows or not gates:
         return
     fs = 13
@@ -331,11 +369,59 @@ def plot_bending(fr, gates, state, near, states, out_png, title):
                        f"A_C {r.A_C:.1f} / B_D {r.B_D:.1f} Å") for _, r in states.iterrows()]
     fig.legend(handles=leg, loc="lower center", ncol=min(3, len(leg)), frameon=False,
                fontsize=fs - 1)
-    fig.suptitle(f"{title}\nHELANAL = standard local bending angle at the glycine (h-3..h+3)\n"
-                 f"segment = angle between the axes of 7 CA per side (glycine left out), fitted "
-                 f"through the HELANAL axis points\ncontrol = without the gate Phe; noise floor = "
-                 f"the same local bend at A185, which has no glycine\nnumbers = mean ± sd over the frames of the state", fontsize=fs + 1)
+    expl = note or ("HELANAL = standard local bending angle at the glycine (h-3..h+3)\n"
+                    "segment = angle between the axes of 7 CA per side (glycine left out), fitted "
+                    "through the HELANAL axis points\ncontrol = without the gate Phe; noise floor = "
+                    "the same local bend at A185, which has no glycine")
+    fig.suptitle(f"{title}\n{expl}\nnumbers = mean ± sd over the frames of the state",
+                 fontsize=fs + 1)
     fig.tight_layout(rect=(0, 0.03, 1, 0.94))
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+
+
+def plot_profile(bp, states, out_png, title):
+    """one panel per gate: mean local bend (HELANAL) at every TM2 position, one
+    line per state (+- sd as a band); the hinge glycines (180, 189) and the gate
+    Phe (192) marked. A peak is spread over about +-2 residues (each value uses
+    7 CA)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    if bp.empty:
+        return
+    gates = bp.drop_duplicates("subunit")[["gate", "subunit"]].values.tolist()
+    fs = 14
+    fig, axes = plt.subplots(2, 2, figsize=(16, 11), sharey=True, sharex=True)
+    for ax, (gname, sub) in zip(axes.flat, gates):
+        d = bp[bp.subunit == sub]
+        for s, g in d.groupby("state"):
+            g = g.sort_values("position_girk2")
+            c = STATE_COLOURS[(int(s) - 1) % len(STATE_COLOURS)]
+            ax.plot(g.position_girk2, g["mean"], "-o", color=c, lw=2, ms=4)
+            ax.fill_between(g.position_girk2, g["mean"] - g["sd"], g["mean"] + g["sd"], color=c,
+                            alpha=0.12)
+        for x, lab in ((180, "G180"), (189, "G189"), (192, "F192")):
+            ax.axvline(x, color="0.4", ls="--" if lab != "F192" else ":", lw=1)
+            ax.text(x, 1.0, lab, transform=ax.get_xaxis_transform(), ha="center", va="bottom",
+                    fontsize=fs - 3, color="0.3")
+        ax.set_title(f"{gname}", fontsize=fs + 2, fontweight="bold", pad=18)
+        ax.grid(color="0.92", lw=0.6)
+        ax.tick_params(labelsize=fs - 2)
+    for ax in axes[1]:
+        ax.set_xlabel("TM2 position (GIRK2 numbering; GIRK1 = own number + 11)", fontsize=fs)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("local bend (HELANAL, deg)", fontsize=fs)
+    for ax in axes.flat[len(gates):]:
+        ax.axis("off")
+    leg = [Line2D([], [], color=STATE_COLOURS[(int(r.state) - 1) % len(STATE_COLOURS)], lw=3,
+                  label=f"{r.label}: frames {r.first_frame}-{r.last_frame}, A_C {r.A_C:.1f} / "
+                        f"B_D {r.B_D:.1f} Å") for _, r in states.iterrows()]
+    fig.legend(handles=leg, loc="lower center", ncol=min(3, len(leg)), frameon=False, fontsize=fs - 2)
+    fig.suptitle(f"{title}\nlocal bending angle at every TM2 residue (mean ± sd over the frames of "
+                 f"the state); a peak is spread over about ±2 residues", fontsize=fs + 1)
+    fig.tight_layout(rect=(0, 0.06, 1, 0.92))
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
 

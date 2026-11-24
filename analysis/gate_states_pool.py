@@ -47,6 +47,8 @@ occupancy.png                per run: fraction of frames in each cluster
 cluster_gates.png            per subunit and cluster: in pocket, gate-gate stack,
                              local bend G189 / G180, distance from the pore axis
 cluster_interactions.png     2 x 2 (one panel per gate subunit), bars per cluster
+cluster_bend_profile.csv/.png  local bend at every TM2 position 176-198 per cluster
+                             and subunit (where along TM2 the helix bends)
 """
 import json
 from pathlib import Path
@@ -64,6 +66,9 @@ GATE_KEYS = (("in_pocket", 100, "in pocket (F83 or F186) %"), ("latch", 100, "on
              ("seg_G189", 1, "segment bend G189 (deg)"), ("seg_G189_rad", 1, "outward bend G189 (deg)"),
              ("ctl_G189", 1, "gate-free control G189 (deg)"), ("seg_G180", 1, "segment bend G180 (deg)"),
              ("bend_ref", 1, "noise floor A185 (deg)"), ("helix_G189", 1, "helix intact 182-199"),
+             ("tilt_up", 1, "tilt 182-188 (deg)"), ("tilt_up_rad", 1, "lean out 182-188 (deg)"),
+             ("tilt_elbow", 1, "tilt 189-192 (deg)"), ("tilt_elbow_rad", 1, "lean out 189-192 (deg)"),
+             ("tilt_low", 1, "tilt 193-199 (deg)"), ("tilt_low_rad", 1, "lean out 193-199 (deg)"),
              ("r_gate", 1, "gate CA from pore axis (Å)"), ("chi1", 1, "χ1 (deg)"))
 ONE = dict(PHE="F", TYR="Y", TRP="W", HIS="H", HSD="H", HSE="H", HIE="H", HID="H", CYS="C",
            MET="M", ALA="A", VAL="V", LEU="L", ILE="I", THR="T", LYS="K", ARG="R")
@@ -235,7 +240,7 @@ def run_gate_states_pool(root, k=None, out=None, max_fit=40000, seed=0):
                 col = f"{key}_{s}"
                 if col in d:
                     row[f"{key}{'_pct' if f == 100 else ''}_{s}"] = f * d[col].mean()
-                    if key.startswith(("bend", "seg", "ctl")):
+                    if key.startswith(("bend", "seg", "ctl", "tilt")):
                         row[f"{key}_sd_{s}"] = d[col].std()
         rows.append(row)
     cl = pd.DataFrame(rows)
@@ -254,6 +259,15 @@ def run_gate_states_pool(root, k=None, out=None, max_fit=40000, seed=0):
                            pct=100 * df.loc[df.cluster == c, col].mean()))
     ci = pd.DataFrame(ci)
     ci.to_csv(out / "cluster_interactions.csv", index=False, float_format="%.3f")
+    pr = []
+    for col in [c for c in df.columns if c.startswith("bprof")]:
+        pp, s = col[5:].rsplit("_", 1)
+        for c in range(1, kk + 1):
+            x = df.loc[df.cluster == c, col]
+            pr.append(dict(cluster=c, subunit=s, pos=int(pp), position_girk2=192 + int(pp),
+                           mean=x.mean(), sd=x.std()))
+    pr = pd.DataFrame(pr)
+    pr.to_csv(out / "cluster_bend_profile.csv", index=False, float_format="%.3f")
 
     # ---- plots
     gate_names = {}
@@ -265,6 +279,7 @@ def run_gate_states_pool(root, k=None, out=None, max_fit=40000, seed=0):
     plot_occupancy(occ, kk, out / "occupancy.png")
     plot_cluster_gates(cl, subs, gl, out / "cluster_gates.png")
     plot_cluster_interactions(ci, cl, gl, out / "cluster_interactions.png")
+    plot_cluster_profile(pr, cl, gl, out / "cluster_bend_profile.png")
     print(cl[["cluster", "n_frames", "pct_frames", "n_runs", "A_C", "B_D"] +
              [c for c in cl.columns if c.startswith("in_pocket_pct_")]].round(1).to_string(index=False))
     print(occ.round(1).to_string(index=False))
@@ -343,6 +358,8 @@ def plot_cluster_gates(cl, subs, gl, out_png):
     keys = [("in_pocket", "_pct", "in pocket (%)"), ("gate_stack", "_pct", "π-stack with\na gate Phe (%)"),
             ("bend_G189", "", "local bend\nG189 (deg)"), ("seg_G189_rad", "", "outward bend\nG189 (deg)"),
             ("ctl_G189", "", "gate-free\ncontrol G189 (deg)"), ("bend_G180", "", "local bend\nG180 (deg)"),
+            ("tilt_up_rad", "", "lean out\n182-188 (deg)"), ("tilt_elbow_rad", "", "lean out\n189-192 (deg)"),
+            ("tilt_low_rad", "", "lean out\n193-199 (deg)"),
             ("r_gate", "", "gate CA from\npore axis (Å)")]
     keys = [k_ for k_ in keys if any(f"{k_[0]}{k_[1]}_{s}" in cl for s in subs)]
     if not keys:
@@ -370,6 +387,41 @@ def plot_cluster_gates(cl, subs, gl, out_png):
     fig.legend(handles=_legend_cl(cl), loc="lower center", ncol=2, frameon=False, fontsize=10)
     fig.suptitle("per gate subunit and cluster (error bars = sd over frames)", fontsize=14)
     fig.tight_layout(rect=(0, 0.04 + 0.025 * ((len(cl) + 1) // 2), 1, 0.95))
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+
+
+def plot_cluster_profile(pr, cl, gl, out_png):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    if pr.empty:
+        return
+    subs = sorted(pr.subunit.unique())
+    fig, axes = plt.subplots(2, 2, figsize=(16, 11), sharey=True, sharex=True)
+    for ax, s in zip(axes.flat, subs):
+        d = pr[pr.subunit == s]
+        for c, g in d.groupby("cluster"):
+            g = g.sort_values("position_girk2")
+            col = CL_COLOURS[(int(c) - 1) % len(CL_COLOURS)]
+            ax.plot(g.position_girk2, g["mean"], "-o", color=col, lw=2, ms=4)
+        for x, lab in ((180, "G180"), (189, "G189"), (192, "F192")):
+            ax.axvline(x, color="0.4", ls="--" if lab != "F192" else ":", lw=1)
+            ax.text(x, 1.0, lab, transform=ax.get_xaxis_transform(), ha="center", va="bottom",
+                    fontsize=11, color="0.3")
+        ax.set_title(f"gate {gl.get(s, s)}", fontsize=15, fontweight="bold", pad=18)
+        ax.grid(color="0.92", lw=0.6)
+        ax.tick_params(labelsize=12)
+    for ax in axes[1]:
+        ax.set_xlabel("TM2 position (GIRK2 numbering; GIRK1 = own number + 11)", fontsize=13)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("local bend (HELANAL, deg)", fontsize=13)
+    for ax in axes.flat[len(subs):]:
+        ax.axis("off")
+    fig.legend(handles=_legend_cl(cl), loc="lower center", ncol=2, frameon=False, fontsize=11)
+    fig.suptitle("bend profile along TM2 per cluster (mean over the frames of the cluster; a peak "
+                 "is spread over about ±2 residues)", fontsize=14)
+    fig.tight_layout(rect=(0, 0.06 + 0.025 * ((len(cl) + 1) // 2), 1, 0.93))
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
 
