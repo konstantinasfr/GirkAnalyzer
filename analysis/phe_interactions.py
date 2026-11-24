@@ -310,7 +310,7 @@ def plot_interactions(tab, out_png, title, min_pct=5.0, min_change=10.0):
             ax.text(xc, -3, f"{interaction_name(r)}\n{kind}", ha="center", va="top",
                     fontsize=fs - 2, clip_on=False, linespacing=1.1)
             c = round(float(r.change_pct)) + 0
-            ax.text(xc, -26, f"{c:+d} %", ha="center", va="top", fontsize=fs, clip_on=False,
+            ax.text(xc, -34, f"{c:+d} %", ha="center", va="top", fontsize=fs, clip_on=False,
                     fontweight="bold", color="#1f7a6f" if c > 0 else "#c0503a" if c < 0 else "0.45")
         ax.set_xlim(0, max(nmax, 1))
         ax.set_xticks([])
