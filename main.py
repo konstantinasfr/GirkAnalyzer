@@ -129,6 +129,13 @@ def main():
                         help="split the A_C and B_D diagonals into states (flat stretches) and write, "
                              "per state, CA-CA distances, gate Phe ring interactions and TM2 bending "
                              "to <results>/gate_states/ (see analysis/gate_states.py), then stop")
+    parser.add_argument("--gate_states_pool", nargs="?", const="__default__", default=None,
+                        help="pool the gate_states/ results of all runs found under this folder "
+                             "(default: the girk_analyser_results folder), cluster the frames by "
+                             "(A_C, B_D) and describe each cluster (analysis/gate_states_pool.py); "
+                             "results in <folder>/gate_states_pooled/. No trajectory is loaded")
+    parser.add_argument("--gs_pool_k", type=int, default=None,
+                        help="with --gate_states_pool: number of clusters (default: automatic)")
     parser.add_argument("--gs_min_jump", type=float, default=1.0,
                         help="with --gate_states_only: smallest change of a diagonal level (A) that "
                              "starts a new state (default 1.0)")
@@ -140,6 +147,12 @@ def main():
                              "not use the PIP2s, e.g. --neighbors_resids")
     # parser.add_argument("--channel_type", default="G2_FD")
     args = parser.parse_args()
+    if args.gate_states_pool:
+        from analysis.gate_states_pool import run_gate_states_pool
+        root = (args.gate_states_pool if args.gate_states_pool != "__default__" else
+                "/media/ziyue/328bfc27-c1a6-4fce-9199-95c389ecd48d/Konstantina/girk_analyser_results")
+        run_gate_states_pool(root, k=args.gs_pool_k)
+        raise SystemExit("--gate_states_pool: done.")
     generate_electric_field_heatmap =  False
     data_path = "/home/data/Konstantina/ion-permeation-analyzer-results/version1"
     # data_path = "/media/konsfr/KINGSTON/trajectory/final_results/"
