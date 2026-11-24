@@ -43,25 +43,27 @@ states.csv                 one row per diagonal (A_C, B_D, joint) x state:
                            frames, CA-CA means, per gate latch % (F83) /
                            latch186 % (F186) / in_pocket % / gate-stack % /
                            kink / local bend / segment bend (+ outward, sideways parts) /
-                           gate-free control / noise floor (mean, sd) /
+                           segment tilts / post-helix direction /
+                           noise floor (mean, sd) /
                            helix intact / r_gate / chi1 / d_pocket
 state_interactions.csv     long table: diagonal x state x gate x partner x
                            kind: % frames, median distance, pi-pi geometry
 states_trace.png           the two diagonals with their states, in pocket, local
                            bend G189 / G180, outward part of the segment bend,
-                           gate-free control and helix check
+                           lean of the upper TM2 and helix check
 states_bending_<A_C|B_D|joint>.png
                            rows = bending measures (local bend G189 / G180,
-                           segment bend G189 + its outward part, gate-free
-                           control, segment bend G180, noise floor at A185,
+                           segment bend G189 + its outward part, lean of the
+                           upper TM2, segment bend G180, noise floor at A185,
                            helix intact), columns = gates: distribution per
                            state (violin, mean +- sd). The old broad 8+8 CA
                            kink is still in the CSVs but not plotted (biased:
                            ~18 deg for a straight helix)
 states_tilt_<A_C|B_D|joint>.png
-                           tilt of the TM2 segments 182-188 / 189-192 / 193-199
-                           relative to the pore axis (lean out + / in -, and
-                           total), violins per state
+                           tilt of the TM2 segments 182-188 and 189-194 (helix
+                           end, with the gate) relative to the pore axis, and
+                           the direction of the chain after the helix end (CA
+                           195 -> 199) (lean out + / in -, and total)
 bend_profile.csv           local bend at every TM2 position 176-198 per state and
                            gate (mean, sd)
 states_bend_profile_<A_C|B_D|joint>.png
@@ -103,19 +105,19 @@ def states_of(x, min_jump, min_stretch, buffer):
 
 
 BENDS = (("bend_G189", "local bend G189\n(HELANAL)"),
-         ("seg_G189", "segment bend G189\n182-188 vs 190-196"),
+         ("seg_G189", "segment bend G189\n182-188 vs 190-194"),
          ("seg_G189_rad", "segment bend G189:\noutward part (+ = away)"),
-         ("ctl_G189", "gate-free control\n182-188 vs 193-199"),
+         ("tilt_up_rad", "upper TM2 182-188:\nlean out (+) / in (-)"),
          ("bend_G180", "local bend G180\n(HELANAL)"),
          ("seg_G180", "segment bend G180\n173-179 vs 181-187"),
          ("bend_ref", "noise floor: local\nbend A185 (no Gly)"),
-         ("helix_G189", "helix intact 182-199\n(fraction of i→i+4 H-bonds)"))
+         ("helix_G189", "helix intact 182-194\n(fraction of i→i+4 H-bonds)"))
 TILTS = (("tilt_up_rad", "upper 182-188:\nlean out (+) / in (-)"),
-         ("tilt_elbow_rad", "elbow 189-192:\nlean out (+) / in (-)"),
-         ("tilt_low_rad", "lower 193-199:\nlean out (+) / in (-)"),
+         ("tilt_end_rad", "helix end 189-194:\nlean out (+) / in (-)"),
+         ("post_rad", "after the helix end\n195→199: lean out (+) / in (-)"),
          ("tilt_up", "upper 182-188:\ntotal tilt"),
-         ("tilt_elbow", "elbow 189-192:\ntotal tilt"),
-         ("tilt_low", "lower 193-199:\ntotal tilt"))
+         ("tilt_end", "helix end 189-194:\ntotal tilt"),
+         ("post", "after the helix end\n195→199: total"))
 
 
 def _gate_means(sig, gates, idx):
@@ -126,17 +128,17 @@ def _gate_means(sig, gates, idx):
                        ("gate_stack", 100), ("kink_G189", 1), ("kink_G180", 1),
                        ("bend_G189", 1), ("bend_G180", 1), ("bend_ref", 1),
                        ("seg_G189", 1), ("seg_G189_rad", 1), ("seg_G189_tan", 1),
-                       ("seg_G180", 1), ("seg_G180_rad", 1), ("ctl_G189", 1), ("ctl_G189_rad", 1),
+                       ("seg_G180", 1), ("seg_G180_rad", 1),
                        ("helix_G189", 1), ("helix_G180", 1),
                        ("tilt_up", 1), ("tilt_up_rad", 1), ("tilt_up_tan", 1),
-                       ("tilt_elbow", 1), ("tilt_elbow_rad", 1), ("tilt_elbow_tan", 1),
-                       ("tilt_low", 1), ("tilt_low_rad", 1), ("tilt_low_tan", 1),
+                       ("tilt_end", 1), ("tilt_end_rad", 1), ("tilt_end_tan", 1),
+                       ("post", 1), ("post_rad", 1), ("post_tan", 1),
                        ("r_gate", 1), ("chi1", 1), ("d_pocket", 1), ("d_gate", 1)):
             c = f"{key}_{s}"
             if c in sig:
                 x = sig[c].to_numpy()[idx]
                 r[f"{key}{'_pct' if f == 100 else ''}_{e['gate']}"] = f * np.nanmean(x)
-                if key.startswith(("kink", "bend", "seg", "ctl", "tilt")):
+                if key.startswith(("kink", "bend", "seg", "tilt", "post")):
                     r[f"{key}_sd_{e['gate']}"] = np.nanstd(x)
     return r
 
@@ -285,9 +287,9 @@ def plot_trace(fr, diag, bounds, gates, out_png, run_name, cfg):
     for ax, key, lab in ((axes[2], "in_pocket", "in pocket: π-stack with\nF83 or F186 (%)"),
                          (axes[3], "bend_G189", "local bend G189\nHELANAL (deg)"),
                          (axes[4], "seg_G189_rad", "segment bend G189\noutward part (deg)"),
-                         (axes[5], "ctl_G189", "gate-free control\nG189 (deg)"),
+                         (axes[5], "tilt_up_rad", "upper TM2 182-188\nlean out (deg)"),
                          (axes[6], "bend_G180", "local bend G180\nHELANAL (deg)"),
-                         (axes[7], "helix_G189", "helix intact\n182-199 (fraction)")):
+                         (axes[7], "helix_G189", "helix intact\n182-194 (fraction)")):
         for e in gates:
             c = f"{key}_{e['subunit']}"
             if c not in fr:
@@ -305,7 +307,7 @@ def plot_trace(fr, diag, bounds, gates, out_png, run_name, cfg):
     fig.suptitle(f"{run_name}  states of the two HBC diagonals (jump ≥ {cfg['min_jump']:g} Å); "
                  f"latch / bend / kink = running mean of 100 frames\nHELANAL = standard local "
                  f"bending angle (186-192 for G189); segment = axes of 7 CA per side through the "
-                 f"HELANAL axis points; control = without the gate residue", fontsize=14)
+                 f"HELANAL axis points; the TM2 helix ends at ~195", fontsize=14)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
@@ -370,9 +372,9 @@ def plot_bending(fr, gates, state, near, states, out_png, title, rows_def=None, 
     fig.legend(handles=leg, loc="lower center", ncol=min(3, len(leg)), frameon=False,
                fontsize=fs - 1)
     expl = note or ("HELANAL = standard local bending angle at the glycine (h-3..h+3)\n"
-                    "segment = angle between the axes of 7 CA per side (glycine left out), fitted "
-                    "through the HELANAL axis points\ncontrol = without the gate Phe; noise floor = "
-                    "the same local bend at A185, which has no glycine")
+                    "segment = angle between the axes of 182-188 and 190-194 (the TM2 helix ends at "
+                    "~195), fitted through the HELANAL axis points\nnoise floor = the same local "
+                    "bend at A185, which has no glycine")
     fig.suptitle(f"{title}\n{expl}\nnumbers = mean ± sd over the frames of the state",
                  fontsize=fs + 1)
     fig.tight_layout(rect=(0, 0.03, 1, 0.94))
@@ -406,6 +408,9 @@ def plot_profile(bp, states, out_png, title):
             ax.axvline(x, color="0.4", ls="--" if lab != "F192" else ":", lw=1)
             ax.text(x, 1.0, lab, transform=ax.get_xaxis_transform(), ha="center", va="bottom",
                     fontsize=fs - 3, color="0.3")
+        ax.axvspan(194.5, 198.5, color="0.85", alpha=0.5, zorder=0)
+        ax.text(196.5, 0.97, "helix end /\nC-linker", transform=ax.get_xaxis_transform(),
+                ha="center", va="top", fontsize=fs - 4, color="0.35")
         ax.set_title(f"{gname}", fontsize=fs + 2, fontweight="bold", pad=18)
         ax.grid(color="0.92", lw=0.6)
         ax.tick_params(labelsize=fs - 2)

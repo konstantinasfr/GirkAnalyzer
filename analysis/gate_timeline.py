@@ -24,25 +24,29 @@ Per subunit and per frame (timeline_all_frames.csv):
                 ideal helix, exact for a kink at h
     bend_G180   the same at the upper glycine
     bend_ref    the same at A185 (pos -7, no glycine): noise floor of the local bend
+    NOTE: in these runs the TM2 alpha-helix ends at ~195 (local bend 60-100 deg
+    at 195-198 in every subunit), 3 residues after the gate Phe; the measures
+    below stay inside the helix (up to 194) except "post"
     seg_G189    segment-axis bend at G189: angle between the axes of the
-                helical segments 182-188 and 190-196 (7 CA each, the glycine
+                helical segments 182-188 and 190-194 (7 / 5 CA, the glycine
                 left out), each axis fitted through the HELANAL axis points
                 (Kink Finder / ProKink style): exact on ideal helices and much
                 less noisy than the local bend. _rad = signed part of the bend
                 away from (+) / towards (-) the pore axis, _tan = part around
                 the pore
     seg_G180    the same at G180 (173-179 vs 181-187)
-    ctl_G189    gate-free control: 182-188 vs 193-199, the gate Phe (192) not
-                used, so it cannot follow a local movement of the gate itself
     bprof<p>    local bend (HELANAL) at every TM2 position p = -16..+6 from the
                 gate Phe (GIRK2 176..198): the bend profile along TM2
-    tilt_up / tilt_elbow / tilt_low
-                tilt of the segments 182-188 / 189-192 / 193-199 relative to the
+    tilt_up / tilt_end
+                tilt of the segments 182-188 / 189-194 (end of the helix,
+                with the gate) relative to the
                 pore axis (axis through the HELANAL axis points, pointing down);
                 _rad = signed lean away from (+) / towards (-) the pore axis
                 going down, _tan = lean around the pore
+    post        direction of the chain after the helix end, CA 195 -> CA 199,
+                relative to the pore axis (same signs); not a helix
     helix_G189  fraction of the alpha-helix H-bonds O(i)...N(i+4) (N-O <= 3.5 A)
-                present for i = 182..195 (covers every residue the G189
+                present for i = 182..190, i.e. up to N(194) (covers every residue the G189
                 measures use); low = the helix is broken and the angles mean
                 little.  helix_G180: i = 173..187
     r_gate      distance of the gate Phe CA from the pore axis (A)
@@ -200,7 +204,26 @@ def segment_tilt(ca, rows, axis):
 
 
 PROFILE = range(-16, 7)            # local bend at every TM2 position 176..198 (GIRK2 numbering)
-TILT_SEGMENTS = (("up", -10, -4), ("elbow", -3, 0), ("low", 1, 7))   # 182-188, 189-192, 193-199
+TILT_SEGMENTS = (("up", -10, -4), ("end", -3, 2))   # 182-188, 189-194 (helix end with the gate)
+POST = (3, 7)                                        # CA 195 -> 199: chain after the helix end
+
+
+def vector_tilt(p_from, p_to, axis):
+    """direction p_from -> p_to (nf, 3) relative to the pore axis, same sign
+    conventions as segment_tilt: (total, radial: + = away from the pore going
+    down, tangential) in degrees."""
+    c0, a0 = axis
+    u = p_to - p_from
+    u /= np.linalg.norm(u, axis=1, keepdims=True)
+    down = a0 if np.nanmean(u @ a0) > 0 else -a0
+    v = 0.5 * (p_from + p_to) - c0
+    rad = v - np.outer(v @ a0, a0)
+    rad /= np.linalg.norm(rad, axis=1, keepdims=True)
+    tan = np.cross(a0[None], rad)
+    ud = u @ down
+    return (np.degrees(np.arccos(np.clip(ud, -1, 1))),
+            np.degrees(np.arctan2(np.einsum("ij,ij->i", u, rad), ud)),
+            np.degrees(np.arctan2(np.einsum("ij,ij->i", u, tan), ud)))
 
 
 class HelixTracker:
@@ -275,9 +298,9 @@ def gate_signals(traj, info, axis, pocket_pos=-109):
             r7 = [rows.get((g.chain, hinge + k)) for k in range(-3, 4)]
             out[f"{name}_{s}"] = (np.full(nf, np.nan) if None in r7 else local_bend(ca, r7))
         # segment-axis bends (7 CA per side) with signed radial / tangential parts
-        for name, up, down, hinge in (("seg_G189", (-10, -4), (-2, 4), -3),
-                                      ("seg_G180", (-19, -13), (-11, -5), -12),
-                                      ("ctl_G189", (-10, -4), (1, 7), -3)):
+        # (the TM2 helix ends at ~195, right after the gate: the lower side of G189 stops at 194)
+        for name, up, down, hinge in (("seg_G189", (-10, -4), (-2, 2), -3),
+                                      ("seg_G180", (-19, -13), (-11, -5), -12)):
             ru = [rows.get((g.chain, p)) for p in range(up[0], up[1] + 1)]
             rd = [rows.get((g.chain, p)) for p in range(down[0], down[1] + 1)]
             rh = rows.get((g.chain, hinge))
@@ -299,10 +322,18 @@ def gate_signals(traj, info, axis, pocket_pos=-109):
                 continue
             tot, rad, tan = segment_tilt(ca, rr, axis)
             out[f"tilt_{name}_{s}"], out[f"tilt_{name}_rad_{s}"], out[f"tilt_{name}_tan_{s}"] = tot, rad, tan
+        # direction of the chain after the helix end (CA 195 -> CA 199), not a helix
+        r0, r1 = rows.get((g.chain, POST[0])), rows.get((g.chain, POST[1]))
+        if r0 is None or r1 is None:
+            for suf in ("", "_rad", "_tan"):
+                out[f"post{suf}_{s}"] = np.full(nf, np.nan)
+        else:
+            tot, rad, tan = vector_tilt(ca[:, r0], ca[:, r1], axis)
+            out[f"post_{s}"], out[f"post_rad_{s}"], out[f"post_tan_{s}"] = tot, rad, tan
         ht = traj.get("helix")
         if ht is not None:
             k_ = gate_rows.index(gi)
-            for name, lo, hi in (("helix_G189", -10, 3), ("helix_G180", -19, -5)):
+            for name, lo, hi in (("helix_G189", -10, -2), ("helix_G180", -19, -5)):
                 fr_ = ht.fraction(k_, lo, hi)
                 if fr_ is not None:
                     out[f"{name}_{s}"] = fr_
@@ -354,7 +385,7 @@ def gate_signals(traj, info, axis, pocket_pos=-109):
 
 SIGNALS = [("bend_G189", "local bend at G189, HELANAL (deg)"),
            ("seg_G189_rad", "segment bend G189, outward part (deg)"),
-           ("ctl_G189", "gate-free control G189 (deg)"),
+           ("tilt_up_rad", "upper TM2 182-188, lean out (deg)"),
            ("bend_G180", "local bend at G180, HELANAL (deg)"),
            ("r_gate", "gate Phe CA from pore axis (Å)"), ("chi1", "gate Phe χ1 (deg)"),
            ("d_pocket", "ring distance to pocket F83 (Å)"),
@@ -520,7 +551,8 @@ def latch_table(sig, gates, jumps, wins, bd):
                     r[f"{key}_before_pct"] = 100 * np.nanmean(x[b])
                     r[f"{key}_after_pct"] = 100 * np.nanmean(x[a])
             for key in ("kink_G189", "kink_G180", "bend_G189", "bend_G180", "seg_G189",
-                        "seg_G189_rad", "ctl_G189", "seg_G180", "helix_G189", "chi1", "r_gate",
+                        "seg_G189_rad", "tilt_up_rad", "tilt_end_rad", "post_rad", "seg_G180",
+                        "helix_G189", "chi1", "r_gate",
                         "d_pocket", "d_gate"):
                 c = f"{key}_{s}"
                 if c in sig:
