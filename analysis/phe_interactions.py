@@ -208,6 +208,56 @@ class RingTracker:
             C["d"][i] = np.linalg.norm(
                 np.array([c.positions[0] for c in C["ags"]])[None] - gc[:, None], axis=2)
 
+    # ---- every gate x partner x interaction, per frame
+    def records(self):
+        """Yields (gate number, partner residue index, kind, ok (nf bool), distance
+        (nf), angle (nf or None)) for every gate x partner x interaction kind."""
+        if not self.gates or not self.ready:
+            return
+        with np.errstate(invalid="ignore"):
+            for g in range(len(self.gates)):
+                A = self.arom
+                for j, ri in enumerate(A["res"]):
+                    d, ang = A["d"][:, g, j], A["ang"][:, g, j]
+                    if np.all(np.isnan(d)):
+                        continue
+                    ok = (((d <= PI_PARALLEL) & (ang < 30)) | ((d <= PI_TILTED) & (ang >= 30)
+                          & (ang <= 60)) | ((d <= PI_T) & (ang > 60)))
+                    yield g, ri, "pi-pi", ok, d, ang
+                S = self.sulf
+                for j, ri in enumerate(S["res"]):
+                    d, th = S["d"][:, g, j], S["theta"][:, g, j]
+                    yield g, ri, "S...pi", d <= S_CUT, d, th
+                    if S["h"][j] is not None:
+                        hd, hang = S["hd"][:, g, j], S["hang"][:, g, j]
+                        yield g, ri, "S-H...pi", (hd <= SH_CUT) & (hang >= SH_ANGLE), hd, hang
+                M = self.meth
+                for ri in np.unique(M["res"]):
+                    cols = np.flatnonzero(M["res"] == ri)
+                    d, th = M["d"][:, g, cols], M["theta"][:, g, cols]
+                    yield g, ri, "CH-pi", ((d <= CH_CUT) & (th <= CH_THETA)).any(1), \
+                        np.nanmin(d, 1), None
+                C = self.cat
+                for j, ri in enumerate(C["res"]):
+                    d = C["d"][:, g, j]
+                    yield g, ri, "cation-pi", d <= CAT_CUT, d, None
+
+    def flags(self, info, min_pct=1.0):
+        """Per-frame 0/1 table of every gate x partner x interaction present in
+        >= min_pct of all frames; columns 'gate|partner|kind', and a table
+        describing each column (gate, partner, resid, pos, subunit, kind)."""
+        cols, meta = {}, []
+        for g, ri, kind, ok, d, ang in self.records():
+            if 100 * np.mean(ok) < min_pct:
+                continue
+            gi, n = info.iloc[self.gates[g][1]], info.iloc[ri]
+            name = f"{gi.pdb}|{n.pdb}|{kind}"
+            cols[name] = ok.astype(np.int8)
+            meta.append(dict(column=name, gate=gi.pdb, gate_subunit=gi.subunit, partner=n.pdb,
+                             resid=int(n.resid), resname=n.resname, subunit=n.subunit,
+                             pos=n.pos, interaction=kind))
+        return pd.DataFrame(cols), pd.DataFrame(meta)
+
     # ---- per jump
     def summary(self, b, a, info):
         """One row per gate Phe x partner residue x interaction kind that is
@@ -238,43 +288,15 @@ class RingTracker:
             f = [np.mean(x < 30), np.mean((x >= 30) & (x <= 60)), np.mean(x > 60)]
             return ["parallel", "tilted", "T-shaped"][int(np.argmax(f))] + f" ({100 * max(f):.0f} %)"
 
-        with np.errstate(invalid="ignore"):
-            for g in range(len(self.gates)):
-                A = self.arom
-                for j, ri in enumerate(A["res"]):
-                    d, ang = A["d"][:, g, j], A["ang"][:, g, j]
-                    if np.all(np.isnan(d)):
-                        continue
-                    ok = (((d <= PI_PARALLEL) & (ang < 30)) | ((d <= PI_TILTED) & (ang >= 30)
-                          & (ang <= 60)) | ((d <= PI_T) & (ang > 60)))
-                    add(g, ri, "pi-pi", ok[b], ok[a], d[b], d[a],
-                        dict(angle_before=np.nanmedian(ang[b]), angle_after=np.nanmedian(ang[a]),
-                             geometry_before=geom(ok[b], ang[b]),
-                             geometry_after=geom(ok[a], ang[a])))
-                S = self.sulf
-                for j, ri in enumerate(S["res"]):
-                    d, th = S["d"][:, g, j], S["theta"][:, g, j]
-                    ok = d <= S_CUT
-                    add(g, ri, "S...pi", ok[b], ok[a], d[b], d[a],
-                        dict(angle_before=np.nanmedian(th[b]), angle_after=np.nanmedian(th[a])))
-                    if S["h"][j] is not None:
-                        hd, hang = S["hd"][:, g, j], S["hang"][:, g, j]
-                        ok = (hd <= SH_CUT) & (hang >= SH_ANGLE)
-                        add(g, ri, "S-H...pi", ok[b], ok[a], hd[b], hd[a],
-                            dict(angle_before=np.nanmedian(hang[b]),
-                                 angle_after=np.nanmedian(hang[a])))
-                M = self.meth
-                for ri in np.unique(M["res"]):
-                    cols = np.flatnonzero(M["res"] == ri)
-                    d, th = M["d"][:, g, cols], M["theta"][:, g, cols]
-                    ok = ((d <= CH_CUT) & (th <= CH_THETA)).any(1)
-                    dm = np.nanmin(d, 1)
-                    add(g, ri, "CH-pi", ok[b], ok[a], dm[b], dm[a])
-                C = self.cat
-                for j, ri in enumerate(C["res"]):
-                    d = C["d"][:, g, j]
-                    ok = d <= CAT_CUT
-                    add(g, ri, "cation-pi", ok[b], ok[a], d[b], d[a])
+        for g, ri, kind, ok, d, ang in self.records():
+            if kind == "pi-pi":
+                extra = dict(angle_before=np.nanmedian(ang[b]), angle_after=np.nanmedian(ang[a]),
+                             geometry_before=geom(ok[b], ang[b]), geometry_after=geom(ok[a], ang[a]))
+            elif ang is not None:
+                extra = dict(angle_before=np.nanmedian(ang[b]), angle_after=np.nanmedian(ang[a]))
+            else:
+                extra = None
+            add(g, ri, kind, ok[b], ok[a], d[b], d[a], extra)
         df = pd.DataFrame(rows)
         if df.empty:
             return df

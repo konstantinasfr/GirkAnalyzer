@@ -125,6 +125,13 @@ def main():
     parser.add_argument("--bd_segment_max", type=int, default=0,
                         help="with --bd_jump_only: in the 'segment' way use at most this many frames on "
                              "each side, the ones closest to the jump (default 0 = the whole flat stretch)")
+    parser.add_argument("--gate_states_only", action="store_true",
+                        help="split the A_C and B_D diagonals into states (flat stretches) and write, "
+                             "per state, CA-CA distances, gate Phe ring interactions and TM2 bending "
+                             "to <results>/gate_states/ (see analysis/gate_states.py), then stop")
+    parser.add_argument("--gs_min_jump", type=float, default=1.0,
+                        help="with --gate_states_only: smallest change of a diagonal level (A) that "
+                             "starts a new state (default 1.0)")
     parser.add_argument("--bd_modes", default="both", choices=["both", "window", "segment"],
                         help="with --bd_jump_only: how to choose the before / after frames (default both)")
     parser.add_argument("--skip_pip_check", action="store_true",
@@ -858,6 +865,14 @@ def main():
                             close_below=args.hbc_close_below)
         raise SystemExit("--hbc_open_closed_only: done.")
 
+    if args.gate_states_only:
+        from analysis.gate_states import run_gate_states
+        run_gate_states(u, hbc_diagonal_pairs, sf_lower=_cfg.get("lower1"),
+                        sf_upper=_cfg.get("upper1"), results_dir=results_dir,
+                        subunit_groups=_cfg.get("subunit_groups"),
+                        asn_residues=_cfg.get("asn_residues"), channel_type=args.channel_type,
+                        min_jump=args.gs_min_jump)
+        raise SystemExit("--gate_states_only: done.")
     if args.bd_jump_only:
         from analysis.bd_jump_residues import run_bd_jump_residues
         run_bd_jump_residues(u, hbc_diagonal_pairs, sf_lower=_cfg.get("lower1"),
