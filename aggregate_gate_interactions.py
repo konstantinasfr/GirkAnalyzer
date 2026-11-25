@@ -33,7 +33,7 @@ OUTPUT  <system>/gate_interactions_pooled/
     interactions_<GROUP>.csv          one row per gate x partner x kind: pooled %,
                                       frames with it, per-run mean / SD / min / max
     interactions_<GROUP>.png          2 x 2 (one panel per gate Phe), one bar per
-                                      interaction (pooled %); --run_sd adds the SD over runs
+                                      interaction (pooled %, value on top); --run_sd adds the SD over runs
     interactions_by_category.csv/.png the same with HIGH / TYPICAL / LOW side by side
                                       (+ ALL as a grey outline)
 Columns (partner position x kind) are the same in every panel, so the four
@@ -138,8 +138,23 @@ def plot(tabs, out_png, title, min_pct, groups, show_all_outline=False, sd=False
         print(f"  nothing >= {min_pct} %: {out_png.name} not drawn")
         return
     gates = allt.drop_duplicates("gate").sort_values("gate_subunit")
-    ng, fs = len(groups), 14
-    fig, axes = plt.subplots(2, 2, figsize=(max(14, 0.6 * max(ng, 1.6) * len(slots) * 2 + 3), 12.5), sharey=True)
+    ng, fs = len(groups), 18
+    lab_fs = fs - 2
+    val_fs = fs - 5 if ng > 1 else fs - 3     # % on top of the bars
+    # layout in inches: the residue labels under the bars sit outside the axes, so the gaps are set
+    # here from their size (up to 4 lines) instead of tight_layout
+    pt = 1 / 72
+    lab_h = 4 * 1.18 * lab_fs * pt + 0.12            # residue labels under a panel
+    title_h = 1.35 * (fs + 3) * pt                    # panel title
+    sup_h = 2 * 1.3 * (fs - 1) * pt + 0.1             # 2-line figure title
+    leg_h = 1.6 * (fs - 2) * pt
+    W = max(16.0, 1.05 * len(slots) * 2 + 1.6)
+    ax_h = 3.6
+    H = sup_h + 2 * (title_h + ax_h + lab_h) + leg_h + 0.15
+    fig, axes = plt.subplots(2, 2, figsize=(W, H), sharey=True)
+    fig.subplots_adjust(left=0.95 / W, right=1 - 0.15 / W, top=1 - (sup_h + title_h) / H,
+                        bottom=(lab_h + leg_h + 0.1) / H, wspace=0.04,
+                        hspace=(lab_h + title_h) / ax_h)
     bw = 0.78 / ng
     for ax, (_, g) in zip(axes.flat, gates.iterrows()):
         s = allt[allt.gate == g.gate]
@@ -147,7 +162,7 @@ def plot(tabs, out_png, title, min_pct, groups, show_all_outline=False, sd=False
             c = s[(s.pos == p) & (s.interaction == kind)]
             if c.empty:
                 ax.annotate(f"{HBC_GIRK2 + p}\n{LABEL.get(kind, kind)}\nnone", (x + 0.5, 0), xytext=(0, -4),
-                            textcoords="offset points", ha="center", va="top", fontsize=fs - 3,
+                            textcoords="offset points", ha="center", va="top", fontsize=lab_fs,
                             color="0.6", style="italic", annotation_clip=False)
                 continue
             partner = c.sort_values("best", ascending=False).partner.iloc[0]
@@ -160,6 +175,10 @@ def plot(tabs, out_png, title, min_pct, groups, show_all_outline=False, sd=False
                 r = r.iloc[0]
                 xb = x + 0.11 + (i + 0.5) * bw
                 ax.bar(xb, r.pct, bw * 0.9, color=GROUP_COLOURS.get(grp, "#2a78d6"), zorder=2)
+                if r.pct >= 0.5:
+                    ax.text(xb, r.pct + 1.2, f"{r.pct:.0f}", ha="center", va="bottom", zorder=5,
+                            fontsize=val_fs, color="0.15",
+                            bbox=dict(boxstyle="square,pad=0.08", fc="white", ec="none", alpha=0.85))
                 if sd and r.n_runs > 1:
                     ax.errorbar(xb, r.pct, yerr=r.run_sd, color="0.25", lw=0.9, capsize=2, zorder=3)
             if show_all_outline and "ALL" in set(c.group):
@@ -168,18 +187,18 @@ def plot(tabs, out_png, title, min_pct, groups, show_all_outline=False, sd=False
             r0 = c.iloc[0]
             ax.annotate(f"{res_label(r0.resname, r0.pos, r0.partner, r0.subunit)}\n{LABEL.get(kind, kind)}",
                         (x + 0.5, 0), xytext=(0, -4), textcoords="offset points", ha="center", va="top",
-                        fontsize=fs - 3, color="0.1" if ok else "0.5", style="normal" if ok else "italic",
+                        fontsize=lab_fs, color="0.1" if ok else "0.5", style="normal" if ok else "italic",
                         annotation_clip=False, linespacing=1.1)
         for x in range(1, len(slots)):
             ax.axvline(x, color="0.9", lw=0.8, zorder=0)
-        ax.set_xlim(0, len(slots)); ax.set_xticks([]); ax.set_ylim(0, 105)
+        ax.set_xlim(0, len(slots)); ax.set_xticks([]); ax.set_ylim(0, 110); ax.set_yticks(range(0, 101, 20))
         ax.tick_params(axis="y", labelsize=fs)
         ax.set_title(f"gate {g.gate}  ({g.gate_subunit})", fontsize=fs + 3, fontweight="bold")
         ax.grid(axis="y", color="0.9", lw=0.6); ax.set_axisbelow(True)
     for ax in axes.flat[len(gates):]:
         ax.axis("off")
     for ax in axes[:, 0]:
-        ax.set_ylabel("% of all frames (runs pooled)", fontsize=fs)
+        ax.set_ylabel("% of all frames", fontsize=fs)
     leg = [Patch(color=GROUP_COLOURS.get(g, "#2a78d6"), label=f"{g} ({int(tabs[g].n_runs.iloc[0])} run{'s' if int(tabs[g].n_runs.iloc[0]) != 1 else ''}, "
                  f"{int(tabs[g].frames_total.iloc[0]):,} frames)") for g in groups if g in tabs and len(tabs[g])]
     if show_all_outline:
@@ -187,11 +206,11 @@ def plot(tabs, out_png, title, min_pct, groups, show_all_outline=False, sd=False
         leg.append(Line2D([], [], color="0.35", ls="--", lw=1.2, label="ALL runs"))
     if sd:
         leg.append(Patch(color="none", label="whisker: SD over runs"))
-    fig.legend(handles=leg, loc="lower center", ncol=len(leg), frameon=False, fontsize=fs - 2)
-    fig.suptitle(f"{title}\ngate Phe ring interactions, % of all frames of all runs (π–π, S···π, S–H···π, CH–π, "
-                 f"cation–π); shown: ≥ {min_pct:g} % in some group\nGIRK1 residues: own number, GIRK2 position in "
-                 f"brackets; grey italics = equivalent partner of this gate below the threshold", fontsize=fs - 1)
-    fig.tight_layout(rect=(0, 0.06, 1, 0.88), h_pad=8)
+    fig.legend(handles=leg, loc="lower center", ncol=len(leg), frameon=False, fontsize=fs - 2,
+               bbox_to_anchor=(0.5, 0.05 / H), borderaxespad=0, handlelength=1.4, columnspacing=1.6)
+    fig.suptitle(f"{title}: gate Phe ring interactions, % of all frames of all runs pooled (shown: ≥ {min_pct:g} % "
+                 f"in some group)\nGIRK1 residues: own number, GIRK2 position in brackets; grey italics = this gate's "
+                 f"equivalent partner below the threshold", fontsize=fs - 1, y=1 - 0.05 / H, va="top")
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
     print(f"  Saved: {out_png}")
