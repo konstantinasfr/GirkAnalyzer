@@ -33,7 +33,7 @@ OUTPUT  <system>/gate_interactions_pooled/
     interactions_<GROUP>.csv          one row per gate x partner x kind: pooled %,
                                       frames with it, per-run mean / SD / min / max
     interactions_<GROUP>.png          2 x 2 (one panel per gate Phe), one bar per
-                                      interaction (pooled %), whisker = per-run SD
+                                      interaction (pooled %); --run_sd adds the SD over runs
     interactions_by_category.csv/.png the same with HIGH / TYPICAL / LOW side by side
                                       (+ ALL as a grey outline)
 Columns (partner position x kind) are the same in every panel, so the four
@@ -121,7 +121,7 @@ def pool(runs, meta):
     return pd.DataFrame(rows)
 
 
-def plot(tabs, out_png, title, min_pct, groups, show_all_outline=False):
+def plot(tabs, out_png, title, min_pct, groups, show_all_outline=False, sd=False):
     """tabs: {group: pooled table}; one bar per group in every column."""
     import matplotlib
     matplotlib.use("Agg")
@@ -160,7 +160,7 @@ def plot(tabs, out_png, title, min_pct, groups, show_all_outline=False):
                 r = r.iloc[0]
                 xb = x + 0.11 + (i + 0.5) * bw
                 ax.bar(xb, r.pct, bw * 0.9, color=GROUP_COLOURS.get(grp, "#2a78d6"), zorder=2)
-                if r.n_runs > 1:
+                if sd and r.n_runs > 1:
                     ax.errorbar(xb, r.pct, yerr=r.run_sd, color="0.25", lw=0.9, capsize=2, zorder=3)
             if show_all_outline and "ALL" in set(c.group):
                 ra = c[c.group == "ALL"].iloc[0]
@@ -185,7 +185,8 @@ def plot(tabs, out_png, title, min_pct, groups, show_all_outline=False):
     if show_all_outline:
         from matplotlib.lines import Line2D
         leg.append(Line2D([], [], color="0.35", ls="--", lw=1.2, label="ALL runs"))
-    leg.append(Patch(color="none", label="whisker: SD over runs"))
+    if sd:
+        leg.append(Patch(color="none", label="whisker: SD over runs"))
     fig.legend(handles=leg, loc="lower center", ncol=len(leg), frameon=False, fontsize=fs - 2)
     fig.suptitle(f"{title}\ngate Phe ring interactions, % of all frames of all runs (π–π, S···π, S–H···π, CH–π, "
                  f"cation–π); shown: ≥ {min_pct:g} % in some group\nGIRK1 residues: own number, GIRK2 position in "
@@ -202,6 +203,7 @@ def main():
     ap.add_argument("--min_pct", type=float, default=5.0)
     ap.add_argument("--skip_frames", type=int, default=0)
     ap.add_argument("--no_categories", action="store_true")
+    ap.add_argument("--run_sd", action="store_true", help="also draw the SD over runs as whiskers")
     a = ap.parse_args()
     base = Path(a.system)
     print(f"[{base.name}] {base}")
@@ -224,14 +226,14 @@ def main():
         t.to_csv(out / f"interactions_{g}.csv", index=False, float_format="%.3f")
         runs_g = [r for r, _, _ in runs] if g == "ALL" else [r for r, _, _ in runs if cats.get(r) == g]
         print(f"  {g}: {len(runs_g)} runs ({', '.join(runs_g)})")
-        plot({g: t}, out / f"interactions_{g}.png", f"{base.name} · {g}", a.min_pct, [g])
+        plot({g: t}, out / f"interactions_{g}.png", f"{base.name} · {g}", a.min_pct, [g], sd=a.run_sd)
     cat_groups = [g for g in GROUPS if g in tabs]
     if cat_groups:
         wide = pd.concat([tabs[g].assign(group=g) for g in ["ALL"] + cat_groups])
         wide.pivot_table(index=KEY, columns="group", values="pct").reset_index().to_csv(
             out / "interactions_by_category.csv", index=False, float_format="%.3f")
         plot({g: tabs[g] for g in ["ALL"] + cat_groups}, out / "interactions_by_category.png",
-             f"{base.name} · by permeation category", a.min_pct, cat_groups, show_all_outline=True)
+             f"{base.name} · by permeation category", a.min_pct, cat_groups, show_all_outline=True, sd=a.run_sd)
     print(f"\nResults in {out}")
 
 
