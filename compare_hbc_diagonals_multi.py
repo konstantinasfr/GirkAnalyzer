@@ -181,7 +181,7 @@ def main():
             ax.spines[["top", "right"]].set_visible(False)
             ax.yaxis.grid(True, color="#E3E3E3", lw=0.5); ax.set_axisbelow(True)
         axes[0].set_ylabel("density (all frames of all runs)")
-        axes[0].legend(frameon=False, fontsize=8, loc="upper left")
+        axes[0].legend(frameon=False, fontsize=8, loc="upper right")
         if band:
             fig.text(0.99, 0.01, "shaded: 95% band from resampling whole runs", ha="right", fontsize=7.5, color="#6B6B6B")
         fig.tight_layout()
