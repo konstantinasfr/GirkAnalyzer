@@ -19,11 +19,12 @@ diagonal that contains the GIRK1 subunit:
 
 PANELS
     GIRK1-GIRK2 diagonal  |  GIRK2-GIRK2 diagonal   (G2: both diagonals pooled)
-    pooled frame density per system (area = 1), with a 95% band from resampling
-    whole runs (--boot, 0 to switch off); dashed line = open threshold.
+    pooled frame density per system (area = 1); dotted line = open threshold.
+    Saved twice: plain, and with a 95% band from resampling whole runs (--boot 0: plain only).
 
 OUTPUTS   <out_dir>/
-    hbc_diagonals_hist.png / .pdf   the figure
+    hbc_diagonals_hist.png / .pdf       the figure, plain lines (as compare_hbc_girk1_diagonal.py)
+    hbc_diagonals_hist_band.png / .pdf  the same with the 95% band from resampling whole runs
     hbc_diagonals_per_run.csv       per system, run and diagonal: frames, median,
                                     mean, fraction of frames above the threshold
     hbc_diagonals_summary.csv       per system and diagonal: runs, frames, pooled
@@ -153,39 +154,42 @@ def main():
         print(f"  {s['system']:>10} {s['diagonal']}: median {s['pooled_median']:5.2f}  open {s['pooled_pct_open']:5.1f}%"
               f"  (per run {s['run_pct_open_mean']:.1f} +- {s['run_pct_open_sd']:.1f}%, n={s['n_runs']})")
 
-    # ---------- figure ----------
+    # ---------- figures: plain (as compare_hbc_girk1_diagonal.py) and with the run band ----------
     allv = np.concatenate([np.concatenate(per[d]) for _, _, per, _ in data for d, _ in PANELS])
     lo, hi = min(1.5, float(allv.min())), max(12.0, float(allv.max()))
     bins = np.arange(np.floor(lo * 4) / 4, np.ceil(hi * 4) / 4 + 0.25 + 1e-9, 0.25)
     centers = 0.5 * (bins[1:] + bins[:-1])
-    rng = np.random.default_rng(0)
     plt.rcParams.update({"font.size": 9, "axes.linewidth": 0.6})
-    fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.9), sharey=True)
-    for ax, (diag, title) in zip(axes, PANELS):
-        for k, (label, col, per, names) in enumerate(data):
-            pool = np.concatenate(per[diag])
-            dens, _ = np.histogram(pool, bins=bins, density=True)
-            c, ls = COLORS[k % len(COLORS)], STYLES[k % len(STYLES)]
-            lab = f"{label} (both diagonals, {len(names)} runs)" if col == "pool" else f"{label} ({len(names)} runs)"
-            if args.boot and len(per[diag]) > 1:
-                lo_b, hi_b = boot_band(per[diag], bins, args.boot, rng)
-                ax.fill_between(centers, lo_b, hi_b, color=c, alpha=0.18, linewidth=0, step="mid")
-            ax.step(centers, dens, where="mid", color=c, ls=ls, lw=1.8, label=lab)
-        ax.axvline(args.threshold, color="#6B6B6B", ls=":", lw=1)
-        ax.text(args.threshold, 1.0, f" open > {args.threshold:g} Å", transform=ax.get_xaxis_transform(),
-                fontsize=8, color="#6B6B6B", va="top")
-        ax.set_title(title, loc="left", fontsize=10)
-        ax.set_xlabel("min. atom–atom distance across the HBC (Å)")
-        ax.spines[["top", "right"]].set_visible(False)
-        ax.yaxis.grid(True, color="#E3E3E3", lw=0.5); ax.set_axisbelow(True)
-    axes[0].set_ylabel("density (all frames of all runs)")
-    axes[0].legend(frameon=False, fontsize=8, loc="upper left")
-    if args.boot:
-        fig.text(0.99, 0.01, "shaded: 95% band from resampling whole runs", ha="right", fontsize=7.5, color="#6B6B6B")
-    fig.tight_layout()
-    for ext in ("png", "pdf"):
-        fig.savefig(out_dir / f"hbc_diagonals_hist.{ext}", dpi=300 if ext == "png" else None, bbox_inches="tight")
-    print(f"  Saved: {out_dir / 'hbc_diagonals_hist.png'}")
+    for band in ([False, True] if args.boot else [False]):
+        rng = np.random.default_rng(0)
+        fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.9), sharey=True)
+        for ax, (diag, title) in zip(axes, PANELS):
+            for k, (label, col, per, names) in enumerate(data):
+                pool = np.concatenate(per[diag])
+                dens, _ = np.histogram(pool, bins=bins, density=True)
+                c, ls = COLORS[k % len(COLORS)], STYLES[k % len(STYLES)]
+                lab = f"{label} (both diagonals, {len(names)} runs)" if col == "pool" else f"{label} ({len(names)} runs)"
+                if band and len(per[diag]) > 1:
+                    lo_b, hi_b = boot_band(per[diag], bins, args.boot, rng)
+                    ax.fill_between(centers, lo_b, hi_b, color=c, alpha=0.18, linewidth=0, step="mid")
+                ax.step(centers, dens, where="mid", color=c, ls=ls, lw=1.8, label=lab)
+            ax.axvline(args.threshold, color="#6B6B6B", ls=":", lw=1)
+            ax.text(args.threshold, 1.0, f" open > {args.threshold:g} \u00c5", transform=ax.get_xaxis_transform(),
+                    fontsize=8, color="#6B6B6B", va="top")
+            ax.set_title(title, loc="left", fontsize=10)
+            ax.set_xlabel("min. atom\u2013atom distance across the HBC (\u00c5)")
+            ax.spines[["top", "right"]].set_visible(False)
+            ax.yaxis.grid(True, color="#E3E3E3", lw=0.5); ax.set_axisbelow(True)
+        axes[0].set_ylabel("density (all frames of all runs)")
+        axes[0].legend(frameon=False, fontsize=8, loc="upper left")
+        if band:
+            fig.text(0.99, 0.01, "shaded: 95% band from resampling whole runs", ha="right", fontsize=7.5, color="#6B6B6B")
+        fig.tight_layout()
+        stem = "hbc_diagonals_hist_band" if band else "hbc_diagonals_hist"
+        for ext in ("png", "pdf"):
+            fig.savefig(out_dir / f"{stem}.{ext}", dpi=300 if ext == "png" else None, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {out_dir / (stem + '.png')}")
 
 
 if __name__ == "__main__":
