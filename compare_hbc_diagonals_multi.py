@@ -181,10 +181,11 @@ def main():
             ax.spines[["top", "right"]].set_visible(False)
             ax.yaxis.grid(True, color="#E3E3E3", lw=0.5); ax.set_axisbelow(True)
         axes[0].set_ylabel("density (all frames of all runs)")
-        axes[0].legend(frameon=False, fontsize=8, loc="upper right")
+        h, l = axes[0].get_legend_handles_labels()
+        fig.legend(h, l, frameon=False, fontsize=8.5, loc="lower center", ncol=len(l), bbox_to_anchor=(0.5, -0.02))
         if band:
-            fig.text(0.99, 0.01, "shaded: 95% band from resampling whole runs", ha="right", fontsize=7.5, color="#6B6B6B")
-        fig.tight_layout()
+            fig.text(0.99, -0.06, "shaded: 95% band from resampling whole runs", ha="right", fontsize=7.5, color="#6B6B6B")
+        fig.tight_layout(rect=(0, 0.07, 1, 1))
         stem = "hbc_diagonals_hist_band" if band else "hbc_diagonals_hist"
         for ext in ("png", "pdf"):
             fig.savefig(out_dir / f"{stem}.{ext}", dpi=300 if ext == "png" else None, bbox_inches="tight")
