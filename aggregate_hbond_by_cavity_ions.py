@@ -25,6 +25,14 @@ and <system>/hbond_by_cavity_ions_summary/tables/[HIGH|TYPICAL|LOW/]table_<type>
     % of frames with the bond (all runs pooled) and the number of frames;
     tables/by_partner/<position>_<residues>/: the same, one table per partner residue (GIRK1 rows
     matched by the 11-residue offset: F137.G1 with S148, Q165.G1 with Q176)
+
+ANY OTHER RUN GROUPING: --groups FILE.csv [--group_col category] [--group_name by_ligand]
+    FILE has one row per run (column 'run' or 'Run', e.g. RUN3) and a group column; every
+    group gets the same outputs in <pair>/<group_name>/<group>/ and
+    tables/<group_name>/<group>/. E.g. the ML297 ligand categories (E = ligand on Glu141,
+    D = on Asp173, E+D, Neither) of g12ml_ligand_category_classification.py:
+        python3 aggregate_hbond_by_cavity_ions.py .../G12_ML \
+            --groups .../G12_ML/ligand_inter_class/ligand_categories.csv
 """
 
 import argparse
@@ -254,7 +262,23 @@ def main():
     ap.add_argument("--min_frames", type=int, default=50,
                     help="a run counts in a bin's mean +- SD only with at least this many frames there (default 50)")
     ap.add_argument("--no_categories", action="store_true", help="skip the HIGH/TYPICAL/LOW split")
+    ap.add_argument("--groups", default=None,
+                    help="CSV with a run column ('run'/'Run') and a group column: also aggregate per group")
+    ap.add_argument("--group_col", default="category", help="group column of --groups (default: category)")
+    ap.add_argument("--group_name", default="by_ligand", help="output subfolder name for --groups (default: by_ligand)")
     args = ap.parse_args()
+
+    extra = {}
+    if args.groups:
+        g = pd.read_csv(args.groups)
+        rc = "run" if "run" in g.columns else "Run"
+        if rc not in g.columns or args.group_col not in g.columns:
+            sys.exit(f"--groups {args.groups}: needs columns run/Run and {args.group_col} (has {list(g.columns)})")
+        extra = {str(r).strip(): str(k).strip() for r, k in zip(g[rc], g[args.group_col])
+                 if pd.notna(k) and str(k).strip()}
+        print(f"--groups: {len(extra)} runs in groups " +
+              ", ".join(f"{k} ({sum(v == k for v in extra.values())})" for k in sorted(set(extra.values()))))
+    extra_groups = sorted(set(extra.values()))
 
     base = Path(args.system_dir)
     pairs = [args.pair] if args.pair else sorted({p.name for p in base.glob("RUN*/hbond_by_cavity_ions/*")
@@ -272,6 +296,7 @@ def main():
         print(f"(no {CATEGORY_FILE}: no HIGH/TYPICAL/LOW split)")
 
     per_group = {"ALL": {}, "HIGH": {}, "TYPICAL": {}, "LOW": {}}
+    per_extra = {k: {} for k in extra_groups}
     for pair in pairs:
         runs = load_runs(base, pair)
         if not runs:
@@ -289,6 +314,13 @@ def main():
             sub = {r: d for r, d in runs.items() if cats.get(r) == cat}
             if sub:
                 aggregate(sub, out / cat, f"{pair} [{cat}]  ({base.name}, {len(sub)} runs)", args.min_frames)
+        for grp in extra_groups:
+            sub = {r: d for r, d in runs.items() if extra.get(r) == grp}
+            if sub:
+                per_extra[grp][pair] = pd.concat(sub.values(), ignore_index=True)
+                aggregate(sub, out / args.group_name / grp,
+                          f"{pair} [{args.group_name}: {grp}]  ({base.name}, {len(sub)} runs: {', '.join(sub)})",
+                          args.min_frames)
 
     # one table per bond type with every pair (all runs pooled), also per permeation group
     tdir = base / "hbond_by_cavity_ions_summary" / "tables"
@@ -296,6 +328,9 @@ def main():
         if fb:
             combined_tables(fb, tdir if grp == "ALL" else tdir / grp,
                             f"{base.name}" + ("" if grp == "ALL" else f" [{grp}]"))
+    for grp, fb in per_extra.items():
+        if fb:
+            combined_tables(fb, tdir / args.group_name / grp, f"{base.name} [{args.group_name}: {grp}]")
 
 
 if __name__ == "__main__":
